@@ -1,0 +1,57 @@
+# 变更元数据（机器可读）
+# 说明：此文件由 /xf/brainstorm 生成，后续步骤持续更新 phase 字段。
+
+id: "CHG-20260605-001"
+name: "知识库搭建与AI用例生成核心闭环"
+description: "搭建按系统维度组织的知识库，实现 Agent Skills/RAG 智能检索，AI 基于完整上下文生成资深级测试用例，支持 review 迭代落库和导出"
+
+status: "archived"
+phase: "archive"
+
+project_profile: "general"
+
+priority: "P0"
+created_at: "2026-06-05"
+updated_at: "2026-06-09"
+archived_at: "2026-06-09"
+author: "echo_lacey"
+
+source_doc: ""
+
+scope:
+  include:
+    - "知识库组织结构（系统维度文件夹、md+图片文件夹导入）"
+    - "文档间自动关联（需求↔技术文档↔用例↔漏测Bug）"
+    - "Agent Skills/RAG 智能检索"
+    - "AI 用例生成（结合规则库、历史用例、漏测Bug、可交互原型链接）"
+    - "用例可追溯性（标注原文出处、可信度等级）"
+    - "人工 review + AI 迭代优化 + 落库"
+    - "用例导出（按用户提供的格式规范）"
+  exclude:
+    - "需求文档和用例的版本管理（后续迭代）"
+    - "迭代需求变更时自动维护老用例（依赖版本管理）"
+    - "测试左移（shift-left 模块本期不做）"
+    - "自动化执行（automation 模块本期不做）"
+
+affected_modules:
+  - name: "knowledge-base"
+    change_type: "added"
+    module_type: "ai-agent"
+    summary: "知识库搭建（系统维度文件夹组织、md+图片导入、文档关联、Agent Skills/RAG 检索、知识沉淀）"
+
+  - name: "testcase-generator"
+    change_type: "added"
+    module_type: "ai-agent"
+    summary: "AI 用例生成引擎（基于知识库上下文生成、可追溯性标注、review 迭代、落库）"
+
+  - name: "platform-api"
+    change_type: "added"
+    module_type: "web-backend"
+    summary: "后端服务（用户认证、项目/系统管理、知识库存储、AI 调度编排、导出接口）"
+
+  - name: "platform-web"
+    change_type: "added"
+    module_type: "web-frontend"
+    summary: "前端界面（知识库管理 UI、用例生成/review UI、导出 UI）"
+
+depends_on: []

@@ -1,0 +1,39 @@
+# ---- 密钥/环境变量（绝不提交）----
+.env
+.env.*
+!.env.example
+
+# ---- Python ----
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Node / 前端 ----
+web/node_modules/
+web/dist/
+node_modules/
+dist/
+*.local
+
+# ---- 操作系统 ----
+.DS_Store
+Thumbs.db
+
+# ---- 编辑器 / Agent 工具本地缓存 ----
+.codegraph/
+.omc/
+.opencode/
+.xflow/
+.qa_probe/
+.idea/
+.vscode/
+
+# ---- 日志 / 临时 ----
+*.log
+tmp/

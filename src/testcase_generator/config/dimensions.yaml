@@ -1,0 +1,542 @@
+# ==============================================================================
+# T008: 测试维度库 — 30+ 维度，覆盖 9 大分类
+# 用于测试点生成阶段的维度裁剪与覆盖度审计
+# ==============================================================================
+
+dimensions:
+  # ==========================================================================
+  # FUNCTIONAL — 功能类维度 (7 个)
+  # ==========================================================================
+  - name: "functional_correctness"
+    category: "functional"
+    description: "验证功能按需求描述正确执行"
+    applicable_to: ["*"]
+    not_applicable_to: []
+    check_points:
+      - "主流程是否按需求执行"
+      - "输出结果是否与预期一致"
+      - "功能入口和出口是否正确"
+      - "业务规则是否被完整实现"
+
+  - name: "functional_completeness"
+    category: "functional"
+    description: "验证功能实现的完整性，所有子功能均已实现"
+    applicable_to: ["*"]
+    not_applicable_to: []
+    check_points:
+      - "所有需求列出的子功能是否均已实现"
+      - "各分支路径是否都有对应实现"
+      - "可选功能是否按配置正确启停"
+      - "功能间的联动是否完整"
+
+  - name: "functional_consistency"
+    category: "functional"
+    description: "验证相同功能在不同场景下行为一致"
+    applicable_to: ["multi_entry", "cross_platform", "multi_role"]
+    not_applicable_to: ["single_entry_point"]
+    check_points:
+      - "不同入口触发同一功能结果是否一致"
+      - "多端表现是否统一"
+      - "相同操作在不同角色下行为是否符合预期"
+      - "批量与单条操作结果是否一致"
+
+  - name: "idempotency"
+    category: "functional"
+    description: "验证重复操作不会产生副作用"
+    applicable_to: ["data_mutation", "payment", "order", "submission", "api_call"]
+    not_applicable_to: ["pure_display", "static_page"]
+    check_points:
+      - "重复提交是否产生重复数据"
+      - "重复支付是否产生重复扣款"
+      - "网络重试是否导致数据不一致"
+      - "幂等 key 机制是否生效"
+
+  - name: "reversibility"
+    category: "functional"
+    description: "验证操作可撤销/可回退"
+    applicable_to: ["data_mutation", "workflow", "settings", "order"]
+    not_applicable_to: ["pure_display", "irreversible_by_design"]
+    check_points:
+      - "撤销操作后数据是否恢复原状"
+      - "取消操作中间状态是否正确清理"
+      - "回退后关联数据是否同步回退"
+      - "部分完成时中断后是否可恢复"
+
+  - name: "default_values"
+    category: "functional"
+    description: "验证未显式设置时的默认值行为"
+    applicable_to: ["form", "configuration", "settings", "data_input"]
+    not_applicable_to: ["pure_display", "navigation"]
+    check_points:
+      - "各字段默认值是否符合需求"
+      - "清空后是否恢复默认值"
+      - "首次使用时初始化值是否正确"
+      - "升级后旧数据默认值兼容性"
+
+  - name: "sorting_filtering"
+    category: "functional"
+    description: "验证列表排序与筛选功能正确性"
+    applicable_to: ["list", "table", "search_result", "report"]
+    not_applicable_to: ["single_item_display", "form"]
+    check_points:
+      - "默认排序是否正确"
+      - "切换排序后数据是否正确重排"
+      - "多条件筛选组合是否正确"
+      - "筛选结果为空时的展示"
+      - "排序与分页联动正确性"
+
+  # ==========================================================================
+  # BOUNDARY — 边界类维度 (5 个)
+  # ==========================================================================
+  - name: "boundary_value"
+    category: "boundary"
+    description: "验证输入值在边界处的行为"
+    applicable_to: ["data_input", "calculation", "filtering", "pagination"]
+    not_applicable_to: ["pure_display", "navigation"]
+    check_points:
+      - "最小有效值"
+      - "最大有效值"
+      - "边界值 +1 和 -1"
+      - "空值/零值"
+      - "类型极限值（如 int 最大值）"
+
+  - name: "data_range"
+    category: "boundary"
+    description: "验证数据取值范围约束"
+    applicable_to: ["numeric_input", "date_input", "calculation", "pricing"]
+    not_applicable_to: ["pure_display", "boolean_toggle"]
+    check_points:
+      - "数值上下界"
+      - "日期有效范围"
+      - "负值处理"
+      - "小数精度"
+      - "溢出行为"
+
+  - name: "text_length"
+    category: "boundary"
+    description: "验证文本字段长度限制"
+    applicable_to: ["text_input", "search", "comment", "form"]
+    not_applicable_to: ["numeric_only", "binary_upload"]
+    check_points:
+      - "最短输入（0 字符、1 字符）"
+      - "最大长度截断或提示"
+      - "超长文本存储与展示"
+      - "多字节字符（emoji、CJK）长度计算"
+      - "前后空格处理"
+
+  - name: "quantity_limit"
+    category: "boundary"
+    description: "验证数量/条数限制"
+    applicable_to: ["batch_operation", "list", "upload", "cart", "collection"]
+    not_applicable_to: ["single_item_operation"]
+    check_points:
+      - "零条记录"
+      - "单条记录"
+      - "最大允许条数"
+      - "超出限制时行为"
+      - "批量操作的上限"
+
+  - name: "pagination_boundary"
+    category: "boundary"
+    description: "验证分页边界场景"
+    applicable_to: ["list", "table", "search_result", "timeline"]
+    not_applicable_to: ["single_item_display", "form"]
+    check_points:
+      - "首页行为"
+      - "末页行为"
+      - "总数恰好整除每页条数"
+      - "总数为 0"
+      - "页码超出范围"
+      - "每页条数切换"
+
+  # ==========================================================================
+  # ERROR — 异常/容错类维度 (6 个)
+  # ==========================================================================
+  - name: "invalid_input"
+    category: "error"
+    description: "验证非法输入的处理"
+    applicable_to: ["data_input", "form", "search", "api"]
+    not_applicable_to: ["pure_display"]
+    check_points:
+      - "类型错误（字符串输入到数字字段）"
+      - "格式错误（邮箱、手机号等）"
+      - "特殊字符注入"
+      - "SQL/XSS 注入字符串"
+      - "非法 unicode 字符"
+
+  - name: "network_error"
+    category: "error"
+    description: "验证网络异常场景的处理"
+    applicable_to: ["api_call", "file_upload", "real_time", "payment"]
+    not_applicable_to: ["offline_only", "local_calculation"]
+    check_points:
+      - "请求超时处理"
+      - "断网后恢复"
+      - "弱网环境下行为"
+      - "重连机制是否正常"
+      - "错误提示是否友好"
+
+  - name: "timeout"
+    category: "error"
+    description: "验证超时场景的处理机制"
+    applicable_to: ["api_call", "long_running_task", "payment", "file_processing"]
+    not_applicable_to: ["instant_operation", "pure_display"]
+    check_points:
+      - "操作超时后的用户提示"
+      - "超时后数据状态是否一致"
+      - "超时重试策略"
+      - "超时阈值是否合理"
+      - "长时间等待的 loading 状态"
+
+  - name: "concurrent_conflict"
+    category: "error"
+    description: "验证并发操作产生冲突时的处理"
+    applicable_to: ["data_mutation", "shared_resource", "collaborative_editing", "inventory"]
+    not_applicable_to: ["read_only", "personal_data_only"]
+    check_points:
+      - "乐观锁/悲观锁机制"
+      - "同时编辑同一记录"
+      - "库存超卖防护"
+      - "冲突时的用户提示"
+      - "last-write-wins vs 合并策略"
+
+  - name: "data_corruption"
+    category: "error"
+    description: "验证数据损坏或不一致时的容错"
+    applicable_to: ["data_storage", "file_processing", "import_export", "migration"]
+    not_applicable_to: ["pure_display", "static_content"]
+    check_points:
+      - "损坏数据读取时的降级处理"
+      - "部分数据丢失时的展示"
+      - "脏数据入库防护"
+      - "数据修复/补偿机制"
+
+  - name: "permission_denied"
+    category: "error"
+    description: "验证权限不足时的优雅处理"
+    applicable_to: ["multi_role", "access_control", "shared_resource"]
+    not_applicable_to: ["public_access", "no_auth_required"]
+    check_points:
+      - "无权限操作的提示信息"
+      - "权限变更后实时生效"
+      - "越权尝试的阻断"
+      - "权限不足时的 UI 展示（隐藏 vs 置灰）"
+
+  # ==========================================================================
+  # PERFORMANCE — 性能类维度 (4 个)
+  # ==========================================================================
+  - name: "response_time"
+    category: "performance"
+    description: "验证关键操作的响应时间"
+    applicable_to: ["api_call", "page_load", "search", "data_query"]
+    not_applicable_to: ["background_task", "batch_job"]
+    check_points:
+      - "首屏加载时间"
+      - "接口响应时间 P95/P99"
+      - "搜索响应时间"
+      - "大数据量下的查询性能"
+      - "是否有 loading 状态"
+
+  - name: "throughput"
+    category: "performance"
+    description: "验证系统吞吐量满足预期"
+    applicable_to: ["high_concurrency", "batch_processing", "message_queue"]
+    not_applicable_to: ["low_traffic", "personal_tool"]
+    check_points:
+      - "并发用户数压测"
+      - "TPS/QPS 达标"
+      - "批处理速率"
+      - "消息队列消费速率"
+      - "峰值流量下的表现"
+
+  - name: "resource_usage"
+    category: "performance"
+    description: "验证资源消耗在合理范围内"
+    applicable_to: ["long_running", "mobile_app", "background_service", "file_processing"]
+    not_applicable_to: ["one_shot_operation"]
+    check_points:
+      - "内存占用是否持续增长（泄漏）"
+      - "CPU 使用率峰值"
+      - "磁盘 I/O 压力"
+      - "连接池使用率"
+      - "移动端电量消耗"
+
+  - name: "large_data_volume"
+    category: "performance"
+    description: "验证大数据量场景下的系统表现"
+    applicable_to: ["list", "export", "import", "report", "search"]
+    not_applicable_to: ["single_item_operation", "settings"]
+    check_points:
+      - "万级/十万级数据量的列表渲染"
+      - "大文件上传/下载"
+      - "大批量导入导出"
+      - "数据量增长后的查询性能退化"
+
+  # ==========================================================================
+  # SECURITY — 安全类维度 (4 个)
+  # ==========================================================================
+  - name: "access_control"
+    category: "security"
+    description: "验证访问控制策略正确实施"
+    applicable_to: ["multi_role", "multi_tenant", "api", "admin_panel"]
+    not_applicable_to: ["public_access", "anonymous_allowed"]
+    check_points:
+      - "角色权限矩阵是否正确"
+      - "越权访问（水平 + 垂直）防护"
+      - "未登录状态的拦截"
+      - "Token 过期/失效处理"
+      - "多端登录互踢策略"
+
+  - name: "input_injection"
+    category: "security"
+    description: "验证输入注入攻击防护"
+    applicable_to: ["data_input", "search", "form", "file_upload", "api"]
+    not_applicable_to: ["no_user_input"]
+    check_points:
+      - "SQL 注入防护"
+      - "XSS 注入防护"
+      - "命令注入防护"
+      - "路径遍历防护"
+      - "SSRF 防护"
+
+  - name: "data_leakage"
+    category: "security"
+    description: "验证敏感数据不会泄露"
+    applicable_to: ["user_data", "payment", "personal_info", "api_response"]
+    not_applicable_to: ["public_data_only"]
+    check_points:
+      - "敏感字段脱敏展示"
+      - "日志中无敏感信息"
+      - "接口返回无多余字段"
+      - "错误信息不暴露系统内部细节"
+      - "缓存中敏感数据的过期清理"
+
+  - name: "authentication_security"
+    category: "security"
+    description: "验证认证机制的安全性"
+    applicable_to: ["login", "registration", "password_reset", "api_auth"]
+    not_applicable_to: ["public_access", "anonymous_allowed"]
+    check_points:
+      - "暴力破解防护（限流/验证码）"
+      - "密码强度校验"
+      - "会话固定攻击防护"
+      - "CSRF 防护"
+      - "OAuth/SSO 回调验证"
+
+  # ==========================================================================
+  # USABILITY — 易用性类维度 (4 个)
+  # ==========================================================================
+  - name: "ui_interaction"
+    category: "usability"
+    description: "验证界面交互的合理性"
+    applicable_to: ["form", "list", "navigation", "modal", "wizard"]
+    not_applicable_to: ["api_only", "background_service"]
+    check_points:
+      - "操作反馈是否及时（按钮禁用、loading）"
+      - "错误提示是否清晰定位到字段"
+      - "操作流程是否符合用户心智"
+      - "快捷键/手势支持"
+      - "表单 Tab 顺序"
+
+  - name: "feedback_mechanism"
+    category: "usability"
+    description: "验证系统反馈机制是否完善"
+    applicable_to: ["data_mutation", "async_task", "form_submission", "navigation"]
+    not_applicable_to: ["background_service"]
+    check_points:
+      - "操作成功/失败的明确提示"
+      - "异步任务进度展示"
+      - "空状态引导"
+      - "确认弹窗（破坏性操作）"
+      - "操作结果的可追溯性"
+
+  - name: "accessibility"
+    category: "usability"
+    description: "验证无障碍访问支持"
+    applicable_to: ["web_frontend", "mobile_app"]
+    not_applicable_to: ["api_only", "internal_tool"]
+    check_points:
+      - "键盘导航支持"
+      - "屏幕阅读器兼容"
+      - "颜色对比度"
+      - "字体大小可调"
+      - "ARIA 标签完整性"
+
+  - name: "multi_language"
+    category: "usability"
+    description: "验证多语言/国际化支持"
+    applicable_to: ["i18n", "multi_region", "export"]
+    not_applicable_to: ["single_language_only"]
+    check_points:
+      - "文案翻译完整性"
+      - "RTL 布局支持"
+      - "日期/数字格式本地化"
+      - "长文本对布局的影响"
+      - "语言切换后数据保持"
+
+  # ==========================================================================
+  # DATA — 数据类维度 (5 个)
+  # ==========================================================================
+  - name: "data_integrity"
+    category: "data"
+    description: "验证数据完整性约束"
+    applicable_to: ["data_mutation", "import_export", "migration", "transaction"]
+    not_applicable_to: ["pure_display"]
+    check_points:
+      - "必填字段约束"
+      - "唯一性约束"
+      - "外键关联完整性"
+      - "事务原子性（全成功或全回滚）"
+      - "关联数据级联更新/删除"
+
+  - name: "format_validation"
+    category: "data"
+    description: "验证数据格式校验"
+    applicable_to: ["data_input", "import", "api", "form"]
+    not_applicable_to: ["free_text_only"]
+    check_points:
+      - "邮箱格式"
+      - "手机号格式"
+      - "日期时间格式"
+      - "金额格式（小数位数）"
+      - "ID/编号格式规则"
+      - "URL 格式"
+
+  - name: "encoding_charset"
+    category: "data"
+    description: "验证字符编码处理"
+    applicable_to: ["text_input", "file_processing", "import_export", "cross_system"]
+    not_applicable_to: ["numeric_only"]
+    check_points:
+      - "UTF-8 多字节字符（中日韩、emoji）"
+      - "特殊符号（零宽字符、控制字符）"
+      - "编码转换正确性"
+      - "BOM 头处理"
+      - "乱码防护"
+
+  - name: "data_migration"
+    category: "data"
+    description: "验证数据迁移/升级的正确性"
+    applicable_to: ["version_upgrade", "schema_change", "platform_migration"]
+    not_applicable_to: ["new_feature_only", "no_existing_data"]
+    check_points:
+      - "旧数据兼容性"
+      - "迁移过程中的数据一致性"
+      - "回滚方案可行性"
+      - "增量迁移 vs 全量迁移"
+      - "迁移后数据校验"
+
+  - name: "data_calculation"
+    category: "data"
+    description: "验证计算逻辑的准确性"
+    applicable_to: ["calculation", "statistics", "pricing", "report"]
+    not_applicable_to: ["pure_display", "navigation"]
+    check_points:
+      - "四则运算精度（浮点数）"
+      - "汇总统计正确性"
+      - "公式/规则引擎结果"
+      - "百分比/比例计算"
+      - "四舍五入策略一致性"
+
+  # ==========================================================================
+  # STATE — 状态类维度 (4 个)
+  # ==========================================================================
+  - name: "state_transition"
+    category: "state"
+    description: "验证状态机转换的正确性"
+    applicable_to: ["workflow", "order", "approval", "task_management"]
+    not_applicable_to: ["stateless", "pure_display"]
+    check_points:
+      - "所有合法状态转换路径"
+      - "非法状态转换的拦截"
+      - "状态变更的审计日志"
+      - "并发状态变更的处理"
+      - "终态后不可再变更"
+
+  - name: "concurrency_state"
+    category: "state"
+    description: "验证并发场景下状态一致性"
+    applicable_to: ["shared_resource", "collaborative", "inventory", "counter"]
+    not_applicable_to: ["single_user_only", "read_only"]
+    check_points:
+      - "读写并发时的数据可见性"
+      - "写写并发的冲突解决"
+      - "分布式锁/乐观锁机制"
+      - "计数器原子性"
+      - "最终一致性保证"
+
+  - name: "recovery"
+    category: "state"
+    description: "验证异常中断后的恢复能力"
+    applicable_to: ["long_running_task", "multi_step_wizard", "file_upload", "payment"]
+    not_applicable_to: ["instant_operation", "stateless"]
+    check_points:
+      - "断点续传支持"
+      - "进程崩溃后重启恢复"
+      - "网络中断后的重连恢复"
+      - "事务回滚后的清理"
+      - "用户会话恢复"
+
+  - name: "cache_consistency"
+    category: "state"
+    description: "验证缓存与数据源的一致性"
+    applicable_to: ["cached_data", "multi_layer_cache", "distributed_system"]
+    not_applicable_to: ["no_cache", "real_time_only"]
+    check_points:
+      - "缓存更新时机"
+      - "缓存穿透/击穿/雪崩防护"
+      - "缓存过期策略"
+      - "手动刷新缓存"
+      - "多级缓存同步"
+
+  # ==========================================================================
+  # INTEGRATION — 集成类维度 (4 个)
+  # ==========================================================================
+  - name: "cross_system"
+    category: "integration"
+    description: "验证跨系统交互的正确性"
+    applicable_to: ["api_call", "message_queue", "webhook", "third_party"]
+    not_applicable_to: ["standalone", "no_external_dependency"]
+    check_points:
+      - "接口超时与重试"
+      - "幂等性保证"
+      - "数据格式兼容"
+      - "版本兼容（API 版本）"
+      - "降级/熔断策略"
+
+  - name: "api_contract"
+    category: "integration"
+    description: "验证 API 契约遵守情况"
+    applicable_to: ["api", "microservice", "open_api"]
+    not_applicable_to: ["frontend_only", "no_api"]
+    check_points:
+      - "请求参数校验"
+      - "响应结构一致性"
+      - "HTTP 状态码正确使用"
+      - "错误码规范遵守"
+      - "向后兼容性"
+      - "OpenAPI/Swagger 文档一致性"
+
+  - name: "data_sync"
+    category: "integration"
+    description: "验证数据同步机制的正确性"
+    applicable_to: ["multi_system", "master_slave", "event_driven", "cdc"]
+    not_applicable_to: ["single_source_of_truth"]
+    check_points:
+      - "同步延迟在可接受范围内"
+      - "同步失败的补偿机制"
+      - "冲突数据的合并策略"
+      - "全量/增量同步切换"
+      - "同步过程中的数据一致性"
+
+  - name: "event_driven"
+    category: "integration"
+    description: "验证事件驱动架构的可靠性"
+    applicable_to: ["message_queue", "event_bus", "webhook", "notification"]
+    not_applicable_to: ["synchronous_only"]
+    check_points:
+      - "消息不丢失（at-least-once）"
+      - "消息不重复消费（幂等）"
+      - "消息顺序性保证"
+      - "死信队列处理"
+      - "消费者离线后的追赶"

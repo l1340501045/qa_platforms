@@ -1,0 +1,50 @@
+# 信任顺序配置 — 信源优先级 + 冲突仲裁规则
+# 初始值，由 golden-set 评估反推校准，非硬编码常量
+
+trust_levels:
+  1:
+    name: "PRD/需求文档"
+    authority: "highest"
+    description: "产品需求文档的文字描述为最高标准"
+    override_by: "none"
+  2:
+    name: "技术设计文档"
+    authority: "high"
+    description: "技术实现约束和接口定义"
+    override_by: "level_1"
+  3:
+    name: "用户口述/补充说明"
+    authority: "medium"
+    description: "review 时的口头澄清、补充说明"
+    override_by: "level_1_or_2"
+  4:
+    name: "UI设计稿"
+    authority: "low"
+    description: "视觉和交互规范"
+    override_by: "level_1_2_or_3"
+  5:
+    name: "可交互原型(mock)"
+    authority: "lowest"
+    description: "AI 生成的原型可能有交互 bug，仅辅助理解"
+    override_by: "any_higher"
+
+conflict_resolution:
+  same_level: "flag_as_open_question"
+  different_level: "higher_wins"
+  prototype_vs_text: "text_always_wins_prototype_is_reference_only"
+  missing_source: "flag_as_blind_spot"
+
+gate_config:
+  # 初始值，由 golden-set 评估反推校准，非硬编码常量
+  go_threshold: 0.8        # 理解覆盖度 >= 80% 则 GO
+  no_go_threshold: 0.6     # 理解覆盖度 < 60% 则 NO_GO
+  # CONDITIONAL: 60% <= coverage < 80%
+  max_open_questions: 10   # 单次 NO_GO 最多返回的澄清问题数
+
+confidence_rules:
+  # 用例置信度由信源信任等级派生，不靠 AI 自评
+  trust_level_1: "high"
+  trust_level_2: "high"
+  trust_level_3: "medium"
+  trust_level_4: "medium_with_note"
+  trust_level_5: "low_requires_note"
