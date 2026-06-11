@@ -18,6 +18,20 @@ async def dedup_node(state: PipelineState) -> dict:
     """对最终用例集做全局近重复标记。"""
     final_cases: list[GeneratedTestCase] = state.get("final_test_cases") or state.get("test_cases", [])
 
+    # 兜底：保证逻辑 id 全局唯一（任何上游撞号都会让自引用 duplicate_of 落库时违反外键）。
+    # 逻辑 id 不入库为列，仅用于 dedup/落库内部映射，重排无副作用。
+    seen: set[str] = set()
+    collided = False
+    for c in final_cases:
+        if not c.id or c.id in seen:
+            collided = True
+            break
+        seen.add(c.id)
+    if collided:
+        for i, c in enumerate(final_cases, start=1):
+            c.id = f"TC-{i:04d}"
+        logger.warning("dedup_node: 检测到用例 id 撞号/缺失，已统一重排为全局唯一 id（%d 条）", len(final_cases))
+
     def _is_placeholder(c: GeneratedTestCase) -> bool:
         if "需求待确认" in (c.title or ""):
             return True

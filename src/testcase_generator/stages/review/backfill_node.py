@@ -18,6 +18,19 @@ from src.testcase_generator.stages.write_cases.node import generate_cases
 logger = logging.getLogger(__name__)
 
 
+def _max_case_counter(cases: list[GeneratedTestCase]) -> int:
+    """现有用例逻辑 id（形如 TC-001）的最大序号；用作新用例的起始计数，
+    确保新号段不与保留用例号段重叠（移除部分用例后 len 不再等于最大号，故不能用 len）。"""
+    mx = 0
+    for c in cases:
+        cid = c.id or ""
+        if "-" in cid:
+            tail = cid.rsplit("-", 1)[-1]
+            if tail.isdigit():
+                mx = max(mx, int(tail))
+    return mx
+
+
 async def backfill_node(state: PipelineState) -> dict:
     """对零覆盖测试点定向重生成，自己重算覆盖率并更新 audit_report。
 
@@ -51,8 +64,10 @@ async def backfill_node(state: PipelineState) -> dict:
 
     parsed_context = state["parsed_context"]
     system_id = UUID(state["system_id"])
+    # 起始号取所有现有用例（含被移除前的全集）的最大序号，避免与保留用例撞号
+    start_counter = _max_case_counter(final_cases)
     new_cases, failed = await generate_cases(
-        parsed_context, target_tps, system_id, start_counter=len(kept_cases)
+        parsed_context, target_tps, system_id, start_counter=start_counter
     )
 
     merged = kept_cases + new_cases

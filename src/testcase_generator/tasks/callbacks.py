@@ -97,11 +97,13 @@ async def on_pipeline_complete(
 
             verification = case_data.get("verification") or {}
 
-            # duplicate_of 逻辑 id → 规范用例真实 UUID（解析不到则置空，不写悬空引用）
+            case_uuid = case_uuid_of.get(case_data.get("id", "")) or uuid.uuid4()
+
+            # duplicate_of 逻辑 id → 规范用例真实 UUID（解析不到/指向自身则置空，不写悬空或自引用）
             dup_logical = case_data.get("duplicate_of")
             dup_fk = case_uuid_of.get(dup_logical) if dup_logical else None
-
-            case_uuid = case_uuid_of.get(case_data.get("id", "")) or uuid.uuid4()
+            if dup_fk == case_uuid:
+                dup_fk = None
 
             test_case = TestCase(
                 id=case_uuid,
