@@ -21,16 +21,18 @@ def gate_router(state: PipelineState) -> str:
     return "test_points"
 
 
-def review_router(state: PipelineState) -> str:
-    """review 阶段路由 — 判断是否需要迭代
+# 覆盖回填回环最大轮数（防无限循环；超过仍有零覆盖则带缺口进 verify，由报表如实记录）
+MAX_RECONCILE = 2
 
-    检查审计覆盖率：
-    - 覆盖率 >= 0.95 → 流转到 export
-    - 覆盖率 < 0.95 且已补全 → 流转到 export（一轮补全即可）
+
+def review_router(state: PipelineState) -> str:
+    """review 阶段路由 — 覆盖回填回环 + verify 事实核验关卡。
+
+    - 存在零覆盖测试点且回填轮数 < MAX_RECONCILE → backfill（定向重生成后回 review 复核）
+    - 否则 → verify（进入事实核验关卡）
     """
     audit_report = state.get("audit_report")
-    if audit_report is None:
-        return "export"
-
-    # 已执行过 gap_fill，直接进入 export（避免无限循环）
-    return "export"
+    iters = state.get("reconcile_iterations", 0)
+    if audit_report and getattr(audit_report, "uncovered_test_point_ids", None) and iters < MAX_RECONCILE:
+        return "backfill"
+    return "verify"

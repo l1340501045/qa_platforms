@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+
+SectionKind = Literal["spec", "summary", "flow", "mock", "future", "tbd"]
+"""章节性质分类，决定下游可生成何种 oracle：
+- spec   可验证规范（有明确字段/数值/状态/文案）→ 允许完整行为断言
+- summary 汇总/索引（目录、章节聚合、字段汇总表）→ 不单独派生行为断言
+- flow   流程图/示意（仅节点名+一句话）→ 不可据此编造后端机制细节
+- mock   本期模拟/未实现（明文 "mock/接口模拟/当前 UI 未实现"）→ 仅允许"占位/未实现"负向断言
+- future 二期/规划（明文 "v2.0/二期/规划/后续接入"）→ 不在本期生成行为断言
+- tbd    待拍板/待确认 → 不写具体行为断言，只可生成"需确认"提示
+"""
 
 
 class SectionExtract(BaseModel):
@@ -13,6 +25,10 @@ class SectionExtract(BaseModel):
     heading: str = Field(description="章节标题")
     content: str = Field(description="章节内容摘要")
     source_ref: str = Field(description="来源引用，如 'PRD §2.3'")
+    section_kind: SectionKind = Field(
+        default="spec",
+        description="章节性质分类，决定下游 oracle 策略（spec/summary/flow/mock/future/tbd）",
+    )
 
 
 class PrototypeObservation(BaseModel):

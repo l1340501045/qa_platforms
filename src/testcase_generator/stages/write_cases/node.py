@@ -49,6 +49,11 @@ class LLMTestStep(BaseModel):
     action: str = Field(description="具体操作动作（含明确操作动词）")
     input_data: str = Field(description="具体的输入数据值")
     expected_result: str = Field(description="可观测的预期结果")
+    source_quote: str = Field(
+        default="",
+        description="支撑本步骤预期结果的需求原文片段（直接摘录）；若在所给上下文找不到支撑，留空",
+    )
+    source_ref: str = Field(default="", description="上述原文所在章节标识，如 'PRD §5.8.13'")
 
 
 class LLMGeneratedCase(BaseModel):
@@ -82,6 +87,18 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 每个测试点至少生成一条用例，复杂测试点应拆分为多条用例（正常/异常/边界）
 - 步骤中的输入数据要用具体值举例，不能用占位符
 
+【事实接地强约束（最重要，违反将被核验关卡剔除）】
+- 每个步骤的 expected_result 必须能在所给 requirement_context 原文中找到支撑，并把支撑原文摘录填入 source_quote、所在章节填入 source_ref。
+- 找不到原文支撑的预期结果，不要编造——要么不写该断言，要么换成需求确有定义的可观测结果。
+- 严禁对需求未定义的行为编造预期（如自动重试/指数退避/熔断限流、HTTP 错误码契约、超时阈值、性能 SLA、幂等键、SSRF/SQL/XSS 防护、Token 加密、redirect_uri/state 校验等），除非 requirement_context 明文定义了它们。
+- 上下文中每个章节带有 section_kind：
+  - spec：可正常据其写确定的预期结果；
+  - mock：该行为本期为接口模拟/未实现，只能写"占位提示/未真正调用接口"类预期，不得断言真实后端行为；
+  - future：留待二期，本期不生成其行为用例；
+  - flow：仅流程图示意，不得据节点名编造后端机制（重试秒数/锁/续传等）；
+  - tbd：待拍板，不写具体行为断言，只可生成"需求待确认"提示；
+  - summary：汇总索引，行为细节以其引用的 spec 章节为准。
+
 步骤编写标准：
 - action: 使用具体操作动词（点击、输入、选择、拖拽、滑动、长按...）+ 操作对象
 - input_data: 给出具体测试数据值，如 "用户名: test_user_001" 或 "金额: 0.01"
@@ -111,20 +128,17 @@ def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[l
 # ─── Node ──────────────────────────────────────────────────────────────────────
 
 
-async def write_cases_node(state: PipelineState) -> dict:
-    """Stage 4: LLM + few-shot 生成完整测试用例
+async def generate_cases(
+    parsed_context,
+    test_points: list[TestPointSchema],
+    system_id: UUID,
+    *,
+    start_counter: int = 0,
+) -> tuple[list[GeneratedTestCase], list[dict]]:
+    """对给定测试点集生成用例的核心例程（write_cases 与 backfill 共用）。
 
-    流程：
-    1. 加载 few-shot 样本（硬约束#6）
-    2. 按 feature_id 分批（每批 ≤ 10 个 test_points）
-    3. 每批组装 prompt（角色 + 方法论 + few-shot + 相关上下文）
-    4. 调用 LLM 生成用例
-    5. 标注 provenance（硬约束#3）+ 可信度
+    返回 (生成的用例列表, 失败子批列表)。用例编号从 start_counter+1 起递增。
     """
-    parsed_context = state["parsed_context"]
-    test_points: list[TestPointSchema] = state["test_points"]
-    system_id = UUID(state["system_id"])
-
     # 推断 feature_types 用于 few-shot 查询
     all_feature_types: list[str] = []
     for feature in parsed_context.features:
@@ -158,6 +172,8 @@ async def write_cases_node(state: PipelineState) -> dict:
                         {
                             "source": source.title,
                             "trust_level": source.trust_level,
+                            "section_kind": getattr(section, "section_kind", "spec"),
+                            "source_ref": section.source_ref,
                             "heading": section.heading,
                             "content": section.content,  # 不截断，给足上下文
                         }
@@ -171,6 +187,8 @@ async def write_cases_node(state: PipelineState) -> dict:
                             {
                                 "source": source.title,
                                 "trust_level": source.trust_level,
+                                "section_kind": getattr(section, "section_kind", "spec"),
+                                "source_ref": section.source_ref,
                                 "heading": section.heading,
                                 "content": section.content,
                             }
@@ -180,7 +198,7 @@ async def write_cases_node(state: PipelineState) -> dict:
     confidence_scorer = ConfidenceScorer()
     all_test_cases: list[GeneratedTestCase] = []
     failed_features: list[dict] = []
-    case_counter = 0
+    case_counter = start_counter
 
     # 并发单位 = feature（同一 feature 的所有 test_points 一起处理，保住内部上下文连贯）。
     # 大功能点测试点很多，若一次生成上百条用例 → 输出超长 → 网关生成超时 504 → 该功能点零用例。
@@ -237,10 +255,11 @@ async def write_cases_node(state: PipelineState) -> dict:
                     )
                 except Exception as e:
                     logger.error(
-                        f"write-cases feature 失败 (feature={feature_id}, "
+                        f"write-cases 子批失败 (feature={feature_id}, "
                         f"sub_batch={sub_idx + 1}/{len(sub_batches)}, "
                         f"tps={[tp.id for tp in batch_tps]}): {e}"
                     )
+                    # 子批失败隔离：只记录该子批的测试点待回填，不丢弃同 feature 其它子批已生成的用例
                     failed_features.append(
                         {
                             "feature_id": feature_id,
@@ -248,7 +267,7 @@ async def write_cases_node(state: PipelineState) -> dict:
                             "error": str(e),
                         }
                     )
-                    return None  # 整个 feature 标记失败
+                    continue  # 跳过本子批，继续生成同 feature 的后续子批
 
                 # 后处理
                 tp_map: dict[str, TestPointSchema] = {tp.id: tp for tp in batch_tps}
@@ -268,6 +287,8 @@ async def write_cases_node(state: PipelineState) -> dict:
                             action=s.action,
                             input_data=s.input_data,
                             expected_result=s.expected_result,
+                            source_quote=s.source_quote or None,
+                            source_ref=s.source_ref or None,
                         )
                         for s in llm_case.steps
                     ]
@@ -317,7 +338,26 @@ async def write_cases_node(state: PipelineState) -> dict:
                 all_test_cases.append(case)
 
     if failed_features:
-        logger.warning(f"write-cases: {len(failed_features)}/{len(feature_ids)} 个 feature 失败，已保留成功结果")
+        logger.warning(f"write-cases: {len(failed_features)} 个子批失败，已保留成功结果")
+
+    return all_test_cases, failed_features
+
+
+async def write_cases_node(state: PipelineState) -> dict:
+    """Stage 4: LLM + few-shot 生成完整测试用例
+
+    流程：
+    1. 加载 few-shot 样本（硬约束#6）
+    2. 按 feature_id 分批（每批 ≤ MAX_TPS_PER_BATCH 个 test_points）
+    3. 每批组装 prompt（角色 + 方法论 + few-shot + 相关上下文 + section_kind）
+    4. 调用 LLM 生成用例（强制逐条引用 source_quote）
+    5. 标注 provenance（硬约束#3）+ 可信度
+    """
+    parsed_context = state["parsed_context"]
+    test_points: list[TestPointSchema] = state["test_points"]
+    system_id = UUID(state["system_id"])
+
+    all_test_cases, failed_features = await generate_cases(parsed_context, test_points, system_id)
 
     return {
         "test_cases": all_test_cases,

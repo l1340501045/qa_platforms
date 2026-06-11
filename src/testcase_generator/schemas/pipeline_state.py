@@ -41,10 +41,18 @@ class PipelineState(TypedDict, total=False):
     # Stage 5: review 产物
     audit_report: AuditReport
     final_test_cases: list[GeneratedTestCase]  # 审计补全后的最终用例集
+    reconcile_iterations: int  # 覆盖回填回环已执行轮数（防无限循环）
+
+    # Stage 5.5: verify 产物（grounding 事实核验关卡）
+    verify_summary: dict  # {total, by_verdict, by_bucket}
+
+    # Stage 5.6: dedup 产物（全局去重）
+    dedup_summary: dict  # {total, duplicate_count, cluster_count, unique_after_dedup}
 
     # Stage 6: export 产物
     yaml_output: str
     markdown_output: str
+    bucket_counts: dict  # {main, needs_spec, to_fix}
 
     # 元数据
     current_stage: str

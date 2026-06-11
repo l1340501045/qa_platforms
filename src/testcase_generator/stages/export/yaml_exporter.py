@@ -33,6 +33,8 @@ class YamlExporter:
                         "action": s.action,
                         "input_data": s.input_data,
                         "expected_result": s.expected_result,
+                        "source_quote": s.source_quote,
+                        "source_ref": s.source_ref,
                     }
                     for s in tc.steps
                 ],
@@ -47,6 +49,14 @@ class YamlExporter:
                 "trust_level": tc.trust_level,
                 "confidence_note": tc.confidence_note,
             }
+            if tc.verification is not None:
+                case_dict["verification"] = {
+                    "verdict": tc.verification.verdict,
+                    "bucket": tc.verification.bucket,
+                    "rationale": tc.verification.rationale,
+                    "prd_evidence": tc.verification.prd_evidence,
+                    "unsupported_assertions": tc.verification.unsupported_assertions,
+                }
             cases_data.append(case_dict)
 
         output = {

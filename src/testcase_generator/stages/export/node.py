@@ -23,9 +23,16 @@ async def export_node(state: PipelineState) -> dict:
 
     yaml_output, markdown_output = await asyncio.gather(yaml_task, md_task)
 
+    # 三轨分桶计数（main / needs_spec / to_fix），便于回调与前端区分
+    bucket_counts = {"main": 0, "needs_spec": 0, "to_fix": 0}
+    for tc in final_test_cases:
+        b = tc.verification.bucket if tc.verification else "main"
+        bucket_counts[b] = bucket_counts.get(b, 0) + 1
+
     return {
         "yaml_output": yaml_output,
         "markdown_output": markdown_output,
+        "bucket_counts": bucket_counts,
         "current_stage": "export",
     }
 

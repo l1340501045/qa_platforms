@@ -11,6 +11,9 @@ from src.testcase_generator.stages.comprehend.node import comprehend_node
 from src.testcase_generator.stages.test_points.node import test_points_node
 from src.testcase_generator.stages.write_cases.node import write_cases_node
 from src.testcase_generator.stages.review.node import review_node
+from src.testcase_generator.stages.review.backfill_node import backfill_node
+from src.testcase_generator.stages.verify.node import verify_node
+from src.testcase_generator.stages.dedup.node import dedup_node
 from src.testcase_generator.stages.export.node import export_node
 from src.testcase_generator.pipeline.edges import gate_router, review_router
 
@@ -54,6 +57,9 @@ def build_pipeline() -> StateGraph:
     graph.add_node("test_points", test_points_node)
     graph.add_node("write_cases", write_cases_node)
     graph.add_node("review", review_node)
+    graph.add_node("backfill", backfill_node)
+    graph.add_node("verify", verify_node)
+    graph.add_node("dedup", dedup_node)
     graph.add_node("export", export_node)
 
     # 入口边
@@ -77,14 +83,22 @@ def build_pipeline() -> StateGraph:
     graph.add_edge("test_points", "write_cases")
     graph.add_edge("write_cases", "review")
 
-    # review 后路由
+    # review 后路由：零覆盖测试点 → backfill 定向回填回环；达标 → verify
     graph.add_conditional_edges(
         "review",
         review_router,
         {
-            "export": "export",
+            "backfill": "backfill",
+            "verify": "verify",
         },
     )
+
+    # 回填后回到 review 复核覆盖率（受 MAX_RECONCILE 上限约束，防无限循环）
+    graph.add_edge("backfill", "review")
+
+    # verify 事实核验 → dedup 全局去重 → export
+    graph.add_edge("verify", "dedup")
+    graph.add_edge("dedup", "export")
 
     # 终点
     graph.add_edge("export", END)

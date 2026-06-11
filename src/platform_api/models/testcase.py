@@ -81,10 +81,18 @@ class TestCase(Base):
     review_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="'pending'")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    # verify 事实核验关卡产出
+    verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    bucket: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # dedup 全局去重产出：近重复簇规范用例逻辑 id
+    duplicate_of: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+    # 搜索索引列：title + steps[].action 拼接文本，应用层写入时计算
+    steps_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class StageArtifact(Base):

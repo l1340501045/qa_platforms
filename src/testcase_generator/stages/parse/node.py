@@ -16,6 +16,7 @@ from src.testcase_generator.schemas.parsed_context import (
 )
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.stages.parse.kb_retriever import retrieve_knowledge_context
+from src.testcase_generator.stages.parse.section_classifier import classify_sections
 from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
     fetch_prototype_observations,
@@ -103,6 +104,9 @@ async def parse_node(state: PipelineState) -> dict:
         features=features,
         prototype_observations=prototype_observations,
     )
+
+    # 5.5 章节性质分类（标 section_kind，供下游 oracle 策略 + verify 关卡使用）
+    await classify_sections(parsed_context.sources)
 
     logger.info(
         "parse_node complete: sources=%d, features=%d, prototype_obs=%d",

@@ -30,6 +30,17 @@ class MarkdownExporter:
             if audit_report.gaps:
                 lines.append(f"**覆盖缺口**: {len(audit_report.gaps)} 个\n")
 
+        # 事实核验分桶汇总（verify 关卡）
+        bucket_dist = {"main": 0, "needs_spec": 0, "to_fix": 0}
+        for tc in test_cases:
+            b = tc.verification.bucket if tc.verification else "main"
+            bucket_dist[b] = bucket_dist.get(b, 0) + 1
+        if bucket_dist["needs_spec"] or bucket_dist["to_fix"]:
+            lines.append("\n## 事实核验分桶（verify 关卡）\n")
+            lines.append(f"- 主用例集（grounded）: {bucket_dist['main']} 条\n")
+            lines.append(f"- 待补规格·超纲（mock/二期/PRD未定义）: {bucket_dist['needs_spec']} 条\n")
+            lines.append(f"- 需修正（与 PRD 冲突）: {bucket_dist['to_fix']} 条\n")
+
         lines.append("\n---\n")
 
         # 优先级分布统计
@@ -50,6 +61,11 @@ class MarkdownExporter:
             lines.append(f"- **优先级**: {tc.priority}\n")
             lines.append(f"- **维度**: {', '.join(tc.dimensions)}\n")
             lines.append(f"- **信任等级**: {tc.trust_level}\n")
+            if tc.verification and tc.verification.verdict not in (None, "grounded", "unverified"):
+                lines.append(
+                    f"- **核验**: {tc.verification.verdict} → {tc.verification.bucket}"
+                    f"（{tc.verification.rationale}）\n"
+                )
             if tc.confidence_note:
                 lines.append(f"- **备注**: {tc.confidence_note}\n")
             lines.append(f"- **来源**: {', '.join(tc.provenance.derived_from)}\n")

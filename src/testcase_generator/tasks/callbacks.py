@@ -87,6 +87,8 @@ async def on_pipeline_complete(
             tp_logical_id = case_data.get("test_point_id", "")
             test_point_fk = tp_id_map.get(tp_logical_id)
 
+            verification = case_data.get("verification") or {}
+
             test_case = TestCase(
                 id=uuid.uuid4(),
                 batch_id=batch_uuid,
@@ -102,6 +104,10 @@ async def on_pipeline_complete(
                 confidence_note=case_data.get("confidence_note"),
                 review_status=ReviewStatus.PENDING,
                 iteration=1,
+                verdict=verification.get("verdict"),
+                bucket=verification.get("bucket"),
+                verification=verification or None,
+                duplicate_of=case_data.get("duplicate_of"),
             )
             session.add(test_case)
 
