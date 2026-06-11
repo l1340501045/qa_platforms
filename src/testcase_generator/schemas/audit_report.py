@@ -27,6 +27,11 @@ class AuditReport(BaseModel):
         default_factory=list,
         description="无任何用例覆盖的测试点 ID 列表（即使 LLM gap 审计返回 0 也如实记录）",
     )
+    weak_coverage_test_point_ids: list[str] = Field(
+        default_factory=list,
+        description="有用例但被判'假覆盖'(声明维度但步骤未真正验证)的测试点 ID，"
+        "交由 backfill 用带 PRD 原文的接地生成重做替换",
+    )
 
     # (feature × dimension) 维度覆盖率（原指标，改名避免混淆）
     dimension_cell_total: int = Field(description="去重 (feature_id, dimension) 组合总数")

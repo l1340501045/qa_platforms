@@ -18,12 +18,19 @@ async def dedup_node(state: PipelineState) -> dict:
     """对最终用例集做全局近重复标记。"""
     final_cases: list[GeneratedTestCase] = state.get("final_test_cases") or state.get("test_cases", [])
 
+    def _is_placeholder(c: GeneratedTestCase) -> bool:
+        if "需求待确认" in (c.title or ""):
+            return True
+        exp = " ".join(c.expected_results or [])
+        return "PRD" in exp and "未定义" in exp and "待" in exp and "澄清" in exp
+
     dedup_inputs = [
         DedupCase(
             case_id=c.id,
             feature_id=c.test_point_id or "",
             title=c.title,
             text=" ".join(c.expected_results or []),
+            is_placeholder=_is_placeholder(c),
         )
         for c in final_cases
     ]

@@ -60,3 +60,36 @@ def test_dedup_flags_parametric_near_duplicates():
 
 def test_dedup_empty_input():
     assert find_duplicates([]) == {}
+
+
+def test_dedup_folds_placeholder_when_assertion_exists():
+    # 同一测试点：有确定断言时，"需求待确认"占位用例应被折叠为断言的重复
+    cases = [
+        DedupCase("a1", "TP-1", "管理员可查看全量标题数据", text="可看到全部投手数据"),
+        DedupCase("p1", "TP-1", "【需求待确认】管理员全量写操作权限范围",
+                  text="PRD 未定义该行为，待 PM 澄清后再补确定断言", is_placeholder=True),
+    ]
+    dup_map = find_duplicates(cases)
+    assert dup_map.get("p1") == "a1"
+    assert "a1" not in dup_map
+
+
+def test_dedup_keeps_single_placeholder_when_all_placeholder():
+    # 全是占位 → 仅留其一
+    cases = [
+        DedupCase("p1", "TP-2", "【需求待确认】Token 过期返回 401", is_placeholder=True),
+        DedupCase("p2", "TP-2", "【需求待确认】Token 过期提示重新登录", is_placeholder=True),
+    ]
+    dup_map = find_duplicates(cases)
+    assert dup_map.get("p2") == "p1"
+
+
+def test_dedup_protects_boundary_values():
+    # 边界语义 + 数字不同 → 不同边界值的有效用例，绝不可误并
+    cases = [
+        DedupCase("b1", "TP-3", "导入恰好1000行数据时校验通过", text="提示导入成功"),
+        DedupCase("b2", "TP-3", "导入恰好999行数据时校验通过", text="提示导入成功"),
+        DedupCase("b3", "TP-3", "导入超出1001行数据时被拦截", text="提示超出上限"),
+    ]
+    dup_map = find_duplicates(cases)
+    assert "b1" not in dup_map and "b2" not in dup_map and "b3" not in dup_map

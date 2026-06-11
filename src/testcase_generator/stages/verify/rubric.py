@@ -18,6 +18,7 @@ VERIFY_SYSTEM_PROMPT = """角色：你是资深 QA 用例审计员。任务：�
 0. 按用例的【每一条关键断言】分别对照 PRD 核对，再对整条用例给一个结论；多种问题并存时按优先级取最严：conflict > undefined > ungrounded > grounded。
    - 关键：只要存在【任一】关键断言与 PRD 明文相反，整条判 conflict——即使该用例的其它断言成立。例如用例同时断言"过期账户不可勾选"(对)与"从可选列表移除/搜索为空"(PRD 是"展示为『授权过期』并置灰"，相反)，因后者矛盾，整条判 conflict，不可因前者成立而判 grounded。
    - 使用了 PRD 未定义的取值/字段，但 PRD 对该名目另有明确定义（如通配符"账户名"PRD 规定替换为空字符串，用例却替换为实际账户名），属与 PRD 明文相反，判 conflict。
+   - 高频误读专项核对（与 PRD 明文相反则判 conflict）：① emoji——PRD 若规定"自动剔除并提示"，用例却写"拦截/禁止输入/报错不支持"，判 conflict；② "投放方式"与"竞价策略"是不同字段，用例把一方枚举/规则套到另一方，判 conflict；③ 字数算法——用例的计数规则与 §5.0/字段约束的字数算法原文不符（如 emoji/全角/换行计数方式），判 conflict；原文未定义计数规则却给出确定字数断言，判 undefined。
 1. 一切判定必须基于所给 PRD 原文，不臆测、不脑补；拿不准时，若 PRD 无支撑则判 ungrounded/undefined，不要判 grounded。
 2. 章节性质（section_kind）是重要信号：
    - mock/future → 对其行为的具体断言判 undefined；

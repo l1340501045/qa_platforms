@@ -1,7 +1,16 @@
-"""近重复聚类 — 确定性文本相似（归一化签名 + bigram 倒排分块 + difflib）。
+"""近重复聚类 — 结构化折叠 + 确定性文本相似（归一化签名 + bigram 倒排分块 + difflib）。
 
-不依赖外部 embedding 服务，可复现、可离线验证。跨功能点的近重复（如权限模块在
-多个功能点重复出现）也能抓到，因为聚类在全量用例上做、不按 feature 切。
+两类去重，互补：
+1) 结构化折叠（按 test_point 分组）：
+   - 同一测试点下「需求待确认占位用例」与「确定断言用例」并存 → 占位是冗余，标为断言版的重复；
+   - 同一测试点下多条占位用例 → 仅留其一。
+   词面相似抓不到这种孪生（标题差异大），但它正是"虚胖"的主要来源。
+2) 词面近重复（全量、跨功能点）：归一化标题/正文 bigram 倒排找候选对，difflib 比率超阈值连边。
+   - 纯枚举等价选项（如"切换每页10/50/100条"）**仍折叠**——边际价值低的虚胖。
+   - **边界值保护**：候选对数字集不同 **且** 含边界语义关键词（恰好/上限/超出/最大/为空…）时
+     **不合并**——避免把"1000行" vs "999行"、"恰好等于每页"等不同边界值的有效用例误标重复（修审计 W05）。
+
+不依赖外部 embedding，可复现、可离线验证。
 """
 
 from __future__ import annotations
@@ -11,20 +20,32 @@ from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-# 归一化：保留中日韩与字母，去数字/标点/空白（数字差异不构成实质不同）
+# 归一化：保留中日韩与字母，去数字/标点/空白（数字差异交由 _numset 单独保护）
 _KEEP = re.compile(r"[\u4e00-\u9fffa-zA-Z]+")
+_NUM = re.compile(r"\d+(?:\.\d+)?")
+# 边界语义关键词：出现时若数字不同则保护（不折叠），避免误删不同边界值用例
+_BOUNDARY_KW = re.compile(
+    r"恰好|刚好|边界|临界|上限|下限|超出|超过|不超过|至多|至少|最大|最小|超长|超量|"
+    r"为空|空态|空值|溢出|越界|等于|第一|首条|末条|最后|最末|起始|结尾"
+)
 
 
 @dataclass
 class DedupCase:
     case_id: str
-    feature_id: str
+    feature_id: str  # 此处复用为 test_point_id（节点传入），结构化折叠按它分组
     title: str
-    text: str = ""  # 可附加 expected_results 拼接，增强判别
+    text: str = ""  # 附加 expected_results 拼接，增强判别
+    is_placeholder: bool = False  # 是否「需求待确认」占位用例
 
 
 def _normalize(s: str) -> str:
     return "".join(_KEEP.findall((s or "").lower()))
+
+
+def _numset(s: str) -> frozenset[str]:
+    """提取文本中的数字（含小数），作为边界/枚举变体的判别。"""
+    return frozenset(_NUM.findall(s or ""))
 
 
 def _bigrams(s: str) -> set[str]:
@@ -40,30 +61,8 @@ def find_duplicates(
     """返回 {duplicate_case_id: canonical_case_id}。
 
     canonical 取每个近重复簇中最先出现（输入顺序）的用例；其余标为其重复。
-    分块：按归一化标题的 bigram 倒排找候选对，仅对候选对算 difflib 比率，避免 O(n^2)。
     """
-    norm = {c.case_id: _normalize(c.title + c.text) for c in cases}
-    norm_title = {c.case_id: _normalize(c.title) for c in cases}
     order = {c.case_id: i for i, c in enumerate(cases)}
-
-    # 1) bigram 倒排索引（基于归一化标题）
-    inverted: dict[str, list[str]] = defaultdict(list)
-    for c in cases:
-        for bg in _bigrams(norm_title[c.case_id]):
-            inverted[bg].append(c.case_id)
-
-    # 2) 候选对：共享 bigram 数 >= 阈值
-    pair_shared: dict[tuple[str, str], int] = defaultdict(int)
-    for ids in inverted.values():
-        if len(ids) < 2 or len(ids) > 200:  # 跳过超热 bigram，控量
-            continue
-        for i in range(len(ids)):
-            for j in range(i + 1, len(ids)):
-                a, b = ids[i], ids[j]
-                key = (a, b) if order[a] < order[b] else (b, a)
-                pair_shared[key] += 1
-
-    # 3) 候选对算相似度，超阈值则连边（union-find）
     parent: dict[str, str] = {c.case_id: c.case_id for c in cases}
 
     def _find(x: str) -> str:
@@ -76,20 +75,65 @@ def find_duplicates(
         ra, rb = _find(a), _find(b)
         if ra == rb:
             return
-        # canonical = 输入顺序更靠前者
         if order[ra] <= order[rb]:
             parent[rb] = ra
         else:
             parent[ra] = rb
 
+    # ── 1) 结构化折叠：按 test_point 分组处理占位 vs 断言 ──
+    by_tp: dict[str, list[DedupCase]] = defaultdict(list)
+    for c in cases:
+        if c.feature_id:
+            by_tp[c.feature_id].append(c)
+    for tp_id, group in by_tp.items():
+        if len(group) < 2:
+            continue
+        assertions = [c for c in group if not c.is_placeholder]
+        placeholders = [c for c in group if c.is_placeholder]
+        if assertions and placeholders:
+            # 有确定断言时，占位用例冗余 → 全部并入首个断言
+            canonical = min(assertions, key=lambda c: order[c.case_id])
+            for ph in placeholders:
+                _union(canonical.case_id, ph.case_id)
+        elif len(placeholders) >= 2:
+            # 全是占位 → 仅留其一
+            canonical = min(placeholders, key=lambda c: order[c.case_id])
+            for ph in placeholders:
+                if ph.case_id != canonical.case_id:
+                    _union(canonical.case_id, ph.case_id)
+
+    # ── 2) 词面近重复（带数字差异保护）──
+    norm = {c.case_id: _normalize(c.title + c.text) for c in cases}
+    norm_title = {c.case_id: _normalize(c.title) for c in cases}
+    nums = {c.case_id: _numset(c.title + c.text) for c in cases}
+
+    inverted: dict[str, list[str]] = defaultdict(list)
+    for c in cases:
+        for bg in _bigrams(norm_title[c.case_id]):
+            inverted[bg].append(c.case_id)
+
+    pair_shared: dict[tuple[str, str], int] = defaultdict(int)
+    for ids in inverted.values():
+        if len(ids) < 2 or len(ids) > 200:
+            continue
+        for i in range(len(ids)):
+            for j in range(i + 1, len(ids)):
+                a, b = ids[i], ids[j]
+                key = (a, b) if order[a] < order[b] else (b, a)
+                pair_shared[key] += 1
+
+    raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
     for (a, b), shared in pair_shared.items():
         if shared < min_shared_bigrams:
+            continue
+        # 边界值保护：数字集不同 且 任一方含边界语义关键词 → 不同边界值的有效用例，保留两者
+        if nums[a] != nums[b] and (_BOUNDARY_KW.search(raw[a]) or _BOUNDARY_KW.search(raw[b])):
             continue
         ratio = SequenceMatcher(None, norm[a], norm[b]).ratio()
         if ratio >= sim_threshold:
             _union(a, b)
 
-    # 4) 输出：非自身根的用例标为重复
+    # ── 输出 ──
     dup_map: dict[str, str] = {}
     for c in cases:
         root = _find(c.case_id)

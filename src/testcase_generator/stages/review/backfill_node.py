@@ -31,19 +31,31 @@ async def backfill_node(state: PipelineState) -> dict:
     final_cases: list[GeneratedTestCase] = state.get("final_test_cases") or state.get("test_cases", [])
 
     uncovered_ids = set(audit_report.uncovered_test_point_ids) if audit_report else set()
-    if not uncovered_ids:
+    # 假覆盖测试点仅在首轮处理（替换重做），之后清空避免回环反复；自循环只继续补零覆盖。
+    weak_ids = set(getattr(audit_report, "weak_coverage_test_point_ids", []) or []) if audit_report else set()
+    weak_ids -= uncovered_ids  # 零覆盖优先走追加逻辑
+
+    if not uncovered_ids and not weak_ids:
         return {"reconcile_iterations": iters, "current_stage": "backfill"}
 
-    uncovered_tps = [tp for tp in test_points if tp.id in uncovered_ids]
-    logger.info("backfill 第 %d 轮：对 %d 个零覆盖测试点定向重生成", iters, len(uncovered_tps))
+    # 假覆盖：先移除其现有（被判无效验证的）用例，稍后用接地生成替换
+    kept_cases = [c for c in final_cases if c.test_point_id not in weak_ids] if weak_ids else final_cases
+    removed = len(final_cases) - len(kept_cases)
+
+    target_ids = uncovered_ids | weak_ids
+    target_tps = [tp for tp in test_points if tp.id in target_ids]
+    logger.info(
+        "backfill 第 %d 轮：零覆盖补 %d 个 + 假覆盖替换 %d 个（移除旧用例 %d 条），接地重生成",
+        iters, len(uncovered_ids), len(weak_ids), removed,
+    )
 
     parsed_context = state["parsed_context"]
     system_id = UUID(state["system_id"])
     new_cases, failed = await generate_cases(
-        parsed_context, uncovered_tps, system_id, start_counter=len(final_cases)
+        parsed_context, target_tps, system_id, start_counter=len(kept_cases)
     )
 
-    merged = final_cases + new_cases
+    merged = kept_cases + new_cases
 
     # 重算覆盖（纯集合运算，不触发 LLM）：剩余仍零覆盖的测试点
     covered_tp_ids = {c.test_point_id for c in merged if c.test_point_id}
@@ -59,11 +71,12 @@ async def backfill_node(state: PipelineState) -> dict:
         "reconcile_iterations": iters,
         "current_stage": "backfill",
     }
-    # 更新 audit_report.uncovered_test_point_ids，供 review_router 判断是否继续回填
+    # 更新 audit_report：刷新零覆盖列表，并清空假覆盖列表（替换重做仅一轮，防回环反复）
     if audit_report is not None:
         out["audit_report"] = audit_report.model_copy(
             update={
                 "uncovered_test_point_ids": still_uncovered,
+                "weak_coverage_test_point_ids": [],
                 "per_test_point_covered": len(covered_tp_ids & all_tp_ids),
             }
         )

@@ -13,6 +13,7 @@ from src.testcase_generator.schemas.parsed_context import ParsedContext
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
+from src.testcase_generator.stages.context_utils import collect_global_sections
 from src.testcase_generator.stages.verify.verifier import (
     PrdSection,
     VerifyCase,
@@ -27,6 +28,14 @@ def _build_feature_sections(parsed_context: ParsedContext, feature_ids: set[str]
     """构建 feature_id → 对照用 PRD 章节原文（与 write_cases 的上下文映射口径一致）。"""
     by_feature: dict[str, list[PrdSection]] = defaultdict(list)
     generic: list[PrdSection] = []
+    seen: dict[str, set[tuple[str, str]]] = defaultdict(set)
+
+    def _add(fid: str, sec: PrdSection) -> None:
+        key = (sec.source_ref or "", sec.heading or "")
+        if key in seen[fid]:
+            return
+        seen[fid].add(key)
+        by_feature[fid].append(sec)
 
     for source in parsed_context.sources:
         for section in source.sections:
@@ -39,15 +48,28 @@ def _build_feature_sections(parsed_context: ParsedContext, feature_ids: set[str]
             matched = False
             for feature in parsed_context.features:
                 if section.source_ref in feature.source_refs:
-                    by_feature[feature.id].append(sec)
+                    _add(feature.id, sec)
                     matched = True
                     break
             if not matched and source.trust_level <= 2:
                 generic.append(sec)
 
-    # 通用规范/汇总章节（如 §6 投放方式表、§7 监测链接、§9 字段约束）对所有功能点可见
+    # 通用/汇总章节（未匹配到任何功能点的 PRD/技术文档）对所有功能点可见
     for fid in feature_ids:
-        by_feature[fid].extend(generic)
+        for sec in generic:
+            _add(fid, sec)
+
+    # 全局/常驻章节（§5.0 全局规则、投放方式、监测链接、字段约束、字数等）无条件注入
+    # 每个功能点 —— 与 write_cases 口径一致，修复 §5.0 已定义行为被误判 needs_spec 的根因。
+    for gs in collect_global_sections(parsed_context):
+        sec = PrdSection(
+            heading=gs.heading,
+            content=gs.content,
+            source_ref=gs.source_ref,
+            section_kind=gs.section_kind,
+        )
+        for fid in feature_ids:
+            _add(fid, sec)
     return by_feature
 
 

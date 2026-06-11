@@ -26,13 +26,17 @@ MAX_RECONCILE = 2
 
 
 def review_router(state: PipelineState) -> str:
-    """review 阶段路由 — 覆盖回填回环 + verify 事实核验关卡。
+    """review 阶段路由 — 覆盖回填/重做回环 + verify 事实核验关卡。
 
-    - 存在零覆盖测试点且回填轮数 < MAX_RECONCILE → backfill（定向重生成后回 review 复核）
+    - 存在零覆盖测试点 或 假覆盖测试点，且回填轮数 < MAX_RECONCILE
+      → backfill（定向接地重生成；零覆盖追加、假覆盖替换）
     - 否则 → verify（进入事实核验关卡）
     """
     audit_report = state.get("audit_report")
     iters = state.get("reconcile_iterations", 0)
-    if audit_report and getattr(audit_report, "uncovered_test_point_ids", None) and iters < MAX_RECONCILE:
-        return "backfill"
+    if audit_report and iters < MAX_RECONCILE:
+        if getattr(audit_report, "uncovered_test_point_ids", None) or getattr(
+            audit_report, "weak_coverage_test_point_ids", None
+        ):
+            return "backfill"
     return "verify"

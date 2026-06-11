@@ -25,6 +25,7 @@ from src.testcase_generator.schemas.test_case import (
     Provenance,
 )
 from src.testcase_generator.schemas.test_point import TestPointSchema
+from src.testcase_generator.stages.context_utils import collect_global_sections
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
 )
@@ -84,19 +85,56 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 前置条件必须完整列出所有必要准备（环境、数据、账号状态等）
 - 预期结果必须可验证（有具体值或可观测状态变化）
 - 质量优先不设数量上限
-- 每个测试点至少生成一条用例，复杂测试点应拆分为多条用例（正常/异常/边界）
 - 步骤中的输入数据要用具体值举例，不能用占位符
+
+【覆盖维度全面性（资深与初级的分水岭——每个 spec 测试点都要系统性过一遍以下清单，凡 PRD 有明文支撑的维度都要成条覆盖，不要只写正向 happy path）】
+- 正常流：典型有效输入下的主流程。
+- 边界值：上限/下限、刚好等于阈值/超出 1、空、0、1、最大长度/超长、最大条数/超量、列表恰好等于每页条数。
+- 异常与逆向：非法/超长/特殊字符输入、必填缺失、格式错误、重复提交、网络失败/超时、部分失败与回滚、操作取消。
+- 状态机：非法/逆向状态转移（不只正向），终态后再操作，并发态。
+- 并发与一致性：多端同时操作、A 改动后 B 是否同步、聚合/计数刷新、缓存/同步延迟。
+- 权限与可见性：水平越权/垂直越权、未登录、Token 过期、数据隔离边界（仅在 PRD 有定义时）。
+- 幂等与重试副作用（仅在 PRD 有定义时）。
+说明：以上维度只在 requirement_context 对该行为有明文支撑时才写确定断言；无支撑的维度按下面"需求待确认"规则处理，不要为凑维度编造。
+
+【范围严格性（防过度断言/外推）】
+- 断言不得超出 PRD 明文授予的范围：例如 PRD 只写"可读取/可查看全量"，绝不可推断为"可写/可编辑/可删除"；只写"展示置灰"不可写成"移除/隐藏"；只写"提示"不可编造具体文案除非 PRD 给了文案。
+- 不得把某功能的取值/枚举套用到 PRD 另有明确定义的名目上（如通配符替换规则、投放方式≠竞价策略）。
+
+【高频误读纠正（反例 → 正解，这些是历史上反复读错的点，务必按 requirement_context 原文核对）】
+- emoji 处理：✗ 误判为"拦截/阻止输入/报错『不支持 emoji』"。✓ 正解（若 §5.0/字段约束如此定义）：自动剔除已输入/粘贴的 emoji，仅保留合法文本，并 toast 提示「emoji 已被自动剔除」。务必照原文写剔除而非拦截。
+- 投放方式 vs 竞价策略：✗ 把"投放方式"的枚举/规则套到"竞价策略"上（或反之）。✓ 两者是 PRD 中**不同字段**，各有各的取值与约束，必须分别回到各自章节取原文，不可交叉套用。
+- 字数算法：✗ 自行臆造计数规则（如"1 个 emoji 算 1 字""中英文都算 1"）。✓ 必须引用 §5.0/字段约束里的**字数算法原文**（全角/半角/emoji/换行如何计数），原文没写则按"需求待确认"。
+- 通配符/替换规则：✗ 把某处的通配符替换枚举默认套到所有输入框。✓ 仅在该输入框 PRD 明确引用该规则时适用，否则回到该字段自身定义。
+- 状态/置灰 vs 移除：✗ "置灰/禁用"写成"消失/移除/隐藏"。✓ 严格区分"可见但不可点"与"不可见"。
+
+【每个测试点的产出规则（决定生成几条、是不是"待澄清"）】
+- 先判断该测试点要验证的行为在 requirement_context 里是否有**明文规格**支撑：
+  - 有明文支撑(spec)：可生成 1 条或多条确定性用例（正常/异常/边界各成条），每条预期都要可验证、可引用原文。
+  - 无明文支撑（PRD 未定义 / 章节性质是 mock·future·flow·tbd / 找不到任何 source_quote）：
+    **只生成唯一一条「需求待确认」型用例**，且：
+      · title 以「【需求待确认】」开头；
+      · 预期结果统一写成「PRD 未定义该行为，待 PM/需求方澄清后再补确定断言；当前不做确定性结果断言」；
+      · 绝不编造任何确定的数值/状态/文案/错误码/流程作为预期。
+- **禁矛盾孪生（但允许按方面正确拆分）**：
+  · 对同一个"断言点/方面"，不允许既出「待确认版」又出「确定断言版」，也不允许两条结论互斥的用例。
+  · 若一个测试点是复合的（部分方面 PRD 有明文、部分方面留白），正确做法是按方面拆成多条：有明文的方面写确定断言、留白的方面写「需求待确认」——这不算孪生，反而是资深做法。
+  · 反例（禁止）：同一测试点同时出「管理员可写他人数据(断言)」和「管理员写权限待确认」——这是同一方面的矛盾孪生。
 
 【事实接地强约束（最重要，违反将被核验关卡剔除）】
 - 每个步骤的 expected_result 必须能在所给 requirement_context 原文中找到支撑，并把支撑原文摘录填入 source_quote、所在章节填入 source_ref。
-- 找不到原文支撑的预期结果，不要编造——要么不写该断言，要么换成需求确有定义的可观测结果。
-- 严禁对需求未定义的行为编造预期（如自动重试/指数退避/熔断限流、HTTP 错误码契约、超时阈值、性能 SLA、幂等键、SSRF/SQL/XSS 防护、Token 加密、redirect_uri/state 校验等），除非 requirement_context 明文定义了它们。
+- 找不到原文支撑的预期结果，不要编造——按上面的规则改写成「需求待确认」型用例。
+- 高频禁区（除非 requirement_context 明文定义，否则一律按"待确认"处理，不得写确定断言）：
+  自动重试/指数退避/熔断限流、HTTP 错误码契约(400/403/429 等)、超时阈值、性能 SLA(响应时间/P95/并发量)、
+  幂等键、SSRF/SQL注入/XSS/CSRF 防护、Token 加密、redirect_uri/state 校验、空状态文案、分页枚举值、权限"写"操作范围。
+- 注意：requirement_context 里包含【全局/常驻章节】（如 §5.0 全局规则、字段约束、字数算法、投放方式、监测链接）。
+  这些是适用于本功能点的通用规则——若测试点行为被这些全局章节定义，就按 spec 处理、写确定断言，**不要误判为"待确认"**。
 - 上下文中每个章节带有 section_kind：
   - spec：可正常据其写确定的预期结果；
   - mock：该行为本期为接口模拟/未实现，只能写"占位提示/未真正调用接口"类预期，不得断言真实后端行为；
   - future：留待二期，本期不生成其行为用例；
   - flow：仅流程图示意，不得据节点名编造后端机制（重试秒数/锁/续传等）；
-  - tbd：待拍板，不写具体行为断言，只可生成"需求待确认"提示；
+  - tbd：待拍板，按上面"需求待确认"型唯一用例处理；
   - summary：汇总索引，行为细节以其引用的 spec 章节为准。
 
 步骤编写标准：
@@ -163,36 +201,58 @@ async def generate_cases(
 
     # 构建 feature_id → 相关上下文的映射（给足上下文，不粗暴截断）
     feature_context: dict[str, list[dict]] = defaultdict(list)
+    # 记录每个 feature 已注入的章节键，避免与全局章节重复注入
+    ctx_seen: dict[str, set[tuple[str, str]]] = defaultdict(set)
+
+    def _append_ctx(fid: str, source, section) -> None:
+        key = (section.source_ref or "", section.heading or "")
+        if key in ctx_seen[fid]:
+            return
+        ctx_seen[fid].add(key)
+        feature_context[fid].append(
+            {
+                "source": source.title,
+                "trust_level": source.trust_level,
+                "section_kind": getattr(section, "section_kind", "spec"),
+                "source_ref": section.source_ref,
+                "heading": section.heading,
+                "content": section.content,  # 不截断，给足上下文
+            }
+        )
+
     for source in parsed_context.sources:
         for section in source.sections:
             # 按 source_ref 匹配功能点
             for feature in parsed_context.features:
                 if section.source_ref in feature.source_refs:
-                    feature_context[feature.id].append(
-                        {
-                            "source": source.title,
-                            "trust_level": source.trust_level,
-                            "section_kind": getattr(section, "section_kind", "spec"),
-                            "source_ref": section.source_ref,
-                            "heading": section.heading,
-                            "content": section.content,  # 不截断，给足上下文
-                        }
-                    )
+                    _append_ctx(feature.id, source, section)
                     break
             else:
                 # 通用上下文（技术文档等）关联所有功能点
                 if source.trust_level <= 2:  # PRD 和技术文档
                     for fid in tp_by_feature:
-                        feature_context[fid].append(
-                            {
-                                "source": source.title,
-                                "trust_level": source.trust_level,
-                                "section_kind": getattr(section, "section_kind", "spec"),
-                                "source_ref": section.source_ref,
-                                "heading": section.heading,
-                                "content": section.content,
-                            }
-                        )
+                        _append_ctx(fid, source, section)
+
+    # 全局/常驻章节（§5.0 全局规则、投放方式、监测链接、字段约束、字数等）无条件注入
+    # 每个功能点 —— 修复"§5.0 只给到 F-002 导致其它功能点把已定义行为误判 needs_spec"。
+    global_sections = collect_global_sections(parsed_context)
+    if global_sections:
+        for fid in tp_by_feature:
+            for gs in global_sections:
+                key = (gs.source_ref or "", gs.heading or "")
+                if key in ctx_seen[fid]:
+                    continue
+                ctx_seen[fid].add(key)
+                feature_context[fid].append(
+                    {
+                        "source": gs.source_title,
+                        "trust_level": gs.trust_level,
+                        "section_kind": gs.section_kind,
+                        "source_ref": gs.source_ref,
+                        "heading": gs.heading,
+                        "content": gs.content,
+                    }
+                )
 
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
