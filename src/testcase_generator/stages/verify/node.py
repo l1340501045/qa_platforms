@@ -59,12 +59,16 @@ async def verify_node(state: PipelineState) -> dict:
 
     tp_feature_of: dict[str, str] = {tp.id: tp.feature_id for tp in test_points}
 
+    # 用稳定的位置键（V{i}）做核验映射，避免 c.id 在极端情况下重复导致结论错配
     verify_inputs: list[VerifyCase] = []
-    for c in final_cases:
+    keys: list[str] = []
+    for i, c in enumerate(final_cases):
+        key = f"V{i}"
+        keys.append(key)
         feature_id = tp_feature_of.get(c.test_point_id, "")
         verify_inputs.append(
             VerifyCase(
-                case_id=c.id,
+                case_id=key,
                 feature_id=feature_id,
                 title=c.title,
                 steps=[
@@ -87,9 +91,9 @@ async def verify_node(state: PipelineState) -> dict:
 
     verifications = await verify_cases(verify_inputs, sections_by_feature)
 
-    # 回挂结论
-    for c in final_cases:
-        c.verification = verifications.get(c.id)
+    # 回挂结论（按位置键映射）
+    for c, key in zip(final_cases, keys):
+        c.verification = verifications.get(key)
 
     summary = summarize(verifications)
     logger.info("verify_node: %s", summary)

@@ -83,7 +83,8 @@ def build_pipeline() -> StateGraph:
     graph.add_edge("test_points", "write_cases")
     graph.add_edge("write_cases", "review")
 
-    # review 后路由：零覆盖测试点 → backfill 定向回填回环；达标 → verify
+    # review 后路由：零覆盖测试点 → backfill 定向回填；达标 → verify
+    # review（全量 LLM 审计+补全）只跑一次；backfill 自循环重算覆盖，避免重复审计/additions 累积。
     graph.add_conditional_edges(
         "review",
         review_router,
@@ -93,8 +94,15 @@ def build_pipeline() -> StateGraph:
         },
     )
 
-    # 回填后回到 review 复核覆盖率（受 MAX_RECONCILE 上限约束，防无限循环）
-    graph.add_edge("backfill", "review")
+    # backfill 自循环：仍有零覆盖且未达上限 → 再回填；否则 → verify（受 MAX_RECONCILE 约束）
+    graph.add_conditional_edges(
+        "backfill",
+        review_router,
+        {
+            "backfill": "backfill",
+            "verify": "verify",
+        },
+    )
 
     # verify 事实核验 → dedup 全局去重 → export
     graph.add_edge("verify", "dedup")
