@@ -85,8 +85,12 @@ class TestCase(Base):
     verdict: Mapped[str | None] = mapped_column(String(20), nullable=True)
     bucket: Mapped[str | None] = mapped_column(String(20), nullable=True)
     verification: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    # dedup 全局去重产出：近重复簇规范用例逻辑 id
-    duplicate_of: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # dedup 全局去重产出：指向近重复簇规范用例的 UUID（落库时由逻辑 id 解析，可 join）
+    duplicate_of: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("testcase.test_cases.id", ondelete="SET NULL", onupdate="CASCADE"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()

@@ -79,6 +79,14 @@ async def on_pipeline_complete(
             await session.flush()
 
         # ── 2. 写入 test_cases ───────────────────────────────────────
+        # 预分配 UUID（按用例逻辑 id 建映射），以便把 duplicate_of 的逻辑 id 解析为真实 UUID
+        case_uuid_of: dict[str, uuid.UUID] = {}
+        for case_data in final_cases:
+            if isinstance(case_data, dict):
+                logical_id = case_data.get("id", "")
+                if logical_id:
+                    case_uuid_of[logical_id] = uuid.uuid4()
+
         for case_data in final_cases:
             if not isinstance(case_data, dict):
                 continue
@@ -89,8 +97,14 @@ async def on_pipeline_complete(
 
             verification = case_data.get("verification") or {}
 
+            # duplicate_of 逻辑 id → 规范用例真实 UUID（解析不到则置空，不写悬空引用）
+            dup_logical = case_data.get("duplicate_of")
+            dup_fk = case_uuid_of.get(dup_logical) if dup_logical else None
+
+            case_uuid = case_uuid_of.get(case_data.get("id", "")) or uuid.uuid4()
+
             test_case = TestCase(
-                id=uuid.uuid4(),
+                id=case_uuid,
                 batch_id=batch_uuid,
                 test_point_id=test_point_fk,
                 title=case_data.get("title", ""),
@@ -107,7 +121,7 @@ async def on_pipeline_complete(
                 verdict=verification.get("verdict"),
                 bucket=verification.get("bucket"),
                 verification=verification or None,
-                duplicate_of=case_data.get("duplicate_of"),
+                duplicate_of=dup_fk,
             )
             session.add(test_case)
 
