@@ -45,6 +45,7 @@ async def dedup_node(state: PipelineState) -> dict:
             title=c.title,
             text=" ".join(c.expected_results or []),
             is_placeholder=_is_placeholder(c),
+            dimension=" ".join(c.dimensions or []),
         )
         for c in final_cases
     ]

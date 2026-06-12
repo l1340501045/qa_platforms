@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import defaultdict
 from typing import List, Literal
 from uuid import UUID
@@ -25,7 +26,10 @@ from src.testcase_generator.schemas.test_case import (
     Provenance,
 )
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.stages.context_utils import collect_global_sections
+from src.testcase_generator.stages.context_utils import (
+    collect_global_sections,
+    CrossFeatureIndex,
+)
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
 )
@@ -97,12 +101,19 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 幂等与重试副作用（仅在 PRD 有定义时）。
 说明：以上维度只在 requirement_context 对该行为有明文支撑时才写确定断言；无支撑的维度按下面"需求待确认"规则处理，不要为凑维度编造。
 
+【逆向与联动必出项（资深短板高发区——只要 PRD 对该交互有定义，以下用例就必须成条出现，不能只写正向）】
+- 切换/重选交互：凡 PRD 定义了"切换某选项/类型/Tab"，必出「切换后已选内容/已填数据是否清空 or 保留」用例（如切换投放方式后已选监测链接是否自动清空）。
+- 数值区间：凡 PRD 给了取值区间/上下限，必出「输入越界值 → 夹取到合法区间 or 被拒绝」用例，不能只测区间内有效值。
+- 状态机：凡 PRD 有状态流转，必出「非法/逆向转移、终态后再操作」用例，不能只测正向流转。
+- 跨模块联动：凡 PRD 定义了"A 改动后 B 同步/联动刷新"，必出「A 变更后校验 B 是否同步」用例。
+
 【范围严格性（防过度断言/外推）】
 - 断言不得超出 PRD 明文授予的范围：例如 PRD 只写"可读取/可查看全量"，绝不可推断为"可写/可编辑/可删除"；只写"展示置灰"不可写成"移除/隐藏"；只写"提示"不可编造具体文案除非 PRD 给了文案。
 - 不得把某功能的取值/枚举套用到 PRD 另有明确定义的名目上（如通配符替换规则、投放方式≠竞价策略）。
 
 【高频误读纠正（反例 → 正解，这些是历史上反复读错的点，务必按 requirement_context 原文核对）】
 - emoji 处理：✗ 误判为"拦截/阻止输入/报错『不支持 emoji』"。✓ 正解（若 §5.0/字段约束如此定义）：自动剔除已输入/粘贴的 emoji，仅保留合法文本，并 toast 提示「emoji 已被自动剔除」。务必照原文写剔除而非拦截。
+  · **特例优先**：若某字段所属章节明文写「该字段字符类型不限/允许 emoji」（如定向包名 §5.7.1），则该字段**允许 emoji、不剔除**，绝不可把全局"自动剔除"规则套到它身上。先看字段自身章节再决定。
 - 投放方式 vs 竞价策略：✗ 把"投放方式"的枚举/规则套到"竞价策略"上（或反之）。✓ 两者是 PRD 中**不同字段**，各有各的取值与约束，必须分别回到各自章节取原文，不可交叉套用。
 - 字数算法：✗ 自行臆造计数规则（如"1 个 emoji 算 1 字""中英文都算 1"）。✓ 必须引用 §5.0/字段约束里的**字数算法原文**（全角/半角/emoji/换行如何计数），原文没写则按"需求待确认"。
 - 通配符/替换规则：✗ 把某处的通配符替换枚举默认套到所有输入框。✓ 仅在该输入框 PRD 明确引用该规则时适用，否则回到该字段自身定义。
@@ -127,8 +138,17 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 高频禁区（除非 requirement_context 明文定义，否则一律按"待确认"处理，不得写确定断言）：
   自动重试/指数退避/熔断限流、HTTP 错误码契约(400/403/429 等)、超时阈值、性能 SLA(响应时间/P95/并发量)、
   幂等键、SSRF/SQL注入/XSS/CSRF 防护、Token 加密、redirect_uri/state 校验、空状态文案、分页枚举值、权限"写"操作范围。
+- 文案/格式校验禁区（5b 复审高发假 oracle，除非 PRD 给出**原文措辞/正则规则**，否则一律待确认，不得编造）：
+  · 提示/错误/toast/空状态的**具体文案措辞**（如"权限不足""ROI 不能超过100"）——PRD 没给原文就只写"给出相应错误提示（文案待确认）"。
+  · 未登录/Token 过期的处理结果——不要默认套"权限不足"，PRD 未定义就待确认。
+  · 监测链接/账户ID/URL 等的**格式校验规则**（正则、长度、字符集）——PRD 没给规则不得编造合法/非法判定。
+  · 越界拒绝的**具体提示语**——可断言"被拒绝/不可提交"（若 PRD 定义了边界），但具体措辞除非有原文否则待确认。
 - 注意：requirement_context 里包含【全局/常驻章节】（如 §5.0 全局规则、字段约束、字数算法、投放方式、监测链接）。
   这些是适用于本功能点的通用规则——若测试点行为被这些全局章节定义，就按 spec 处理、写确定断言，**不要误判为"待确认"**。
+- 上下文中每个章节带有 scope 标记，**冲突时按局部优先**：
+  - own：本功能点自身章节（最高优先级，与本功能点最贴合）。
+  - cross_ref：跨功能点检索来的相关规格章节——某测试点行为可能定义在这里（深层规格被折到别处），**务必据此写确定断言，不要因为"本功能点段落没写"就误判留白**。
+  - global_default：全局**默认**规则。**铁律：若 own/cross_ref 局部章节对同一字段/页面的分页档位、字数算法、字符类型（emoji）、枚举另有明文，以局部为准，全局规则不适用于该字段**；二者冲突时取局部，不得把全局枚举/规则硬套到有特例的字段上。
 - 上下文中每个章节带有 section_kind：
   - spec：可正常据其写确定的预期结果；
   - mock：该行为本期为接口模拟/未实现，只能写"占位提示/未真正调用接口"类预期，不得断言真实后端行为；
@@ -216,6 +236,7 @@ async def generate_cases(
                 "section_kind": getattr(section, "section_kind", "spec"),
                 "source_ref": section.source_ref,
                 "heading": section.heading,
+                "scope": "own",  # 本功能点自身章节
                 "content": section.content,  # 不截断，给足上下文
             }
         )
@@ -235,6 +256,7 @@ async def generate_cases(
 
     # 全局/常驻章节（§5.0 全局规则、投放方式、监测链接、字段约束、字数等）无条件注入
     # 每个功能点 —— 修复"§5.0 只给到 F-002 导致其它功能点把已定义行为误判 needs_spec"。
+    # scope=global_default：是默认规则，若功能点自身章节对同字段另有特例，以局部为准（治 conflict 根因 B）。
     global_sections = collect_global_sections(parsed_context)
     if global_sections:
         for fid in tp_by_feature:
@@ -250,9 +272,33 @@ async def generate_cases(
                         "section_kind": gs.section_kind,
                         "source_ref": gs.source_ref,
                         "heading": gs.heading,
+                        "scope": "global_default",
                         "content": gs.content,
                     }
                 )
+
+    # 跨功能点规格检索注入（治"假阴性空壳"根因 A2）：某测试点行为可能定义在别的功能点
+    # 章节里（深层子节被折进别处）。按本功能点测试点描述检索全 PRD spec，补注 top-K
+    # 跨章节参考，让模型据此写确定断言而非误判留白。scope=cross_ref。
+    cross_index = CrossFeatureIndex(parsed_context)
+    for fid, fid_tps in tp_by_feature.items():
+        query_text = "\n".join(
+            f"{tp.dimension} {tp.description}" for tp in fid_tps
+        )
+        for cs in cross_index.query(query_text, ctx_seen[fid], top_k=3):
+            key = (cs.source_ref or "", cs.heading or "")
+            ctx_seen[fid].add(key)
+            feature_context[fid].append(
+                {
+                    "source": cs.source_title,
+                    "trust_level": cs.trust_level,
+                    "section_kind": cs.section_kind,
+                    "source_ref": cs.source_ref,
+                    "heading": cs.heading,
+                    "scope": "cross_ref",
+                    "content": cs.content,
+                }
+            )
 
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
@@ -334,6 +380,15 @@ async def generate_cases(
 
                 for llm_case in llm_output.test_cases:
                     tp = tp_map.get(llm_case.test_point_id)
+                    if not tp:
+                        # 模型常把一个测试点拆成多条用例并编派生 ID（TP-136-2/-3）。
+                        # 剥离尾部 -N 回映射到基础测试点，救回这些异常/边界/逆向分条用例
+                        # （否则被直接丢弃 → E"逆向/联动必出"覆盖被悄悄漏掉，且 backfill 因
+                        # 基础测试点已有用例而不会回填）。
+                        base_id = re.sub(r"-\d+$", "", llm_case.test_point_id)
+                        tp = tp_map.get(base_id)
+                        if tp:
+                            llm_case.test_point_id = base_id
                     if not tp:
                         logger.warning("LLM generated case for unknown test_point_id: %s", llm_case.test_point_id)
                         continue

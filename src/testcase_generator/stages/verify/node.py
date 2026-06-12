@@ -13,7 +13,10 @@ from src.testcase_generator.schemas.parsed_context import ParsedContext
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.stages.context_utils import collect_global_sections
+from src.testcase_generator.stages.context_utils import (
+    collect_global_sections,
+    CrossFeatureIndex,
+)
 from src.testcase_generator.stages.verify.verifier import (
     PrdSection,
     VerifyCase,
@@ -24,7 +27,11 @@ from src.testcase_generator.stages.verify.verifier import (
 logger = logging.getLogger(__name__)
 
 
-def _build_feature_sections(parsed_context: ParsedContext, feature_ids: set[str]) -> dict[str, list[PrdSection]]:
+def _build_feature_sections(
+    parsed_context: ParsedContext,
+    feature_ids: set[str],
+    feature_query: dict[str, str] | None = None,
+) -> dict[str, list[PrdSection]]:
     """构建 feature_id → 对照用 PRD 章节原文（与 write_cases 的上下文映射口径一致）。"""
     by_feature: dict[str, list[PrdSection]] = defaultdict(list)
     generic: list[PrdSection] = []
@@ -70,6 +77,25 @@ def _build_feature_sections(parsed_context: ParsedContext, feature_ids: set[str]
         )
         for fid in feature_ids:
             _add(fid, sec)
+
+    # 跨功能点规格检索注入（与 write_cases 口径一致，治"假阴性空壳"根因 A2）：
+    # 核验时也要看到"被折到别处的规格"，否则会把据此写的确定断言误判 ungrounded/undefined。
+    if feature_query:
+        cross_index = CrossFeatureIndex(parsed_context)
+        for fid in feature_ids:
+            q = feature_query.get(fid, "")
+            if not q:
+                continue
+            for cs in cross_index.query(q, seen[fid], top_k=3):
+                _add(
+                    fid,
+                    PrdSection(
+                        heading=cs.heading,
+                        content=cs.content,
+                        source_ref=cs.source_ref,
+                        section_kind=cs.section_kind,
+                    ),
+                )
     return by_feature
 
 
@@ -109,7 +135,11 @@ async def verify_node(state: PipelineState) -> dict:
         )
 
     feature_ids = {vi.feature_id for vi in verify_inputs if vi.feature_id}
-    sections_by_feature = _build_feature_sections(parsed_context, feature_ids)
+    # 每个功能点的检索 query = 其测试点描述（与 write_cases 同口径），驱动跨功能点规格召回
+    feature_query: dict[str, str] = defaultdict(str)
+    for tp in test_points:
+        feature_query[tp.feature_id] += f"{tp.dimension} {tp.description}\n"
+    sections_by_feature = _build_feature_sections(parsed_context, feature_ids, dict(feature_query))
 
     verifications = await verify_cases(verify_inputs, sections_by_feature)
 

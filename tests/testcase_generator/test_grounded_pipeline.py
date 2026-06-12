@@ -7,6 +7,12 @@
 from __future__ import annotations
 
 from src.testcase_generator.pipeline.edges import MAX_RECONCILE, review_router
+from src.testcase_generator.schemas.parsed_context import (
+    ParsedContext,
+    SectionExtract,
+    SourceItem,
+)
+from src.testcase_generator.stages.context_utils import CrossFeatureIndex
 from src.testcase_generator.stages.dedup.clustering import DedupCase, find_duplicates
 from src.testcase_generator.stages.verify.verifier import _VERDICT_BUCKET, _normalize_verdict
 
@@ -93,3 +99,69 @@ def test_dedup_protects_boundary_values():
     ]
     dup_map = find_duplicates(cases)
     assert "b1" not in dup_map and "b2" not in dup_map and "b3" not in dup_map
+
+
+def test_dedup_folds_same_tp_same_dim_reskin():
+    # 同测试点+同维度、仅角色名不同的换皮断言（相似度落在 0.80~0.88，全局阈值抓不到）→ 折叠
+    cases = [
+        DedupCase("r1", "TP-9", "投手仅能查看本人创建的标题包", text="他人数据不可见",
+                  dimension="权限与可见性"),
+        DedupCase("r2", "TP-9", "运营仅能查看本人创建的标题包", text="他人数据不可见",
+                  dimension="权限与可见性"),
+    ]
+    dup_map = find_duplicates(cases)
+    assert dup_map.get("r2") == "r1"
+
+
+def test_dedup_intra_dim_respects_boundary_protection():
+    # 同测试点+同维度，但数字不同且含边界语义 → 仍受边界保护，不折叠
+    cases = [
+        DedupCase("x1", "TP-9", "输入恰好30字标题校验通过", text="保存成功",
+                  dimension="边界值"),
+        DedupCase("x2", "TP-9", "输入恰好29字标题校验通过", text="保存成功",
+                  dimension="边界值"),
+    ]
+    dup_map = find_duplicates(cases)
+    assert "x1" not in dup_map and "x2" not in dup_map
+
+
+def _ctx_with_sections(*sections):
+    import uuid
+    return ParsedContext(
+        sources=[
+            SourceItem(
+                doc_id=uuid.uuid4(),
+                doc_type="prd",
+                trust_level=1,
+                title="PRD",
+                sections=[
+                    SectionExtract(heading=h, content=c, source_ref=ref, section_kind="spec")
+                    for (h, c, ref) in sections
+                ],
+            )
+        ]
+    )
+
+
+def test_cross_feature_index_retrieves_spec_defined_elsewhere():
+    # F-024 段定义了"任务状态机：草稿/提交/审核/驳回"；F-023 的测试点引用它 → 应被检索到
+    ctx = _ctx_with_sections(
+        ("F-023 批量提交", "用户在批量提交页发起提交动作", "PRD §5.8"),
+        ("F-024 任务状态机", "任务状态机定义：草稿可提交，提交后进入审核，审核驳回回到草稿，终态为已发布",
+         "PRD §5.9.3"),
+    )
+    index = CrossFeatureIndex(ctx)
+    query = "状态机 校验批量提交后任务状态机草稿提交审核驳回的状态流转是否正确"
+    hits = index.query(query, exclude_keys={("PRD §5.8", "F-023 批量提交")}, top_k=3)
+    assert any(h.source_ref == "PRD §5.9.3" for h in hits)
+
+
+def test_cross_feature_index_excludes_own_and_low_score():
+    ctx = _ctx_with_sections(
+        ("F-001 登录", "登录页输入账号密码点击登录", "PRD §1"),
+        ("F-002 完全无关", "本章描述结算账单导出报表的字段格式", "PRD §2"),
+    )
+    index = CrossFeatureIndex(ctx)
+    hits = index.query("登录页输入账号密码点击登录", exclude_keys={("PRD §1", "F-001 登录")}, top_k=3)
+    # 自身已排除；无关章节词项重叠低于阈值 → 不召回
+    assert hits == []

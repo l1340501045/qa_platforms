@@ -37,6 +37,7 @@ class DedupCase:
     title: str
     text: str = ""  # 附加 expected_results 拼接，增强判别
     is_placeholder: bool = False  # 是否「需求待确认」占位用例
+    dimension: str = ""  # 覆盖维度（同测试点+同维度的近等价断言更激进折叠）
 
 
 def _normalize(s: str) -> str:
@@ -56,6 +57,7 @@ def find_duplicates(
     cases: list[DedupCase],
     *,
     sim_threshold: float = 0.88,
+    intra_dim_threshold: float = 0.80,
     min_shared_bigrams: int = 4,
 ) -> dict[str, str]:
     """返回 {duplicate_case_id: canonical_case_id}。
@@ -102,11 +104,35 @@ def find_duplicates(
                 if ph.case_id != canonical.case_id:
                     _union(canonical.case_id, ph.case_id)
 
-    # ── 2) 词面近重复（带数字差异保护）──
+    # 文本签名（两个词面 pass 共用）
     norm = {c.case_id: _normalize(c.title + c.text) for c in cases}
     norm_title = {c.case_id: _normalize(c.title) for c in cases}
     nums = {c.case_id: _numset(c.title + c.text) for c in cases}
+    raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
 
+    def _protected(a: str, b: str) -> bool:
+        """边界值保护：数字集不同且任一方含边界语义关键词 → 不同边界值的有效用例，不合并。"""
+        return nums[a] != nums[b] and bool(_BOUNDARY_KW.search(raw[a]) or _BOUNDARY_KW.search(raw[b]))
+
+    # ── 1.5) 同测试点 + 同维度 的近等价断言折叠（更激进，治"冗余虚胖"主因）──
+    # 同一测试点下、同一覆盖维度的多条**确定断言**用例，若措辞高度相似（阈值更低 0.80），
+    # 多为换皮重复（权限矩阵换名、同一校验换措辞），折叠保留其一；占位用例与边界值用例除外。
+    by_tp_dim: dict[tuple[str, str], list[DedupCase]] = defaultdict(list)
+    for c in cases:
+        if c.feature_id and not c.is_placeholder:
+            by_tp_dim[(c.feature_id, (c.dimension or "").strip())].append(c)
+    for group in by_tp_dim.values():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i].case_id, group[j].case_id
+                if _find(a) == _find(b) or _protected(a, b):
+                    continue
+                if SequenceMatcher(None, norm[a], norm[b]).ratio() >= intra_dim_threshold:
+                    _union(a, b)
+
+    # ── 2) 词面近重复（带数字差异保护）──
     inverted: dict[str, list[str]] = defaultdict(list)
     for c in cases:
         for bg in _bigrams(norm_title[c.case_id]):
@@ -122,12 +148,11 @@ def find_duplicates(
                 key = (a, b) if order[a] < order[b] else (b, a)
                 pair_shared[key] += 1
 
-    raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
     for (a, b), shared in pair_shared.items():
         if shared < min_shared_bigrams:
             continue
         # 边界值保护：数字集不同 且 任一方含边界语义关键词 → 不同边界值的有效用例，保留两者
-        if nums[a] != nums[b] and (_BOUNDARY_KW.search(raw[a]) or _BOUNDARY_KW.search(raw[b])):
+        if _protected(a, b):
             continue
         ratio = SequenceMatcher(None, norm[a], norm[b]).ratio()
         if ratio >= sim_threshold:

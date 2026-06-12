@@ -13,6 +13,7 @@ needs_spec（ungrounded），或在留白处反向编造断言。
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 # 跨功能点常驻章节的标题关键字（命中即视为全局规则，注入所有功能点）。
@@ -50,6 +51,110 @@ class GlobalSection:
     source_ref: str
     heading: str
     content: str
+
+
+# ── 跨功能点规格检索（治"假阴性空壳"根因 A2）─────────────────────────────────
+#
+# 深层子节在 parse 阶段被折进各自父功能段（feature↔section 近似 1:1）。当 F-023 的
+# 某测试点行为其实定义在 §5.9.3（折进 F-024 段）时，F-023 的上下文里看不到该规格，
+# 模型遂误判"PRD 未定义"→ 产出无 oracle 空壳（5b 复审 W11/W14/W17）。
+# 本检索按测试点描述与全 PRD spec 章节的确定性词项重叠打分，为每个功能点补注 top-K
+# 跨功能点 spec 章节，把"被折到别处的规格"找回来。纯词项重叠、可复现、可离线验证。
+
+_CJK = re.compile(r"[\u4e00-\u9fff]+")
+_ASCII_WORD = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{2,}")
+_CROSS_MIN_SCORE = 6  # 命中的判别性词项数下限（低于此视为噪声，不注入）
+
+
+def _salient_terms(text: str) -> set[str]:
+    """抽取判别性词项：CJK 3-gram + 长度≥3 的 ascii 词，降低常见 2-gram 噪声。"""
+    terms: set[str] = set()
+    s = (text or "").lower()
+    for run in _CJK.findall(s):
+        if len(run) >= 3:
+            for i in range(len(run) - 2):
+                terms.add(run[i : i + 3])
+        elif len(run) == 2:
+            terms.add(run)
+    for w in _ASCII_WORD.findall(s):
+        terms.add(w)
+    return terms
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    key: tuple[str, str]
+    source_title: str
+    trust_level: int
+    section_kind: str
+    source_ref: str
+    heading: str
+    content: str
+    terms: frozenset[str]
+
+
+class CrossFeatureIndex:
+    """全 PRD spec 章节的词项索引；按测试点描述检索跨功能点参考章节。"""
+
+    def __init__(self, parsed_context) -> None:
+        self._candidates: list[_Candidate] = []
+        for source in parsed_context.sources:
+            if source.trust_level > 2:  # 仅 PRD / 技术文档作为规格来源
+                continue
+            for section in source.sections:
+                kind = getattr(section, "section_kind", "spec")
+                if kind not in ("spec", "summary"):  # 只检索可作 oracle 依据的章节
+                    continue
+                key = (section.source_ref or "", section.heading or "")
+                terms = _salient_terms((section.heading or "") + "\n" + (section.content or ""))
+                if not terms:
+                    continue
+                self._candidates.append(
+                    _Candidate(
+                        key=key,
+                        source_title=source.title,
+                        trust_level=source.trust_level,
+                        section_kind=kind,
+                        source_ref=section.source_ref,
+                        heading=section.heading,
+                        content=section.content,
+                        terms=frozenset(terms),
+                    )
+                )
+
+    def query(
+        self,
+        query_text: str,
+        exclude_keys: set[tuple[str, str]],
+        *,
+        top_k: int = 3,
+        min_score: int = _CROSS_MIN_SCORE,
+    ) -> list[GlobalSection]:
+        """返回与 query_text 词项重叠最高、且不在 exclude_keys 中的 top_k 跨功能点章节。"""
+        q = _salient_terms(query_text)
+        if not q:
+            return []
+        scored: list[tuple[int, _Candidate]] = []
+        for cand in self._candidates:
+            if cand.key in exclude_keys:
+                continue
+            score = len(q & cand.terms)
+            if score >= min_score:
+                scored.append((score, cand))
+        scored.sort(key=lambda t: (-t[0], t[1].source_ref))
+        out: list[GlobalSection] = []
+        for _score, cand in scored[:top_k]:
+            out.append(
+                GlobalSection(
+                    source_title=cand.source_title,
+                    trust_level=cand.trust_level,
+                    section_kind=cand.section_kind,
+                    source_ref=cand.source_ref,
+                    heading=cand.heading,
+                    content=cand.content,
+                )
+            )
+        return out
 
 
 def collect_global_sections(parsed_context) -> list[GlobalSection]:
