@@ -65,7 +65,13 @@ async def parse_node(state: PipelineState) -> dict:
     feature_counter = 0
 
     for result in retrieval_ctx.merged_results:
+        # seed 文档即用户触发生成的目标文档，是本次生成的头号需求来源。
+        is_seed = result.document_id == document_id
         doc_type = _infer_doc_type(result)
+        # seed 文档若未能识别出类型（常见被误标/默认为 OTHER），按主需求文档（PRD）对待，
+        # 避免可信度被压低；同时确保下面进入功能点提取分支。
+        if is_seed and doc_type == DocType.OTHER:
+            doc_type = DocType.PRD
         trust_level = _DOC_TYPE_TRUST.get(doc_type, 3)
         sections = _extract_sections(result, doc_type)
 
@@ -77,8 +83,9 @@ async def parse_node(state: PipelineState) -> dict:
             sections=sections,
         )
 
-        # 3. 从 PRD 类文档提取功能点
-        if doc_type == DocType.PRD:
+        # 3. 从主需求文档提取功能点：seed（无论类型）或 PRD 关联文档。
+        #    seed 必须无条件提取，否则被误标类型的主文档会 features=0 → 0 测试点 → 0 用例。
+        if is_seed or doc_type == DocType.PRD:
             extracted = _extract_features_from_sections(sections, feature_counter)
             features.extend(extracted)
             feature_counter += len(extracted)
