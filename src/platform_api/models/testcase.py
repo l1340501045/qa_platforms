@@ -51,6 +51,28 @@ class TestPoint(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     priority: Mapped[str] = mapped_column(String(10), nullable=False)
     derived_from: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    # 规则台账软关联：指向 testcase.rules.id（落库时由规则码解析；历史批次为 NULL）
+    rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class Rule(Base):
+    """规则台账：沿 PRD 章节树抽出的「明示业务规则」，作为测试点/用例的覆盖锚点。"""
+
+    __tablename__ = "rules"
+    __table_args__ = {"schema": "testcase"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    batch_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("testcase.test_batches.id", ondelete="CASCADE", onupdate="CASCADE"),
+        nullable=False,
+    )
+    rule_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    module: Mapped[str] = mapped_column(String(255), nullable=False, server_default="''")
+    rule: Mapped[str] = mapped_column(Text, nullable=False)
+    source_quote: Mapped[str] = mapped_column(Text, nullable=False, server_default="''")
+    category: Mapped[str] = mapped_column(String(50), nullable=False, server_default="''")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import update
 
 from src.testcase_generator.db import async_session_factory
-from src.platform_api.models.testcase import TestBatch, TestCase, TestPoint, StageArtifact
+from src.platform_api.models.testcase import Rule, TestBatch, TestCase, TestPoint, StageArtifact
 from src.platform_api.models.enums import BatchStatus, ReviewStatus
 
 logger = logging.getLogger(__name__)
@@ -42,17 +42,41 @@ async def on_pipeline_complete(
     final_cases: list,
     audit_report: dict,
     test_points: list | None = None,
+    rules: list | None = None,
 ) -> None:
-    """流水线完成回调：status→pending_review, 写入 test_points + test_cases
+    """流水线完成回调：status→pending_review, 写入 rules + test_points + test_cases
 
     流程（严格顺序）：
-    1. 先写入 test_points 到 testcase.test_points 表，获取 PK 映射
+    0. 先写入规则台账 testcase.rules，建 rule_code → rules.id(uuid) 映射
+    1. 写入 test_points 到 testcase.test_points 表，获取 PK 映射；用规则码映射回填 rule_id
     2. 再写入 test_cases，用 test_point_id 真实 FK 指向落库后的 PK
     3. 更新 batch 状态
     """
     batch_uuid = uuid.UUID(batch_id)
 
     async with async_session_factory() as session:
+        # ── 0. 写入规则台账 ──────────────────────────────────────────
+        # rule_code（如 "R-001"）→ rules 表 UUID PK 映射，供 test_points.rule_id 解析
+        rule_code_map: dict[str, uuid.UUID] = {}
+        if rules:
+            for r in rules:
+                if not isinstance(r, dict):
+                    continue
+                code = r.get("rule_code", "")
+                if not code:
+                    continue
+                rule_pk = uuid.uuid4()
+                session.add(Rule(
+                    id=rule_pk,
+                    batch_id=batch_uuid,
+                    rule_code=code,
+                    module=r.get("module", ""),
+                    rule=r.get("rule", ""),
+                    source_quote=r.get("source_quote", ""),
+                    category=r.get("category", ""),
+                ))
+                rule_code_map[code] = rule_pk
+
         # ── 1. 写入 test_points ──────────────────────────────────────
         # tp_id_str → test_points 表的 UUID PK 映射
         tp_id_map: dict[str, uuid.UUID] = {}
@@ -61,6 +85,8 @@ async def on_pipeline_complete(
             for tp_data in test_points:
                 if isinstance(tp_data, dict):
                     tp_pk = uuid.uuid4()
+                    # rule_id 在 state 里是规则码字符串（如 "R-001"），落库时解析为 rules.id 真实 uuid
+                    rule_code = tp_data.get("rule_id")
                     tp_record = TestPoint(
                         id=tp_pk,
                         batch_id=batch_uuid,
@@ -69,6 +95,7 @@ async def on_pipeline_complete(
                         description=tp_data.get("description", ""),
                         priority=tp_data.get("priority", "P2"),
                         derived_from=tp_data.get("derived_from", []),
+                        rule_id=rule_code_map.get(rule_code) if rule_code else None,
                     )
                     session.add(tp_record)
                     # 用测试点的逻辑 ID（如 "TP-001"）做映射键
@@ -155,8 +182,9 @@ async def on_pipeline_complete(
         await session.commit()
 
     logger.info(
-        "Pipeline completed for batch %s: %d test_points, %d test_cases persisted",
+        "Pipeline completed for batch %s: %d rules, %d test_points, %d test_cases persisted",
         batch_id,
+        len(rule_code_map),
         len(tp_id_map),
         len(final_cases),
     )

@@ -17,6 +17,10 @@ from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.schemas.audit_report import AuditReport, CoverageGap
+from src.testcase_generator.stages.review.rule_gate import (
+    DEFAULT_RULE_COVERAGE,
+    compute_rule_coverage,
+)
 from src.testcase_generator.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
@@ -255,6 +259,18 @@ async def review_node(state: PipelineState) -> dict:
     if uncovered_tp_ids:
         logger.warning(f"review_node: {len(uncovered_tp_ids)} 个测试点无任何用例覆盖: {uncovered_tp_ids[:10]}")
 
+    # 7c. 规则级覆盖闸（开关控制）：规则「被覆盖」= 其锚点测试点（携 rule_id）至少 1 条用例。
+    #     结构性判定，确定性、无额外 LLM；未覆盖规则码交 backfill 定向补齐。关时为默认值，零影响。
+    rules = state.get("rules") or []
+    rule_cov_fields = dict(DEFAULT_RULE_COVERAGE)
+    if settings.rule_coverage_gate_enabled and rules:
+        rule_cov_fields = compute_rule_coverage(rules, test_points, covered_tp_ids)
+        logger.info(
+            "review_node: 规则覆盖 %d/%d (%.0f%%)，未覆盖 %d 条",
+            rule_cov_fields["covered_rules"], rule_cov_fields["total_rules"],
+            rule_cov_fields["rule_coverage"] * 100, len(rule_cov_fields["uncovered_rule_codes"]),
+        )
+
     audit_report = AuditReport(
         total_test_points=len(all_tp_ids),
         per_test_point_covered=len(covered_tp_ids & all_tp_ids),
@@ -265,6 +281,7 @@ async def review_node(state: PipelineState) -> dict:
         dimension_cell_coverage=cell_covered / cell_total if cell_total > 0 else 1.0,
         gaps=gaps,
         additions=additions,
+        **rule_cov_fields,
     )
     if weak_tp_ids:
         logger.info("review_node: 标记 %d 个假覆盖测试点，交 backfill 接地重做", len(weak_tp_ids))

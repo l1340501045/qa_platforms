@@ -123,6 +123,7 @@ async def _execute_pipeline(
         final_cases = final_state.get("final_test_cases", [])
         audit_report = final_state.get("audit_report")
         test_points = final_state.get("test_points", [])
+        rules = final_state.get("rules", [])
 
         audit_dict: dict = {}
         if audit_report is not None:
@@ -133,10 +134,11 @@ async def _execute_pipeline(
             final_cases=[c.model_dump() if hasattr(c, "model_dump") else c for c in final_cases],
             audit_report=audit_dict,
             test_points=[tp.model_dump() if hasattr(tp, "model_dump") else tp for tp in test_points],
+            rules=[r.model_dump() if hasattr(r, "model_dump") else r for r in rules],
         )
 
         # 阶段产物回调
-        for stage_name in ("parse", "comprehend", "test_points", "write_cases", "review", "export"):
+        for stage_name in ("parse", "comprehend", "rule_extract", "test_points", "write_cases", "review", "export"):
             artifact_key = f"{stage_name}_artifact"
             if artifact_key in final_state:
                 await on_stage_complete(batch_id=batch_id, stage=stage_name, artifact=final_state[artifact_key])
@@ -214,6 +216,7 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
         final_cases = final_state.get("final_test_cases", [])
         audit_report = final_state.get("audit_report")
         test_points = final_state.get("test_points", [])
+        rules = final_state.get("rules", [])
 
         audit_dict_r: dict = {}
         if audit_report is not None:
@@ -224,6 +227,7 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
             final_cases=[c.model_dump() if hasattr(c, "model_dump") else c for c in final_cases],
             audit_report=audit_dict_r,
             test_points=[tp.model_dump() if hasattr(tp, "model_dump") else tp for tp in test_points],
+            rules=[r.model_dump() if hasattr(r, "model_dump") else r for r in rules],
         )
 
         return {"status": "completed", "batch_id": batch_id}

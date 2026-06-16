@@ -17,3 +17,6 @@ class TestPointSchema(BaseModel):
     priority: Literal["P0", "P1", "P2", "P3"] = Field(description="优先级")
     derived_from: list[str] = Field(default_factory=list, description="来源引用列表")
     applicable_dimensions: list[str] = Field(default_factory=list, description="适用维度列表（裁剪后）")
+    # 规则锚点：规则驱动测试点携带其规则码（如 "R-001"，运行期为字符串，落库时解析为 rules.id）；
+    # 维度增强测试点为 None。用于规则级覆盖闸与规则锚定安全去重。
+    rule_id: str | None = Field(default=None, description="关联规则码（规则驱动测试点），维度增强测试点为 None")

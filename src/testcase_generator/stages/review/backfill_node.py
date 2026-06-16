@@ -9,10 +9,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
+from src.platform_api.core.settings import settings
 from src.testcase_generator.schemas.audit_report import AuditReport
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
+from src.testcase_generator.stages.review.rule_gate import compute_rule_coverage
 from src.testcase_generator.stages.write_cases.node import generate_cases
 
 logger = logging.getLogger(__name__)
@@ -88,11 +90,20 @@ async def backfill_node(state: PipelineState) -> dict:
     }
     # 更新 audit_report：刷新零覆盖列表，并清空假覆盖列表（替换重做仅一轮，防回环反复）
     if audit_report is not None:
-        out["audit_report"] = audit_report.model_copy(
-            update={
-                "uncovered_test_point_ids": still_uncovered,
-                "weak_coverage_test_point_ids": [],
-                "per_test_point_covered": len(covered_tp_ids & all_tp_ids),
-            }
-        )
+        update_fields: dict = {
+            "uncovered_test_point_ids": still_uncovered,
+            "weak_coverage_test_point_ids": [],
+            "per_test_point_covered": len(covered_tp_ids & all_tp_ids),
+        }
+        # 回填可能令未覆盖规则的锚点测试点重新拿到用例 → 同步刷新规则级覆盖（gate 开时）。
+        rules = state.get("rules") or []
+        if settings.rule_coverage_gate_enabled and rules:
+            rule_fields = compute_rule_coverage(rules, test_points, covered_tp_ids)
+            update_fields.update(rule_fields)
+            logger.info(
+                "backfill 第 %d 轮：规则覆盖刷新 %d/%d，剩余未覆盖 %d 条",
+                iters, rule_fields["covered_rules"], rule_fields["total_rules"],
+                len(rule_fields["uncovered_rule_codes"]),
+            )
+        out["audit_report"] = audit_report.model_copy(update=update_fields)
     return out
