@@ -1,14 +1,17 @@
 """dedup 节点 — 全量用例近重复标记（verify 之后、export 之前）。
 
 在全量 final_test_cases 上聚类，标记 duplicate_of（不删除），产出 dedup_summary。
+safe_dedup_enabled 开时启用规则锚定护栏：绝不删某规则最后一条非重复用例。
 """
 
 from __future__ import annotations
 
 import logging
 
+from src.platform_api.core.settings import settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
+from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.stages.dedup.clustering import DedupCase, find_duplicates
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,12 @@ async def dedup_node(state: PipelineState) -> dict:
         exp = " ".join(c.expected_results or [])
         return "PRD" in exp and "未定义" in exp and "待" in exp and "澄清" in exp
 
+    # 规则锚点回填：case.test_point_id → tp.rule_id。GeneratedTestCase 无 rule_id
+    # 字段，须经测试点回查（与 backfill / review 的口径完全一致）。同一测试点可能
+    # 没有 rule_id（维度增强 TP），其用例的 rule_codes 为空 → 不进入护栏检查。
+    test_points: list[TestPointSchema] = state.get("test_points", [])
+    tp_to_rule: dict[str, str] = {tp.id: tp.rule_id for tp in test_points if tp.rule_id}
+
     dedup_inputs = [
         DedupCase(
             case_id=c.id,
@@ -46,10 +55,11 @@ async def dedup_node(state: PipelineState) -> dict:
             text=" ".join(c.expected_results or []),
             is_placeholder=_is_placeholder(c),
             dimension=" ".join(c.dimensions or []),
+            rule_codes=[tp_to_rule[c.test_point_id]] if c.test_point_id in tp_to_rule else [],
         )
         for c in final_cases
     ]
-    dup_map = find_duplicates(dedup_inputs)
+    dup_map = find_duplicates(dedup_inputs, safe_dedup_enabled=settings.safe_dedup_enabled)
 
     for c in final_cases:
         c.duplicate_of = dup_map.get(c.id)

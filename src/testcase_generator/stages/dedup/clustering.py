@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
 # 归一化：保留中日韩与字母，去数字/标点/空白（数字差异交由 _numset 单独保护）
@@ -38,6 +38,10 @@ class DedupCase:
     text: str = ""  # 附加 expected_results 拼接，增强判别
     is_placeholder: bool = False  # 是否「需求待确认」占位用例
     dimension: str = ""  # 覆盖维度（同测试点+同维度的近等价断言更激进折叠）
+    # 规则锚点码（如 ["R-001", ...]），仅在用例所属测试点带 rule_id 时有值；
+    # 维度增强测试点的用例为空。safe_dedup 护栏据此判断是否可折叠（绝不删某规则
+    # 最后一条非重复用例）。dedup_node 经 case.test_point_id → tp.rule_id 回填。
+    rule_codes: list[str] = field(default_factory=list)
 
 
 def _normalize(s: str) -> str:
@@ -60,13 +64,27 @@ def find_duplicates(
     intra_dim_threshold: float = 0.80,
     cross_dim_threshold: float = 0.84,
     min_shared_bigrams: int = 4,
+    safe_dedup_enabled: bool = False,
 ) -> dict[str, str]:
     """返回 {duplicate_case_id: canonical_case_id}。
 
     canonical 取每个近重复簇中最先出现（输入顺序）的用例；其余标为其重复。
+
+    safe_dedup_enabled：开规则锚定护栏 —— 折叠会让某条规则失去其最后一条非重复
+    用例时，跳过该折叠。关时退回旧行为（无护栏）。维度增强用例（无 rule_codes）
+    不进入护栏检查，按旧行为折叠。
     """
     order = {c.case_id: i for i, c in enumerate(cases)}
     parent: dict[str, str] = {c.case_id: c.case_id for c in cases}
+    rule_codes_of = {c.case_id: list(c.rule_codes or []) for c in cases}
+
+    # 「当前 alive canonical 数」per 规则码：cases 中以自己为根（dup_map 出去时不会
+    # 被列为 duplicate）的、覆盖该规则的用例数。每次成功的 union 会让一个 root 沉
+    # 为 child（变成 duplicate），相应 live_cnt 递减。初值 = 总覆盖数（全 alive）。
+    live_cnt: dict[str, int] = defaultdict(int)
+    for c in cases:
+        for r in rule_codes_of[c.case_id]:
+            live_cnt[r] += 1
 
     def _find(x: str) -> str:
         while parent[x] != x:
@@ -78,10 +96,21 @@ def find_duplicates(
         ra, rb = _find(a), _find(b)
         if ra == rb:
             return
+        # 决定败者根（沉为 child → 成为 duplicate）
+        loser = rb if order[ra] <= order[rb] else ra
+        # 规则锚定护栏：若 loser 是某规则的最后一条 alive canonical，跳过本次折叠
+        if safe_dedup_enabled:
+            for r in rule_codes_of.get(loser, ()):
+                if live_cnt.get(r, 0) <= 1:
+                    return
         if order[ra] <= order[rb]:
             parent[rb] = ra
         else:
             parent[ra] = rb
+        # 更新 live_cnt：loser 不再是 canonical（变成 duplicate）
+        for r in rule_codes_of.get(loser, ()):
+            if live_cnt.get(r, 0) > 0:
+                live_cnt[r] -= 1
 
     # ── 1) 结构化折叠：按 test_point 分组处理占位 vs 断言 ──
     by_tp: dict[str, list[DedupCase]] = defaultdict(list)

@@ -378,6 +378,21 @@ async def judge_rule_coverage(
 
 > **Chunk 3 验收（安全红线）**：大 PRD 用例数**下降**（灌水收敛），同时规则覆盖率**不低于** Chunk 2 水平（容差带内）。若跌破 → 关 `safe_dedup` / 回滚去重激进度。
 
+### Chunk 3 Task 3.1 实现记录（2026-06-16 已落地 + 全绿）
+
+- `DedupCase` 增 `rule_codes: list[str]`（`field(default_factory=list)`）。
+- `find_duplicates(..., safe_dedup_enabled=False)` 形参化护栏；护栏统一包到 `_union(a, b)` 入口：每次合并先解析「败者根」（沉为 child 的根），若它对任一规则码而言是**最后一条 alive canonical**（`live_cnt[r] <= 1`）→ 跳过该 union；成功合并后递减 `live_cnt`。结构化折叠 / intra-dim 折叠 / 跨维度近重复折叠**统一过护栏**（解决 Task 3.2 step 3，无须再改跨维分支）。
+- `dedup_node` 经 `case.test_point_id → tp.rule_id` 回填 `rule_codes`（与 review/backfill 口径一致；维度增强用例的 `rule_codes` 为空 → 不进入护栏检查，按旧行为）。
+- 测试：`test_safe_dedup.py` 5 个（开关关回退、护栏拦最后一条、可折叠时正常折叠、无 rule 锚旁路、loser 多规则任一告急即拦）；`pytest tests/testcase_generator -q` → **78 passed**。
+
+### Chunk 3 Task 3.2 收编旧 trim 评估结论
+
+| Plan 子项 | 评估 | 处置 |
+|---|---|---|
+| (1) 维度门控只裁增强维度 | 现有 `test_points_node` 锚点在「步骤 7」追加，跑在 `_gate_quality_dimensions`（步骤 1~4）与强制注入（步骤 6）**之后** → 锚点根本不进维度门控，结构上已满足 | 不改逻辑；补防御性测试 `test_dimension_gating_never_drops_rule_anchored_tps`（R-001 access_control / R-002 boundary_value 在无信号 PRD 上下文中仍存活） |
+| (2) 同源 feature 合并是否回退 | 合并条件保守（判别性术语共享度阈值高）；大 PRD 二级标题各讲不同功能不触发（已在 git 5e65735 commit 记录"零回归"）；小 PRD 三开关实跑（188 vs 191）未出问题 | **不回退** —— 无问题可治、纯重构会引入风险 |
+| (3) 跨维近重复折叠改走规则锚定护栏 | Task 3.1 已把所有 `_union` 统一过护栏，跨维分支自动受护栏约束 | 不再改 `clustering.py` |
+
 ---
 
 ## Chunk 4：端到端验收 + 开关默认开

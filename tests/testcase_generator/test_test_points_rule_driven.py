@@ -107,3 +107,21 @@ async def test_node_appends_anchors_when_enabled(monkeypatch):
 async def test_node_no_anchors_when_disabled(monkeypatch):
     tps = await _run_node(monkeypatch, enabled=False)
     assert all(tp.rule_id is None for tp in tps)  # 开关关：零规则锚点，行为同历史
+
+
+# ── Task 3.2 收编旧 trim：维度门控只裁增强维度，绝不剥夺规则锚点 ─────────────────
+
+@pytest.mark.asyncio
+async def test_dimension_gating_never_drops_rule_anchored_tps(monkeypatch):
+    """规则锚点带的维度（如 access_control / boundary_value）即便不在 PRD 信号中也必须保留。
+
+    机制：锚点在节点最末步骤（步骤 7）追加，跑在 _gate_quality_dimensions 之后；门
+    控只能裁掉「LLM 维度增强测试点」，绝不能波及锚点。回归保护：避免有人把锚点
+    追加挪到门控之前导致权限/边界等规则锚点维度被无信号 PRD 误删。
+    """
+    tps = await _run_node(monkeypatch, enabled=True)
+    # 至少 R-001（权限类，主维度 access_control）+ R-002（边界类，主维度 boundary_value）
+    # 在锚点中存活；尽管 RAW PRD 上下文压根没有"性能/接口契约/边界值"等信号词
+    by_rule = {tp.rule_id: tp.dimension for tp in tps if tp.rule_id}
+    assert by_rule.get("R-001") == "access_control"
+    assert by_rule.get("R-002") == "boundary_value"
