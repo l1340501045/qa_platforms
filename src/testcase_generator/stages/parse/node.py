@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 import logging
 import re
 from uuid import UUID
@@ -22,6 +23,7 @@ from src.testcase_generator.stages.parse.playwright_fetch import (
     fetch_prototype_observations,
 )
 from src.testcase_generator.stages.parse.source_registry import SourceRegistry
+from src.testcase_generator.stages.context_utils import _salient_terms
 
 logger = logging.getLogger(__name__)
 
@@ -158,9 +160,15 @@ _META_HEADING_KEYWORDS = (
     "文档元信息",
     "文档版本",
     "变更日志",
+    "变更记录",
     "修订说明",
     "修订记录",
+    "修订历史",
+    "修改记录",
+    "更新记录",
     "版本历史",
+    "版本记录",
+    "评审记录",
     "需求背景",
     "预期目标",
     "需求概览",
@@ -179,13 +187,50 @@ def _is_meta_heading(heading: str) -> bool:
     return any(kw.lower() in h for kw in _META_HEADING_KEYWORDS)
 
 
-def _choose_feature_level(levels: list[int]) -> int:
+# 同源二级章节合并(根因2:功能点过度切分)。
+# 当一个一级功能下的多个二级章节其实是"同一功能的不同侧面"(功能说明/配置规则/
+# 权限规则/原型),按二级粒度会把一个功能切成多个 feature，导致同样的场景跨 feature
+# 重复出测试点与用例。判据：排除 meta 后的二级章节间存在足量「共享判别性术语」
+# (出现在绝大多数二级章节中)，即视为同源 → 退回一级粒度合并。
+# 大 PRD 的二级标题各讲不同功能、判别性术语几乎不共享 → 不触发(零回归)。
+_COHESION_MIN_SHARED_TERMS = 4
+_COHESION_MAX_SECTIONS = 8
+
+
+def _second_level_cohesive(triples: list[tuple[int, str, str]]) -> bool:
+    """各二级章节是否"同源"(同一功能的多侧面)：靠足量共享判别性术语判定。"""
+    secs = [(h, b) for lv, h, b in triples if lv == 2 and not _is_meta_heading(h)]
+    if not (3 <= len(secs) <= _COHESION_MAX_SECTIONS):
+        return False
+    term_sets: list[set[str]] = []
+    for h, b in secs:
+        terms = _salient_terms(f"{h}\n{b}")
+        if len(terms) >= 3:  # 术语过少的章节视为噪声，不参与同源判定
+            term_sets.append(terms)
+    if len(term_sets) < 3:
+        return False
+    counter: Counter = Counter()
+    for terms in term_sets:
+        counter.update(terms)
+    # 出现在「绝大多数」(≥ n-1)二级章节中的判别性术语视为共享核心术语
+    need = max(2, len(term_sets) - 1)
+    shared_core = sum(1 for _term, c in counter.items() if c >= need)
+    return shared_core >= _COHESION_MIN_SHARED_TERMS
+
+
+def _choose_feature_level(triples: list[tuple[int, str, str]]) -> int:
     """选定"功能模块"对应的标题层级：优先二级标题；无二级则退回一级。
 
     多数 PRD：# 文档标题 / ## 功能模块 / ###+ 模块细节。以二级标题为功能点粒度，
     把更深层级折叠进所属模块，既避免碎片化又保留完整上下文。
+
+    例外(根因2)：当多个二级章节其实是"同一功能的多个侧面"(判别性术语高度共享)时，
+    退回一级粒度合并成一个完整功能点，避免一个功能被切散、跨 feature 重复出测试点。
     """
+    levels = [t[0] for t in triples]
     if sum(1 for lv in levels if lv == 2) >= 3:
+        if _second_level_cohesive(triples):
+            return 1
         return 2
     return 1
 
@@ -224,7 +269,7 @@ def _extract_sections(result: SearchResult, doc_type: str) -> list[SectionExtrac
         triples.append((level, heading, body))
         i += 3
 
-    feature_level = _choose_feature_level([t[0] for t in triples])
+    feature_level = _choose_feature_level(triples)
 
     sections: list[SectionExtract] = []
     current: dict | None = None

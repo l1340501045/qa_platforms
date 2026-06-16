@@ -125,6 +125,41 @@ def test_dedup_intra_dim_respects_boundary_protection():
     assert "x1" not in dup_map and "x2" not in dup_map
 
 
+def test_dedup_folds_cross_tp_same_dim_near_equivalent():
+    # 根因2b：不同测试点、同维度、语义近等价(功能点被切散后残留的换皮重复)→ 折叠。
+    # 显式阈值：跨维度严到 0.99 几乎不并，同维度放宽 → 验证走的是「同维度低阈值」路径。
+    cases = [
+        DedupCase("u1", "TP-101", "非超管用户仅能查看本人负责的CP商选书数据",
+                  text="他人CP商数据不可见", dimension="permission_denied"),
+        DedupCase("u2", "TP-207", "非超管用户只能查看本人负责的CP商的选书数据",
+                  text="他人CP商数据不展示", dimension="permission_denied"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.70, min_shared_bigrams=2)
+    assert dup_map.get("u2") == "u1"
+
+
+def test_dedup_cross_tp_diff_dim_not_folded():
+    # 跨测试点 + 不同维度：同样的措辞也走严阈值，不折叠(避免误并不同维度用例)
+    cases = [
+        DedupCase("v1", "TP-101", "非超管用户仅能查看本人负责的CP商选书数据",
+                  text="他人CP商数据不可见", dimension="permission_denied"),
+        DedupCase("v2", "TP-207", "非超管用户只能查看本人负责的CP商的选书数据",
+                  text="他人CP商数据不展示", dimension="access_control"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.70, min_shared_bigrams=2)
+    assert "v2" not in dup_map
+
+
+def test_dedup_cross_tp_same_dim_respects_boundary():
+    # 跨测试点 + 同维度，但数字不同且含边界语义 → 受边界保护，不折叠
+    cases = [
+        DedupCase("w1", "TP-101", "上传恰好10MB文件时成功", text="提示上传成功", dimension="boundary_value"),
+        DedupCase("w2", "TP-207", "上传恰好11MB文件时成功", text="提示上传成功", dimension="boundary_value"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.50, min_shared_bigrams=2)
+    assert "w1" not in dup_map and "w2" not in dup_map
+
+
 def _ctx_with_sections(*sections):
     import uuid
     return ParsedContext(

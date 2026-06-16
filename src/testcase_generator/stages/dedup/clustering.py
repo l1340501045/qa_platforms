@@ -58,6 +58,7 @@ def find_duplicates(
     *,
     sim_threshold: float = 0.88,
     intra_dim_threshold: float = 0.80,
+    cross_dim_threshold: float = 0.84,
     min_shared_bigrams: int = 4,
 ) -> dict[str, str]:
     """返回 {duplicate_case_id: canonical_case_id}。
@@ -109,6 +110,7 @@ def find_duplicates(
     norm_title = {c.case_id: _normalize(c.title) for c in cases}
     nums = {c.case_id: _numset(c.title + c.text) for c in cases}
     raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
+    dim_of = {c.case_id: (c.dimension or "").strip() for c in cases}
 
     def _protected(a: str, b: str) -> bool:
         """边界值保护：数字集不同且任一方含边界语义关键词 → 不同边界值的有效用例，不合并。"""
@@ -155,7 +157,12 @@ def find_duplicates(
         if _protected(a, b):
             continue
         ratio = SequenceMatcher(None, norm[a], norm[b]).ratio()
-        if ratio >= sim_threshold:
+        # 跨测试点/功能点的「同维度」近等价多为换皮重复(同一权限矩阵/校验在多处重复断言)，
+        # 用更低阈值折叠(根因2b：兜底功能点被切散后残留的跨 feature 重复)；跨维度保持严
+        # 阈值，避免不同维度的偶然相似被误并。不同边界值用例已被 _protected 排除。
+        da, db = dim_of[a], dim_of[b]
+        threshold = cross_dim_threshold if (da and da == db) else sim_threshold
+        if ratio >= threshold:
             _union(a, b)
 
     # ── 输出 ──

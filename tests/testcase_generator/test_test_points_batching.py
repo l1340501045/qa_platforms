@@ -106,3 +106,52 @@ async def test_all_batches_failed_raises():
     with patch.object(tp_node, "get_llm_client", return_value=fake_client):
         with pytest.raises(RuntimeError, match="全部"):
             await _generate_test_points_batched(feats, shared_context=[])
+
+
+# ── 根因3：质量属性维度信号门控 ────────────────────────────────────────────────
+
+def _dim(name: str) -> dict:
+    return {"name": name}
+
+
+def test_quality_dimensions_gated_when_prd_silent():
+    # 纯权限 PRD：未提性能/注入/接口契约 → 这些质量属性维度被门控；功能/权限维度保留
+    dims = [
+        _dim("functional_correctness"),
+        _dim("access_control"),
+        _dim("permission_denied"),
+        _dim("response_time"),
+        _dim("input_injection"),
+        _dim("api_contract"),
+        _dim("large_data_volume"),
+    ]
+    feature_text = "CP书籍数据权限控制：非超管仅能查看本人负责的CP商选书数据"
+    kept = {d["name"] for d in tp_node._gate_quality_dimensions(dims, feature_text, "")}
+    assert {"functional_correctness", "access_control", "permission_denied"} <= kept
+    assert "response_time" not in kept
+    assert "input_injection" not in kept
+    assert "api_contract" not in kept
+    assert "large_data_volume" not in kept
+
+
+def test_quality_dimensions_kept_when_signal_present():
+    dims = [_dim("response_time"), _dim("api_contract"), _dim("pagination_boundary")]
+    feature_text = "列表加载时间需小于2秒；分页每页20条；调用接口返回状态码与响应结构需符合契约"
+    kept = {d["name"] for d in tp_node._gate_quality_dimensions(dims, feature_text, "")}
+    assert kept == {"response_time", "api_contract", "pagination_boundary"}
+
+
+def test_gate_uses_global_signal_text():
+    # 功能点自身没提状态机，但技术文档(全局)定义了 → 放行，避免漏测技术方案维度
+    dims = [_dim("state_transition")]
+    global_text = "技术方案：任务状态机 草稿->提交->审核->驳回 的状态流转校验".lower()
+    kept = {d["name"] for d in tp_node._gate_quality_dimensions(dims, "提交任务", global_text)}
+    assert "state_transition" in kept
+
+
+def test_field_name_does_not_falsely_trigger_api_gate():
+    # "接口标识"是字段名，不应让 api_contract 维度被误放行(信号用具体词组而非裸"接口")
+    dims = [_dim("api_contract")]
+    feature_text = "列表移除【appid】【密钥】【接口标识】字段"
+    kept = {d["name"] for d in tp_node._gate_quality_dimensions(dims, feature_text, "")}
+    assert "api_contract" not in kept

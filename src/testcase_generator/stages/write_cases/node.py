@@ -173,7 +173,11 @@ _PRIORITY_MAP: dict[str, str] = {"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3"}
 
 # 单批最多生成的用例条数（控制 LLM 单次输出长度以规避网关 504）。
 # 注意：这是"分几次调用"的切分，不减少测试点/用例总数——各批结果会被聚合。
-MAX_TPS_PER_BATCH = 12
+# 取 7（原 12）：12 个测试点的单批 JSON 输出常达 ~8500 字符，触发 claude 长 JSON 解析
+# 频繁失败 → 子批失败 → backfill 多轮仍残留零覆盖（阶段7 同源功能点合并后单 feature
+# 测试点变多，尤为明显）。降到 7 后单批输出收在 ~5000 字符内，一次成功率显著提升，
+# 消除零覆盖残留；批数变多但失败/重试/backfill 大幅减少，端到端反而更快更稳。
+MAX_TPS_PER_BATCH = 7
 
 
 def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[list]:

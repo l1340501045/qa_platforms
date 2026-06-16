@@ -77,6 +77,19 @@ class LLMStats:
 llm_stats = LLMStats()
 
 
+def _is_response_format_unsupported(err: Exception) -> bool:
+    """判断异常是否为「网关不支持 response_format 参数」，用于一次性永久回退。
+
+    不同网关报法不一（400 + 'response_format'/'json_object'/'unsupported'/'unknown
+    parameter'），统一按错误文本启发式判断；网络/超时类错误不在此列（应照常重试）。
+    """
+    msg = str(err).lower()
+    if "response_format" in msg or "json_object" in msg or "json mode" in msg:
+        return True
+    markers = ("unsupported", "not support", "unknown parameter", "unrecognized", "invalid parameter")
+    return any(m in msg for m in markers) and "param" in msg
+
+
 def _loads_tolerant(content: str) -> dict:
     """更鲁棒的 JSON 解析：先直接解析，失败则裁剪到首尾大括号之间再试。
 
@@ -107,10 +120,13 @@ class LLMClient:
         self.client = AsyncOpenAI(
             api_key=settings.resolved_llm_api_key,
             base_url=settings.resolved_llm_base_url,
+            timeout=settings.llm_timeout,
         )
         self.primary_model = settings.llm_primary_model
         if not self.primary_model:
             raise ValueError("LLM_PRIMARY_MODEL 未配置：请在 .env 中设置 LLM_PRIMARY_MODEL")
+        # JSON mode 开关：网关/后端不支持 response_format 时自动置 False 永久回退
+        self._json_mode = settings.llm_json_mode
 
     async def generate_structured(
         self,
@@ -189,14 +205,34 @@ class LLMClient:
             f"4. 完整 JSON Schema：\n{schema_json}"
         )
 
-        response = await self.client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt + schema_instruction},
-                {"role": "user", "content": user_content},
-            ],
-            temperature=temperature,
-        )
+        messages = [
+            {"role": "system", "content": system_prompt + schema_instruction},
+            {"role": "user", "content": user_content},
+        ]
+
+        # JSON mode：让网关/后端在解码层就只产出合法 JSON，根治长输出的分隔符/截断错误。
+        # 网关不支持 response_format 时（通常报 400/不识别参数）一次性永久回退到纯 prompt 约束。
+        if self._json_mode:
+            try:
+                response = await self.client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+            except Exception as e:  # noqa: BLE001 — 仅针对 response_format 不被支持的回退
+                if _is_response_format_unsupported(e):
+                    logger.warning("网关不支持 response_format=json_object，永久回退纯 prompt 约束: %s", e)
+                    self._json_mode = False
+                    response = await self.client.chat.completions.create(
+                        model=model, messages=messages, temperature=temperature
+                    )
+                else:
+                    raise
+        else:
+            response = await self.client.chat.completions.create(
+                model=model, messages=messages, temperature=temperature
+            )
 
         content = response.choices[0].message.content or ""
         finish_reason = response.choices[0].finish_reason
