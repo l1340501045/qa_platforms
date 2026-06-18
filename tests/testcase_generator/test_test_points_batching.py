@@ -90,10 +90,13 @@ async def test_partial_batch_failure_keeps_successes():
 
     fake_client = AsyncMock()
     fake_client.generate_structured = AsyncMock(side_effect=flaky)
-    with patch.object(tp_node, "get_llm_client", return_value=fake_client):
+    with (
+        patch.object(tp_node, "get_llm_client", return_value=fake_client),
+        patch.object(tp_node.settings, "test_points_completeness_guard", False),
+    ):
         result = await _generate_test_points_batched(feats, shared_context=[])
 
-    # 仅第一批失败，其余批结果应全部保留（与批大小无关）
+    # guard 关：仅第一批失败，其余批结果应全部保留（与批大小无关）
     assert len(result) == 24 - first_batch_size
 
 

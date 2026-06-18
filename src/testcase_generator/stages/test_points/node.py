@@ -317,14 +317,20 @@ async def _generate_test_points_batched(
     feature_dim_inputs: list[dict],
     shared_context: list[dict],
 ) -> list[GeneratedTestPoint]:
-    """分批并发调用 LLM 生成测试点；失败的批跳过并记录，全部失败才抛错"""
+    """分批并发调用 LLM 生成测试点。
+
+    test_points_completeness_guard 开时：失败批整批重试 1 次（temperature 微调）→
+    仍失败则拆单 feature 逐个调用（最大保全）。关时退回旧行为（失败批静默丢）。
+    """
     if not feature_dim_inputs:
         return []
 
     batches = _pack_feature_batches(feature_dim_inputs)
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
 
-    async def _call_batch(batch_idx: int, feats: list[dict]) -> list[GeneratedTestPoint] | None:
+    async def _call_batch(
+        batch_idx: int, feats: list[dict], *, temperature: float = 0.3
+    ) -> list[GeneratedTestPoint] | None:
         async with semaphore:
             user_content = json.dumps(
                 {"features_with_dimensions": feats, "requirement_context": shared_context},
@@ -336,7 +342,7 @@ async def _generate_test_points_batched(
                     system_prompt=TEST_POINTS_SYSTEM_PROMPT,
                     user_content=user_content,
                     output_schema=TestPointsLLMOutput,
-                    temperature=0.3,
+                    temperature=temperature,
                 )
                 return out.test_points
             except Exception as e:  # noqa: BLE001 — 单批失败不拖垮整阶段
@@ -353,17 +359,55 @@ async def _generate_test_points_batched(
     results = await asyncio.gather(*[_call_batch(i, b) for i, b in enumerate(batches)])
 
     generated: list[GeneratedTestPoint] = []
-    failed = 0
-    for r in results:
+    failed_batches: list[tuple[int, list[dict]]] = []
+    for i, r in enumerate(results):
         if r is None:
-            failed += 1
+            failed_batches.append((i, batches[i]))
         else:
             generated.extend(r)
 
-    if failed == len(batches):
-        raise RuntimeError(f"test-points 全部 {len(batches)} 批均失败，无法生成测试点")
-    if failed:
-        logger.warning("test-points: %d/%d 批失败，已保留其余批结果", failed, len(batches))
+    if not settings.test_points_completeness_guard:
+        if len(failed_batches) == len(batches):
+            raise RuntimeError(f"test-points 全部 {len(batches)} 批均失败，无法生成测试点")
+        if failed_batches:
+            logger.warning("test-points: %d/%d 批失败，已保留其余批结果", len(failed_batches), len(batches))
+        return generated
+
+    # ── guard 开：重试 + 单 feature 降级 ──────────────────────────────────────
+    if failed_batches:
+        logger.info("test-points completeness guard: %d 批失败，启动整批重试 (temperature=0.5)", len(failed_batches))
+        retry_results = await asyncio.gather(
+            *[_call_batch(idx, feats, temperature=0.5) for idx, feats in failed_batches]
+        )
+
+        still_failed: list[tuple[int, list[dict]]] = []
+        for (idx, feats), r in zip(failed_batches, retry_results):
+            if r is None:
+                still_failed.append((idx, feats))
+            else:
+                generated.extend(r)
+
+        if still_failed:
+            logger.info(
+                "test-points completeness guard: %d 批重试仍失败，拆单 feature 逐个调用",
+                len(still_failed),
+            )
+            single_feats = [f for _, batch in still_failed for f in batch]
+            single_results = await asyncio.gather(
+                *[_call_batch(0, [f], temperature=0.5) for f in single_feats]
+            )
+            for r in single_results:
+                if r is not None:
+                    generated.extend(r)
+
+    if not generated:
+        raise RuntimeError(f"test-points 全部 {len(batches)} 批均失败（含重试+降级），无法生成测试点")
+
+    all_fids = {f["feature_id"] for f in feature_dim_inputs}
+    covered_fids = {tp.feature_id for tp in generated}
+    missing = all_fids - covered_fids
+    if missing:
+        logger.warning("test-points completeness guard: %d feature 彻底失败无测试点: %s", len(missing), sorted(missing))
 
     return generated
 

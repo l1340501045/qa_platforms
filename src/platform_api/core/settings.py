@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     # 容错解析」保障。保留此开关：将来换成真正支持 json_object 的网关时置 True 即可启用。
     llm_json_mode: bool = False
 
+    # ── test_points 完整性兜底 ──────────────────────────────────────────────────
+    # 开：批失败重试 + 单 feature 降级 + 缺额校验（修 9 feature 静默丢失）
+    # 关：退回旧行为（失败批静默丢弃）——纯止血，默认开。
+    test_points_completeness_guard: bool = True
+
     # ── 规则锚定覆盖（Rule-Anchored Coverage）灰度开关 ──────────────────────────
     # 解耦设计，可独立回滚（详见 docs/plans/2026-06-15-rule-anchored-coverage.md）：
     #   rule_extract_enabled         — 仅产规则台账（rule_extract 阶段），不改生成。无依赖。
