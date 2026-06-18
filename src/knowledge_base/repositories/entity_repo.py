@@ -91,51 +91,32 @@ class EntityRepository:
         """
         raw_sql = text("""
             WITH RECURSIVE graph AS (
-                -- 锚点：种子实体的直接关系（出边）
+                -- 非递归锚点：种子实体的直接关系（出边+入边合一，CASE 判方向）
                 SELECT
-                    er.target_entity_id AS entity_id,
+                    CASE WHEN er.source_entity_id = :seed_id THEN er.target_entity_id
+                         ELSE er.source_entity_id END AS entity_id,
                     1 AS depth,
                     er.relation_type,
-                    'outgoing' AS direction
+                    CASE WHEN er.source_entity_id = :seed_id THEN 'outgoing'
+                         ELSE 'incoming' END AS direction
                 FROM knowledge.entity_relations er
-                WHERE er.source_entity_id = :seed_id
+                WHERE er.source_entity_id = :seed_id OR er.target_entity_id = :seed_id
 
                 UNION
 
-                -- 锚点：种子实体的直接关系（入边）
+                -- 递归项：从 graph 节点沿关系继续展开（出边+入边合一）
                 SELECT
-                    er.source_entity_id AS entity_id,
-                    1 AS depth,
-                    er.relation_type,
-                    'incoming' AS direction
-                FROM knowledge.entity_relations er
-                WHERE er.target_entity_id = :seed_id
-
-                UNION
-
-                -- 递归：沿关系展开（出边）
-                SELECT
-                    er.target_entity_id AS entity_id,
+                    CASE WHEN er.source_entity_id = g.entity_id THEN er.target_entity_id
+                         ELSE er.source_entity_id END AS entity_id,
                     g.depth + 1 AS depth,
                     er.relation_type,
-                    'outgoing' AS direction
+                    CASE WHEN er.source_entity_id = g.entity_id THEN 'outgoing'
+                         ELSE 'incoming' END AS direction
                 FROM knowledge.entity_relations er
-                JOIN graph g ON er.source_entity_id = g.entity_id
+                JOIN graph g ON (er.source_entity_id = g.entity_id OR er.target_entity_id = g.entity_id)
                 WHERE g.depth < :max_depth
-                  AND er.target_entity_id != :seed_id
-
-                UNION
-
-                -- 递归：沿关系展开（入边）
-                SELECT
-                    er.source_entity_id AS entity_id,
-                    g.depth + 1 AS depth,
-                    er.relation_type,
-                    'incoming' AS direction
-                FROM knowledge.entity_relations er
-                JOIN graph g ON er.target_entity_id = g.entity_id
-                WHERE g.depth < :max_depth
-                  AND er.source_entity_id != :seed_id
+                  AND CASE WHEN er.source_entity_id = g.entity_id THEN er.target_entity_id
+                           ELSE er.source_entity_id END != :seed_id
             )
             SELECT DISTINCT ON (entity_id) entity_id, depth, relation_type, direction
             FROM graph
