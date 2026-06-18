@@ -80,6 +80,53 @@ class DocumentEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class Entity(Base):
+    __tablename__ = "entities"
+    __table_args__ = (
+        Index("ix_entities_doc_type", "document_id", "entity_type"),
+        Index("ix_entities_sys_key", "system_id", "canonical_key"),
+        {"schema": "knowledge"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge.documents.id", ondelete="CASCADE"), nullable=False
+    )
+    system_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    canonical_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    section_ref: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attributes: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class EntityRelation(Base):
+    __tablename__ = "entity_relations"
+    __table_args__ = (
+        Index("ix_entity_relations_source", "source_entity_id"),
+        Index("ix_entity_relations_target", "target_entity_id"),
+        Index("ix_entity_relations_doc_type", "document_id", "relation_type"),
+        CheckConstraint("source_entity_id != target_entity_id", name="ck_no_self_entity_relation"),
+        {"schema": "knowledge"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge.entities.id", ondelete="CASCADE"), nullable=False
+    )
+    target_entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge.entities.id", ondelete="CASCADE"), nullable=False
+    )
+    relation_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class PrototypeLink(Base):
     __tablename__ = "prototype_links"
     __table_args__ = {"schema": "knowledge"}

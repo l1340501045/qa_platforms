@@ -64,3 +64,26 @@ class ModificationType(StrEnum):
     MINOR_EDIT = "minor_edit"
     MAJOR_REWRITE = "major_rewrite"
     DELETED = "deleted"
+
+
+class EntityType(StrEnum):
+    """实体级知识图谱 — 实体类型"""
+
+    FIELD = "field"
+    SECTION = "section"
+    RULE = "rule"
+    CONCEPT = "concept"
+    UI_ELEMENT = "ui_element"
+    STATE = "state"
+
+
+class EntityRelationType(StrEnum):
+    """实体级知识图谱 — 关系类型"""
+
+    SECTION_PRIORITY = "section_priority"
+    FIELD_DEFINED_IN = "field_defined_in"
+    RULE_CONSTRAINS = "rule_constrains"
+    MUTUALLY_EXCLUSIVE = "mutually_exclusive"
+    UNREACHABLE = "unreachable"
+    BELONGS_TO = "belongs_to"
+    TRANSITIONS_TO = "transitions_to"
