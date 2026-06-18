@@ -14,6 +14,37 @@ from src.platform_api.core.settings import settings
 logger = logging.getLogger(__name__)
 
 
+async def run_entity_graph_pipeline(doc, content: str, session) -> None:
+    """实体图谱抽取流水线：章节切分 → LLM 抽实体/关系 → 落库。
+
+    仅在 entity_graph_enabled=True 时被调用。
+    """
+    from src.knowledge_base.repositories.entity_repo import EntityRepository
+    from src.knowledge_base.services.entity_graph.extractor import extract_entity_graph
+    from src.testcase_generator.services.llm_client import get_llm_client
+    from src.testcase_generator.stages.rule_extract.splitter import build_units
+
+    units_result = build_units(content)
+    units = units_result[0] if units_result and units_result[0] else []
+    digest = units_result[1] if len(units_result) > 1 else ""
+
+    if not units:
+        logger.warning("实体图谱抽取：章节切分无结果，跳过: doc=%s", doc.id)
+        return
+
+    client = get_llm_client()
+    graph = await extract_entity_graph(
+        units=units,
+        digest=digest,
+        generate_fn=client.generate_structured,
+        concurrency=settings.entity_extract_concurrency,
+    )
+
+    repo = EntityRepository(session)
+    await repo.save_graph(doc.id, doc.system_id, graph)
+    logger.info("实体图谱落库: doc=%s entities=%d relations=%d", doc.id, len(graph.entities), len(graph.relations))
+
+
 async def run_image_caption_pipeline(doc, parsed_content: str) -> tuple[str, dict]:
     """图解析流水线：收集图 → 视觉描述 → 注入 content。
 
@@ -109,6 +140,11 @@ class ParseService:
         if settings.image_caption_enabled:
             logger.info("图解析开关已开，启动图描述流水线: doc=%s", document_id)
             final_content, image_captions = await run_image_caption_pipeline(doc, parsed.content)
+
+        # ── 实体图谱抽取（entity_graph_enabled 开关控制）──────────────────────
+        if settings.entity_graph_enabled:
+            logger.info("实体图谱开关已开，启动抽取: doc=%s", document_id)
+            await run_entity_graph_pipeline(doc, final_content, self.session)
 
         # 计算 content_hash（基于最终 content，含图述）
         content_hash = hashlib.sha256(final_content.encode("utf-8")).hexdigest()

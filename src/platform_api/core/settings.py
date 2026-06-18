@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     image_caption_enabled: bool = False
     image_caption_concurrency: int = 4
 
+    # ── 实体图谱（Entity Graph）灰度开关 ──────────────────────────────────────
+    # 开：parse 时抽取实体+关系落 knowledge.entities/entity_relations
+    # 关：parse 行为与接入前一致（不抽实体）
+    entity_graph_enabled: bool = False
+    entity_extract_concurrency: int = 4
+
     # ── test_points 完整性兜底 ──────────────────────────────────────────────────
     # 开：批失败重试 + 单 feature 降级 + 缺额校验（修 9 feature 静默丢失）
     # 关：退回旧行为（失败批静默丢弃）——纯止血，默认开。
