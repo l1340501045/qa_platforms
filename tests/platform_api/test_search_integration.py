@@ -13,6 +13,10 @@
 import pytest
 import uuid
 
+from tests.platform_api.conftest import requires_db
+
+pytestmark = requires_db
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 

@@ -14,6 +14,10 @@ import pytest
 import uuid
 from datetime import datetime, timezone
 
+from tests.platform_api.conftest import requires_db
+
+pytestmark = requires_db
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 

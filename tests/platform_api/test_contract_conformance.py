@@ -10,6 +10,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from tests.platform_api.conftest import requires_db
+
+pytestmark = requires_db
+
 from src.platform_api.main import app
 from src.platform_api.core.exceptions import ERROR_CODES
 from src.platform_api.core.stage_names import PIPELINE_STAGES
