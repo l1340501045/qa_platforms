@@ -1,4 +1,4 @@
-"""实体图谱 Repository — entities + entity_relations CRUD"""
+"""实体图谱 Repository — entities + entity_relations CRUD + BFS 遍历"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import logging
 import uuid as uuid_mod
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.knowledge_base.schemas.entity import EntityGraph
@@ -80,6 +80,73 @@ class EntityRepository:
                 source_quote=rel.source_quote,
             )
             self.session.add(relation)
+
+    async def traverse_entities(
+        self, seed_entity_id: UUID, max_depth: int = 2
+    ) -> list[tuple[UUID, int, str, str]]:
+        """WITH RECURSIVE BFS 遍历实体图（有向边，保留关系语义方向）。
+
+        返回 [(entity_id, depth, relation_type, direction)]，direction∈{outgoing,incoming}。
+        DISTINCT ON entity_id 取最浅深度。
+        """
+        raw_sql = text("""
+            WITH RECURSIVE graph AS (
+                -- 锚点：种子实体的直接关系（出边）
+                SELECT
+                    er.target_entity_id AS entity_id,
+                    1 AS depth,
+                    er.relation_type,
+                    'outgoing' AS direction
+                FROM knowledge.entity_relations er
+                WHERE er.source_entity_id = :seed_id
+
+                UNION
+
+                -- 锚点：种子实体的直接关系（入边）
+                SELECT
+                    er.source_entity_id AS entity_id,
+                    1 AS depth,
+                    er.relation_type,
+                    'incoming' AS direction
+                FROM knowledge.entity_relations er
+                WHERE er.target_entity_id = :seed_id
+
+                UNION
+
+                -- 递归：沿关系展开（出边）
+                SELECT
+                    er.target_entity_id AS entity_id,
+                    g.depth + 1 AS depth,
+                    er.relation_type,
+                    'outgoing' AS direction
+                FROM knowledge.entity_relations er
+                JOIN graph g ON er.source_entity_id = g.entity_id
+                WHERE g.depth < :max_depth
+                  AND er.target_entity_id != :seed_id
+
+                UNION
+
+                -- 递归：沿关系展开（入边）
+                SELECT
+                    er.source_entity_id AS entity_id,
+                    g.depth + 1 AS depth,
+                    er.relation_type,
+                    'incoming' AS direction
+                FROM knowledge.entity_relations er
+                JOIN graph g ON er.target_entity_id = g.entity_id
+                WHERE g.depth < :max_depth
+                  AND er.source_entity_id != :seed_id
+            )
+            SELECT DISTINCT ON (entity_id) entity_id, depth, relation_type, direction
+            FROM graph
+            ORDER BY entity_id, depth ASC
+        """)
+
+        result = await self.session.execute(raw_sql, {"seed_id": str(seed_entity_id), "max_depth": max_depth})
+        return [
+            (row.entity_id, row.depth, row.relation_type, row.direction)
+            for row in result.fetchall()
+        ]
 
     async def get_entities_by_document(self, document_id: UUID) -> list[Entity]:
         """获取文档的所有实体"""
