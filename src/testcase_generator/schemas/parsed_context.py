@@ -72,3 +72,8 @@ class ParsedContext(BaseModel):
     sources: list[SourceItem] = Field(default_factory=list, description="所有源文档")
     features: list[FeatureItem] = Field(default_factory=list, description="提取的功能点列表")
     prototype_observations: list[PrototypeObservation] | None = Field(default=None, description="原型观察记录（可选）")
+    entity_graph_hints: list[dict] = Field(
+        default_factory=list,
+        description="实体图谱关系提示（section_priority/mutually_exclusive/unreachable），"
+                    "entity_retrieval_enabled 关时为空列表",
+    )
