@@ -137,7 +137,10 @@ async def edit_cheat_sheet_item(
     session: AsyncSession = Depends(get_session),
 ):
     """编辑单条 cheat sheet 的 QA 版内容。"""
-    item = await CheatSheetReviewService(session).edit(item_id, qa_content=data.qa_content)
+    try:
+        item = await CheatSheetReviewService(session).edit(item_id, qa_content=data.qa_content)
+    except ValueError as exc:
+        raise ApiError("E4041", "cheat sheet 条目不存在") from exc
     return success(_serialize_item(item))
 
 
@@ -149,12 +152,15 @@ async def review_cheat_sheet_item(
 ):
     """审核单条 cheat sheet。"""
     service = CheatSheetReviewService(session)
-    if data.status == "approved":
-        item = await service.approve(item_id, by=data.by)
-    elif data.status == "rejected":
-        item = await service.reject(item_id, comment=data.comment or "", by=data.by)
-    else:
-        raise ApiError("E4001", "status 必须为 approved 或 rejected")
+    try:
+        if data.status == "approved":
+            item = await service.approve(item_id, by=data.by)
+        elif data.status == "rejected":
+            item = await service.reject(item_id, comment=data.comment or "", by=data.by)
+        else:
+            raise ApiError("E4001", "status 必须为 approved 或 rejected")
+    except ValueError as exc:
+        raise ApiError("E4041", "cheat sheet 条目不存在") from exc
     return success(_serialize_item(item))
 
 

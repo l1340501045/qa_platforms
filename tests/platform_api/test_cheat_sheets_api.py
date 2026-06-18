@@ -132,6 +132,26 @@ async def test_edit_and_review_cheat_sheet_item(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_edit_and_review_missing_item_returns_404(client: AsyncClient):
+    """PATCH edit/review 不存在条目时必须返回 ApiError 404，而不是 500。"""
+    missing_id = uuid.uuid4()
+
+    edit_resp = await client.patch(
+        f"/api/v1/cheat-sheets/{missing_id}",
+        json={"qa_content": {"item": "missing"}},
+    )
+    assert edit_resp.status_code == 404
+    assert edit_resp.json()["error_code"] == "E4041"
+
+    review_resp = await client.patch(
+        f"/api/v1/cheat-sheets/{missing_id}/review",
+        json={"status": "approved", "by": "qa_lead"},
+    )
+    assert review_resp.status_code == 404
+    assert review_resp.json()["error_code"] == "E4041"
+
+
+@pytest.mark.asyncio
 async def test_batch_approve_cheat_sheet_items(client: AsyncClient):
     """POST batch-approve 批量通过指定 sheet_type/tier。"""
     document_id, _, _ = await _seed_sheet(
