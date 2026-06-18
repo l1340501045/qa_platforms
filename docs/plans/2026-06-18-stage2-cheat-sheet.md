@@ -26,7 +26,7 @@
 - 表 `knowledge.entity_relations`（L106-127）：`id / document_id / source_entity_id / target_entity_id / relation_type / note / source_quote / created_at`；CHECK 自引用禁止；索引 `(source_entity_id)`、`(target_entity_id)`、`(document_id, relation_type)`。
 - 枚举（`src/platform_api/models/enums.py` L69-89）：`EntityType{field,section,rule,concept,ui_element,state}`；`EntityRelationType{section_priority,field_defined_in,rule_constrains,mutually_exclusive,unreachable,belongs_to,transitions_to}`。
 - `EntityRepository`（`src/knowledge_base/repositories/entity_repo.py`）：`get_entities_by_document(doc_id)` / `get_relations_by_document(doc_id)` / `traverse_entities` / `find_entity_by_name` / `get_entities_by_ids`。
-- **漫剧批创 live 规模**（doc `f91a9bef` / sys `26ffd7ba`）：1000 实体 / 757 关系（section_priority14 / mutually_exclusive33 / unreachable52 / transitions_to32 / field_defined_in218 / rule_constrains308 / belongs_to300）。
+- **漫剧批创 live 规模**（doc `f91a9bef` / sys `26ffd7ba`，re-extract 后 DB 实测）：1000 实体 / **957 关系**（section_priority14 / mutually_exclusive33 / unreachable52 / transitions_to32 / field_defined_in218 / rule_constrains308 / belongs_to300，分项之和=957）。
 
 ### F2. entity_graph_hints（① 已产出但下游零消费）
 - `retrieve_entity_graph_hints`（`src/testcase_generator/stages/parse/kb_retriever.py` L49-91）：只取**一跳直接关系**、只过滤 3 类高价值（section_priority/mutually_exclusive/unreachable），输出 dict `{relation_type, source_entity, target_entity, source_name, target_name, note}`。
@@ -50,6 +50,7 @@
 
 **新增**
 - `alembic/versions/019_add_cheat_sheets.py`（`knowledge.cheat_sheets` + `knowledge.cheat_sheet_items`；`down_revision` 接当前 head 018，执行前 `alembic heads` 确认）
+- `alembic/versions/020_add_cheat_sheet_dedup_key.py`（**🟡-3**：dedup_key 列由 020 补——实际执行中 019 先落基础表、上一轮审查修订加的 dedup_key 用 020 单独补；下方 Task 0.1 的"019 含 dedup_key"是逻辑蓝图，物理上分 019+020）
 - `src/platform_api/models/knowledge.py`（+`CheatSheet` + `CheatSheetItem` 模型）
 - `src/platform_api/models/enums.py`（+`CheatSheetType` + `CheatSheetReviewStatus`）
 - `src/knowledge_base/schemas/cheat_sheet.py`（`CheatSheetItemSchema` 等 Pydantic）
@@ -93,8 +94,14 @@
 
 - [ ] **Step 1：写迁移** —
   - `knowledge.cheat_sheets(id uuid pk, document_id uuid fk→documents CASCADE, system_id uuid, version int default 1, status varchar(20) default 'draft', source_entity_count int, source_relation_count int, extracted_at timestamptz, created_at timestamptz)`；**`UNIQUE(document_id, version)`**（防并发撞号 + 保证「取最新 version」单调）。
-  - `knowledge.cheat_sheet_items(id uuid pk, sheet_id uuid fk→cheat_sheets CASCADE, sheet_type varchar(30), title varchar(500), dedup_key varchar(200) not null, ai_content jsonb not null, qa_content jsonb null, review_status varchar(20) default 'pending', review_tier varchar(10), review_comment text null, reviewed_by varchar(50) null, reviewed_at timestamptz null, source_entity_ids jsonb null, source_relation_ids jsonb null, source_section_refs jsonb null, sort_order int default 0, created_at timestamptz, updated_at timestamptz)`；索引 `(sheet_id, sheet_type)`、`(sheet_id, review_status)`、`(sheet_id, dedup_key)`。含 `downgrade`。
-  - **`dedup_key`（🔴-1 核心）** = 稳定结构化合并键，**绝不用 LLM 生成的 title**，由提取器确定性算出（见 Task 1.1）：confusion_pair/section_priority 用排序后的 `源canonical_key|目标canonical_key|relation_type`；must_test 用 `rule canonical_key|target canonical_key`（同一规则约束多个对象时也不串用 QA 裁定）；prd_status 用 `status_kind|subject canonical_key`。re-extract 时按它匹配继承 QA 裁定。
+  - `knowledge.cheat_sheet_items(id uuid pk, sheet_id uuid fk→cheat_sheets CASCADE, sheet_type varchar(30), title varchar(500), dedup_key varchar(500) not null, ai_content jsonb not null, qa_content jsonb null, review_status varchar(20) default 'pending', review_tier varchar(10), review_comment text null, reviewed_by varchar(50) null, reviewed_at timestamptz null, source_entity_ids jsonb null, source_relation_ids jsonb null, source_section_refs jsonb null, sort_order int default 0, created_at timestamptz, updated_at timestamptz)`；索引 `(sheet_id, sheet_type)`、`(sheet_id, review_status)`、`(sheet_id, dedup_key)`。含 `downgrade`。（**🟡-5**：dedup_key 用 `varchar(500)`——容纳两个 `varchar(200)` canonical_key + 分隔符；若 020 已落 `varchar(200)`，评估补 migration 021 加长。）
+  - **`dedup_key`（🔴-1 核心）** = 稳定结构化合并键，**绝不用 LLM 生成的 title**，由提取器确定性算出（见 Task 1.1）：
+    - confusion_pair（`mutually_exclusive` **无向**）→ **排序后** `min(a,b)|max(a,b)|relation_type`，消除方向歧义；
+    - section_priority（局部优先全局，**有向**）→ **保留方向不排序** `local_canonical|global_canonical|section_priority`（**🟡-1**：A→B ≠ B→A，排序会丢方向语义，故不排序）；
+    - must_test → `rule_canonical_key|target_canonical_key`（同一规则约束多个对象不串用 QA 裁定）；
+    - prd_status → `status_kind|subject_canonical_key`。
+    - 超长兜底（🟡-5）：拼接结果超 480 字符则存其 `sha256` hex 作 dedup_key（极端长 canonical_key 降级）。
+    - re-extract 时按 dedup_key 匹配继承 QA 裁定。
 - [ ] **Step 2：加枚举** — `CheatSheetType{must_test, confusion_pair, section_priority, prd_status}`；`CheatSheetReviewStatus{pending, approved, rejected}`；（`review_tier` 用字符串 `must/sample/batch`，标分级审核档位）。
 - [ ] **Step 3：加模型** — `CheatSheet` + `CheatSheetItem` ORM 映射上表。
 - [ ] **Step 4：跑迁移** — `uv run alembic upgrade head`；`downgrade -1 && upgrade head` 验可逆。
@@ -252,7 +259,7 @@
 
 ### Task 4.1：端到端 live 验收
 
-- [ ] **Step 1：全开关**（`cheat_sheet_extract_enabled` + `cheat_sheet_injection_enabled` + ① 三开关），对漫剧批创：提取 cheat sheet → 分级审核（已在 C2 做）→ 跑完整生成流水线（新批次）。
+- [ ] **Step 1：全开关**（`cheat_sheet_extract_enabled` + `cheat_sheet_injection_enabled` + ① 三开关），对漫剧批创：提取 cheat sheet → 分级审核 → 跑完整生成流水线（新批次）。**验收前置（🟡-4）**：must_test 必须先经 `batch_approve` 批量采纳到合理规模（C2 演练的 ~5 条只是抽样、**不能作注入基数**）；否则必测清单注入近空、攻不动对应 P0，C4 验收会失真。
 - [ ] **Step 2：对照 v5 P0 做 case 级判定（🟡-6 量化，不做泛化「抽样审计」）** — 针对 v5 **具体 P0 锚点**逐条检查新批次对应 feature 的用例是否还出现同样错误断言：
   - 类A（目标 **16→≤5**）：W06 §5.0.3 错套定向包名 / W10 §5.0.4 回滚 / W12 6档错套 / W15 emoji 剔除——查对应 feature 用例是否还按全局规则误断言。
   - 类B（目标 **11→≤3**）：W11 监测链接↔投放链接是否仍混写 / W16 关键行为是否仍被当存在的投放方式。

@@ -109,27 +109,26 @@
 | 8 | 里程碑交付顺序 | **先①跑通验收，再写②**（①是地基 GraphRAG，②cheat sheet 盖在①上，地基不验收会返工） |
 | 9 | 图解析范围 | **全解析 57 张图**（不只 md 引用的 9 张）——48 张未引用界面截图含分页/弹窗/按钮等界面细节，是 v5 错套混淆重灾区；归位靠文件名编号前缀，归不准进文末附录兜底 |
 | 10 | 拆解机器加固 | **defer 暂缓**——splitter 只认 markdown `#`，无标题 PRD 会全线归零（详见 findings.md 第九节）；① 聚焦规整 markdown 的漫剧批创，加固列入 backlog（多标题格式 + 无标题递归兜底，不上 semantic），**通用化前必补** |
+| 11 | ② cheat sheet 切分 | **②a 后端闭环先行**（存储+提取+注入+极简审核 API），**②b Web 审核 UI 后补**；审核**分级**（高价值必审 + 必测清单抽样/批量采纳）；只注入 `approved` 条目 |
 
 ---
 
 ## 九、当前状态 & 下一步
 
 ### 当前状态
-- ✅ v5 审计完成（54 P0），8 形态愿景确定，5 阶段路线定稿，第一里程碑（①+②）确定
-- ✅ 7 个种子代码健康检查完成（见 findings.md）
-- ✅ 架构师记忆体系建立（本文件 + findings.md + progress.md）
-- ✅ **决策7 定案**：平台功能保留 / 生成侧 v5 补丁冻结存档 / xspec 忽略（见第八节）
-- ✅ **换代前快照已提交** + 新分支 `feat/architecture-migration` 已开（所有换代工作在此分支）
-- ✅ **① 详细执行 plan 已交付** → `docs/plans/2026-06-18-stage1-graph-parse-graphrag.md`（5 chunk，TDD，灰度开关；侦察事实见 findings.md / progress.md）
-- ⬜ ① 交 Claude Code 执行（待启动）；② plan 待 ① 验收后写
+- ✅ v5 审计 / 8 形态 / 5 阶段 / 第一里程碑（①+②）确定；架构师记忆体系 + 换代前快照 + 新分支 `feat/architecture-migration`
+- ✅ **① 图解析+GraphRAG：代码完成 + 2 轮返修 + LIVE 验收通过**（真实漫剧批创 PRD：feature 31 治9缺失 / 图覆盖89.5% / 实体1000+关系757 / 3 混淆点3/3 / entity_graph_hints 99；详见 progress.md「① LIVE 端到端验收」）。`LLM_VISION_MODEL=claude-opus-4-6` 已配；migration 已到 018。
+- ✅ **② cheat sheet 详细 plan 已交付** → `docs/plans/2026-06-18-stage2-cheat-sheet.md`（②a 后端闭环，5 chunk，TDD，灰度开关）
+- ⬜ ②a 交 Claude Code 执行（待启动）
 
 ### 下一步（按顺序）
-1. **交 Claude Code 在 `feat/architecture-migration` 执行① plan**（先①跑通验收，决策8）。Chunk 1 需用户提供 `LLM_VISION_MODEL` 模型名。
-2. **① 验收达红线后 → 写 ② cheat sheet 详细 plan**（QA 审核 UI 复用保留的平台功能）
-3. ③④⑤ 后续按 task_plan 第五节骨架推进
+1. **交 Claude Code 执行 ②a plan**（存储→提取→分级审核→注入→验收，在 `feat/architecture-migration`）
+2. ②a 验收达红线（类A 16 + 类B 11 P0 下降）后 → 写 ②b（Web 审核 UI）→ 进 ③（PRD 迭代）
+3. ① 收尾项（可选，可并行）：图覆盖重跑补 6 图(→~100%) / traverse 补真 DB 测试 / case_tree 测试 SQL bug
 
-### ⚠️ 待用户提供
-- 网关视觉模型名（`LLM_VISION_MODEL`），Chunk 1 图解析需要
+### ⚠️ 待办/收尾
+- ① 的 2 个 🟡（图覆盖 89.5% / 关系抽查 78%）+ traverse 真 DB 测试 + case_tree(范围外)测试 bug
+- （Backlog）splitter 加固——通用化/接入非规整 PRD 前必补
 
 ### 📋 Backlog（已知缺口，暂缓 — 勿遗忘）
 - **拆解机器(splitter)加固**（决策10）：现只认 markdown `#`，无标题/弱标题 PRD 会令 `build_units` 归零（规则/实体全线 0 产出）。加固方向：多标题格式识别（#/中文编号/加粗）+ 无标题递归兜底（按段落→字数），不上 semantic chunking。**通用化 / 接入非规整 PRD 前必做**。详见 findings.md 第九节。
