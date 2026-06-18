@@ -134,3 +134,25 @@ test-points 阶段被截断/失败丢弃，v4 的 30 feature 在 v5 只剩 21：
 | ⑤ 飞轮 | 不直接治 P0 | 治自进化（QA 改一条反哺） |
 
 **结论**：①+② 直接命中 9（类D）+16（类A）+11（类B）≈ **36 个 P0**，这就是"第一里程碑出好用例"的数据支撑。
+
+---
+
+## 九、拆解机器（splitter）软肋 + 文档分块最佳实践（2026-06-18 补）
+
+> 起因：用户质疑「只用标题拆是否太死板，无标题 PRD 怎么办」。读源码 + 调研确认**是真实软肋**。
+
+### splitter 现状（`src/testcase_generator/stages/rule_extract/splitter.py`）
+- 纯 heading-based：`_HEADING_RE = ^(#{1,6})\s+` **只认 markdown `#` 标题**。
+- `build_units` 流程：`_parse_headings` 找 # 标题 → `_split_blocks(level_cut=2)` 沿 #/## 切块 → meta 丢/digest 汇/正文<80字跳 → 超大块按 ### 细切 → 超大叶子 `_char_window` 字符窗兜底。
+- **致命软肋**：无 `#` 标题（Word 粘贴纯文本 / 中文编号「一、二、1.1」不带 # / 加粗当标题）→ `_parse_headings` 返回 `[]` → `_split_blocks` 的 `cut_idx=[]` → `blocks=[]` → **`build_units` 返回 `([],"",[])`，规则/实体抽取全线归零**（不是抽不准，是 0 产出）。字符窗兜底只在「已切出块且块超大」时触发，无块时根本不触发。
+- 漫剧批创 PRD 是规整 markdown（有 # + §章节号），**不受影响，现在能跑**。
+
+### 行业最佳实践（2026 调研）
+- **layout-aware 结构优先**：按文档自身章节/表格边界切，超大才细切 → splitter **方向正确**，与 LlamaParse/Docling/Unstructured 同路子。
+- **递归分隔符兜底**（LangChain RecursiveCharacterTextSplitter）：先段落→再句子→最后字符，分层退路 → splitter **缺这个**（只认 #，无退路）。
+- **semantic chunking**（AI 按语义切）：仅适合无结构叙述文本（论文/访谈），技术 PRD **不必上**，成本高收益小，行业明确"别过度工程，先做好结构化基线"。
+
+### 决策10：加固 defer（用户定）
+- ① 聚焦漫剧批创（规整 markdown 够用），splitter 加固**暂缓**，列入 backlog。
+- **加固方向（未来做时）**：① 多标题格式识别（# / 中文编号一、二、1.1 / 第X章 / 加粗）；② 无标题时递归兜底（按段落→字数切，保证永不归零）；③ 不上 semantic chunking。
+- ⚠️ **已知风险**：换无标题/弱标题 PRD 会全线归零——**通用化、接入非规整 PRD 前必须先补这个兜底网**。

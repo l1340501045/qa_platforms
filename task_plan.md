@@ -106,6 +106,9 @@
 | 5 | 整体节奏 | **B 渐进式**（非影子并行；每阶段末跑漫剧批创验收） |
 | 6 | 优先级打法 | **先冲第一里程碑 ①+②**（3-5 周出好用例），③④⑤后置 |
 | 7 | 已有功能去留 | **平台功能保留**（通知/搜索/用例库/批次管理 = 体验层地基，第②阶段审核 UI 要用）；**生成侧 v5 补丁冻结存档**不进新主干（换代用 GraphRAG+cheat sheet 架构级替换，补丁仅作避坑参考）；**xspec 忽略** |
+| 8 | 里程碑交付顺序 | **先①跑通验收，再写②**（①是地基 GraphRAG，②cheat sheet 盖在①上，地基不验收会返工） |
+| 9 | 图解析范围 | **全解析 57 张图**（不只 md 引用的 9 张）——48 张未引用界面截图含分页/弹窗/按钮等界面细节，是 v5 错套混淆重灾区；归位靠文件名编号前缀，归不准进文末附录兜底 |
+| 10 | 拆解机器加固 | **defer 暂缓**——splitter 只认 markdown `#`，无标题 PRD 会全线归零（详见 findings.md 第九节）；① 聚焦规整 markdown 的漫剧批创，加固列入 backlog（多标题格式 + 无标题递归兜底，不上 semantic），**通用化前必补** |
 
 ---
 
@@ -117,11 +120,16 @@
 - ✅ 架构师记忆体系建立（本文件 + findings.md + progress.md）
 - ✅ **决策7 定案**：平台功能保留 / 生成侧 v5 补丁冻结存档 / xspec 忽略（见第八节）
 - ✅ **换代前快照已提交** + 新分支 `feat/architecture-migration` 已开（所有换代工作在此分支）
-- ⬜ ①+② 的详细执行 plan 未写（下一步）
+- ✅ **① 详细执行 plan 已交付** → `docs/plans/2026-06-18-stage1-graph-parse-graphrag.md`（5 chunk，TDD，灰度开关；侦察事实见 findings.md / progress.md）
+- ⬜ ① 交 Claude Code 执行（待启动）；② plan 待 ① 验收后写
 
 ### 下一步（按顺序）
-1. **写 ①+② 的傻瓜化执行 plan** → 放 `docs/plans/`（参考现有 `2026-06-15-rule-anchored-coverage.md` 的 chunk/task/步骤格式），给 Claude Code 直接执行
-2. 在新分支推进换代实施（生成侧补丁逐步被 GraphRAG+cheat sheet 替换，git 历史可回溯补丁逻辑）
+1. **交 Claude Code 在 `feat/architecture-migration` 执行① plan**（先①跑通验收，决策8）。Chunk 1 需用户提供 `LLM_VISION_MODEL` 模型名。
+2. **① 验收达红线后 → 写 ② cheat sheet 详细 plan**（QA 审核 UI 复用保留的平台功能）
+3. ③④⑤ 后续按 task_plan 第五节骨架推进
 
-### ⚠️ 悬而未决（需用户拍板，勿擅自决定）
-- ①+② 详细 plan 写完后，是先让 Claude Code 跑通 ① 再写 ②，还是 ①② 一起交付？
+### ⚠️ 待用户提供
+- 网关视觉模型名（`LLM_VISION_MODEL`），Chunk 1 图解析需要
+
+### 📋 Backlog（已知缺口，暂缓 — 勿遗忘）
+- **拆解机器(splitter)加固**（决策10）：现只认 markdown `#`，无标题/弱标题 PRD 会令 `build_units` 归零（规则/实体全线 0 产出）。加固方向：多标题格式识别（#/中文编号/加粗）+ 无标题递归兜底（按段落→字数），不上 semantic chunking。**通用化 / 接入非规整 PRD 前必做**。详见 findings.md 第九节。

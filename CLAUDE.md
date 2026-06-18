@@ -48,6 +48,7 @@ uv run alembic revision --autogenerate -m "描述"
 
 关键流程：
 - `comprehend` 阶段有 Gate 路由（GO/CONDITIONAL/NO_GO），NO_GO 触发 LangGraph `interrupt()` 等待人工澄清
+- `rule_extract` 沿 PRD 章节树抽取明示业务规则，产出规则台账（`rule_extract_enabled` 开关控制，关时直通）
 - `review` → `backfill` 形成自循环（最多 `MAX_RECONCILE=2` 轮），覆盖零覆盖测试点
 - `verify` 做事实核验，`dedup` 做规则锚定近重复折叠
 
