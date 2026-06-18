@@ -61,12 +61,14 @@ def _item(
     sheet_type: CheatSheetType,
     title: str,
     ai_content: dict,
+    dedup_key: str | None = None,
     review_tier: str = "must",
     sort_order: int = 0,
 ) -> CheatSheetItemCreate:
     return CheatSheetItemCreate(
         sheet_type=sheet_type,
         title=title,
+        dedup_key=dedup_key or f"{sheet_type}:{title}",
         ai_content=ai_content,
         review_tier=review_tier,
         source_entity_ids=[str(uuid.uuid4())],
@@ -78,7 +80,7 @@ def _item(
 
 @pytest.mark.asyncio
 async def test_save_sheet_creates_new_version_and_preserves_approved_qa_content(db_session: AsyncSession):
-    """re-extract 新建 version，但匹配旧 approved 条目时保留 QA 裁定。"""
+    """re-extract 新建 version，但按稳定 dedup_key 匹配旧 approved 条目并保留 QA 裁定。"""
     document_id, system_id = await _seed_document(db_session)
     repo = CheatSheetRepository(db_session)
 
@@ -89,6 +91,7 @@ async def test_save_sheet_creates_new_version_and_preserves_approved_qa_content(
             _item(
                 sheet_type=CheatSheetType.CONFUSION_PAIR,
                 title="监测链接 vs 投放链接",
+                dedup_key="confusion:concept_monitor_link|concept_delivery_link",
                 ai_content={"item_a": "监测链接", "item_b": "投放链接"},
             )
         ],
@@ -109,7 +112,8 @@ async def test_save_sheet_creates_new_version_and_preserves_approved_qa_content(
         [
             _item(
                 sheet_type=CheatSheetType.CONFUSION_PAIR,
-                title="监测链接 vs 投放链接",
+                title="投放链接 / 监测链接 易混对照（LLM 改写标题）",
+                dedup_key="confusion:concept_monitor_link|concept_delivery_link",
                 ai_content={"item_a": "新AI监测链接", "item_b": "新AI投放链接"},
             ),
             _item(
@@ -126,10 +130,11 @@ async def test_save_sheet_creates_new_version_and_preserves_approved_qa_content(
     assert second_sheet.version == 2
     second_items = await repo.list_items(second_sheet.id)
     by_title = {item.title: item for item in second_items}
-    carried = by_title["监测链接 vs 投放链接"]
+    carried = by_title["投放链接 / 监测链接 易混对照（LLM 改写标题）"]
     assert carried.review_status == CheatSheetReviewStatus.APPROVED
     assert carried.qa_content == {"item_a": "QA监测链接", "item_b": "QA投放链接"}
     assert carried.ai_content == {"item_a": "新AI监测链接", "item_b": "新AI投放链接"}
+    assert carried.dedup_key == "confusion:concept_monitor_link|concept_delivery_link"
     assert by_title["局部章节优先于全局默认"].review_status == CheatSheetReviewStatus.PENDING
 
 

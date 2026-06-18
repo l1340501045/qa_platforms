@@ -13,7 +13,6 @@ from src.platform_api.models.knowledge import CheatSheet
 
 _REVIEW_TIER_MUST = "must"
 _REVIEW_TIER_SAMPLE = "sample"
-_PRD_STATUS_KINDS = {"mock", "future", "tbd"}
 
 
 class CheatSheetExtractorService:
@@ -31,20 +30,16 @@ class CheatSheetExtractorService:
     async def extract(
         self,
         document_id: UUID,
-        *,
-        section_statuses: list[dict] | None = None,
     ) -> list[CheatSheetItemCreate]:
         """从文档实体图谱提取 4 类 cheat sheet。"""
         entities = await self.entity_repo.get_entities_by_document(document_id)
         relations = await self.entity_repo.get_relations_by_document(document_id)
-        return self._build_items(entities, relations, section_statuses or [])
+        return self._build_items(entities, relations)
 
     async def extract_and_save(
         self,
         document_id: UUID,
         system_id: UUID,
-        *,
-        section_statuses: list[dict] | None = None,
     ) -> CheatSheet:
         """提取并保存为新的 cheat sheet version。"""
         if self.cheat_sheet_repo is None:
@@ -52,7 +47,7 @@ class CheatSheetExtractorService:
 
         entities = await self.entity_repo.get_entities_by_document(document_id)
         relations = await self.entity_repo.get_relations_by_document(document_id)
-        items = self._build_items(entities, relations, section_statuses or [])
+        items = self._build_items(entities, relations)
 
         return await self.cheat_sheet_repo.save_sheet(
             document_id,
@@ -66,7 +61,6 @@ class CheatSheetExtractorService:
         self,
         entities: list,
         relations: list,
-        section_statuses: list[dict],
     ) -> list[CheatSheetItemCreate]:
         """按固定顺序组装 4 类条目，并统一回填 sort_order。"""
         by_id = {entity.id: entity for entity in entities}
@@ -74,11 +68,11 @@ class CheatSheetExtractorService:
             *self._extract_must_test(by_id, relations),
             *self._extract_confusion_pairs(by_id, relations),
             *self._extract_section_priority(by_id, relations),
-            *self._extract_prd_status(by_id, relations, section_statuses or []),
+            *self._extract_prd_status(by_id, relations),
         ]
         for index, item in enumerate(items):
             item.sort_order = index
-        return items
+        return _dedupe_items_by_key(items)
 
     def _extract_must_test(self, by_id: dict, relations: list) -> list[CheatSheetItemCreate]:
         items: list[CheatSheetItemCreate] = []
@@ -104,6 +98,7 @@ class CheatSheetExtractorService:
                 CheatSheetItemCreate(
                     sheet_type=CheatSheetType.MUST_TEST,
                     title=f"必测：{target.name} - {rule.name}",
+                    dedup_key=f"must_test:{rule.canonical_key}|{target.canonical_key}",
                     ai_content={
                         "rule_text": rule_text,
                         "category": target.entity_type,
@@ -131,6 +126,7 @@ class CheatSheetExtractorService:
                 CheatSheetItemCreate(
                     sheet_type=CheatSheetType.CONFUSION_PAIR,
                     title=f"易混：{source.name} vs {target.name}",
+                    dedup_key=_relation_dedup_key(CheatSheetType.CONFUSION_PAIR, source, target, relation),
                     ai_content={
                         "item_a": source.name,
                         "item_b": target.name,
@@ -156,6 +152,9 @@ class CheatSheetExtractorService:
                 CheatSheetItemCreate(
                     sheet_type=CheatSheetType.SECTION_PRIORITY,
                     title=f"章节优先：{local_section.name} > {global_section.name}",
+                    dedup_key=_relation_dedup_key(
+                        CheatSheetType.SECTION_PRIORITY, local_section, global_section, relation
+                    ),
                     ai_content={
                         "local_section": local_section.name,
                         "global_section": global_section.name,
@@ -174,7 +173,6 @@ class CheatSheetExtractorService:
         self,
         by_id: dict,
         relations: list,
-        section_statuses: list[dict],
     ) -> list[CheatSheetItemCreate]:
         items: list[CheatSheetItemCreate] = []
         for relation in self._relations_of_type(relations, EntityRelationType.UNREACHABLE):
@@ -186,6 +184,7 @@ class CheatSheetExtractorService:
                 CheatSheetItemCreate(
                     sheet_type=CheatSheetType.PRD_STATUS,
                     title=f"不可达/待确认：{source.name} @ {target.name}",
+                    dedup_key=f"prd_status:unreachable:{source.canonical_key}",
                     ai_content={
                         "status_kind": "unreachable",
                         "subject": source.name,
@@ -209,8 +208,9 @@ class CheatSheetExtractorService:
                 CheatSheetItemCreate(
                     sheet_type=CheatSheetType.PRD_STATUS,
                     title=f"状态流转：{source.name} -> {target.name}",
+                    dedup_key=f"prd_status:state_transition:{_sorted_key(source.canonical_key, target.canonical_key)}",
                     ai_content={
-                        "status_kind": "transition",
+                        "status_kind": "state_transition",
                         "subject": f"{source.name} -> {target.name}",
                         "context": source.section_ref or target.section_ref,
                         "annotation": relation.note,
@@ -223,29 +223,6 @@ class CheatSheetExtractorService:
                 )
             )
 
-        for status in section_statuses:
-            kind = str(status.get("kind", "")).lower()
-            if kind not in _PRD_STATUS_KINDS:
-                continue
-            section_ref = status.get("section_ref")
-            heading = status.get("heading") or section_ref or "未命名章节"
-            items.append(
-                CheatSheetItemCreate(
-                    sheet_type=CheatSheetType.PRD_STATUS,
-                    title=f"PRD状态：{heading}",
-                    ai_content={
-                        "status_kind": kind,
-                        "subject": heading,
-                        "context": section_ref,
-                        "annotation": status.get("annotation") or f"章节标记为 {kind}，不可编造确定 oracle。",
-                        "source_quote": status.get("source_quote"),
-                    },
-                    review_tier=_REVIEW_TIER_MUST,
-                    source_entity_ids=[],
-                    source_relation_ids=[],
-                    source_section_refs=[section_ref] if section_ref else [],
-                )
-            )
         return items
 
     @staticmethod
@@ -292,3 +269,23 @@ def _dedupe(values: list[str | None]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def _dedupe_items_by_key(items: list[CheatSheetItemCreate]) -> list[CheatSheetItemCreate]:
+    seen: set[str] = set()
+    result: list[CheatSheetItemCreate] = []
+    for item in items:
+        if item.dedup_key in seen:
+            continue
+        seen.add(item.dedup_key)
+        item.sort_order = len(result)
+        result.append(item)
+    return result
+
+
+def _relation_dedup_key(sheet_type: CheatSheetType, source, target, relation) -> str:
+    return f"{sheet_type}:{_sorted_key(source.canonical_key, target.canonical_key)}|{relation.relation_type}"
+
+
+def _sorted_key(left: str, right: str) -> str:
+    return "|".join(sorted([left, right]))

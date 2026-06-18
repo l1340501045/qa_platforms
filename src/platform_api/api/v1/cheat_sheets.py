@@ -188,6 +188,7 @@ def _serialize_item(item: CheatSheetItem) -> dict:
         "sheet_id": str(item.sheet_id),
         "sheet_type": str(item.sheet_type),
         "title": item.title,
+        "dedup_key": item.dedup_key,
         "ai_content": item.ai_content,
         "qa_content": item.qa_content,
         "review_status": str(item.review_status),

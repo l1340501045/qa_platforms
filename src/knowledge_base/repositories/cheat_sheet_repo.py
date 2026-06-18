@@ -31,7 +31,7 @@ class CheatSheetRepository:
     ) -> CheatSheet:
         """保存一次提取结果。
 
-        每次 re-extract 都新建 version；若新条目能用 `(sheet_type, title)` 匹配旧 approved 条目，
+        每次 re-extract 都新建 version；若新条目能用稳定 dedup_key 匹配旧 approved 条目，
         则继承 QA 内容和审核状态，避免 AI 重跑覆盖人工裁定。
         """
         previous_sheet = await self._get_latest_sheet(document_id)
@@ -51,7 +51,7 @@ class CheatSheetRepository:
         await self.session.flush()
 
         for index, item in enumerate(items):
-            previous_item = previous_approved.get((str(item.sheet_type), item.title))
+            previous_item = previous_approved.get(item.dedup_key)
             review_status = CheatSheetReviewStatus.PENDING
             qa_content = None
             review_comment = None
@@ -70,6 +70,7 @@ class CheatSheetRepository:
                     sheet_id=sheet.id,
                     sheet_type=str(item.sheet_type),
                     title=item.title,
+                    dedup_key=item.dedup_key,
                     ai_content=item.ai_content,
                     qa_content=qa_content,
                     review_status=str(review_status),
@@ -141,6 +142,6 @@ class CheatSheetRepository:
         )
         return result.scalars().first()
 
-    async def _get_previous_approved_by_key(self, sheet_id: UUID) -> dict[tuple[str, str], CheatSheetItem]:
+    async def _get_previous_approved_by_key(self, sheet_id: UUID) -> dict[str, CheatSheetItem]:
         items = await self.list_items(sheet_id, review_status=CheatSheetReviewStatus.APPROVED)
-        return {(item.sheet_type, item.title): item for item in items}
+        return {item.dedup_key: item for item in items}

@@ -129,7 +129,10 @@ class EntityRelation(Base):
 
 class CheatSheet(Base):
     __tablename__ = "cheat_sheets"
-    __table_args__ = {"schema": "knowledge"}
+    __table_args__ = (
+        Index("uq_cheat_sheets_document_version", "document_id", "version", unique=True),
+        {"schema": "knowledge"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -149,6 +152,7 @@ class CheatSheetItem(Base):
     __table_args__ = (
         Index("ix_cheat_sheet_items_sheet_type", "sheet_id", "sheet_type"),
         Index("ix_cheat_sheet_items_sheet_review", "sheet_id", "review_status"),
+        Index("ix_cheat_sheet_items_sheet_dedup", "sheet_id", "dedup_key"),
         {"schema": "knowledge"},
     )
 
@@ -158,6 +162,7 @@ class CheatSheetItem(Base):
     )
     sheet_type: Mapped[str] = mapped_column(String(30), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(200), nullable=False)
     ai_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     qa_content: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     review_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'pending'")

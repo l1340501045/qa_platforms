@@ -144,23 +144,13 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
     )
     service = CheatSheetExtractorService(repo)
 
-    items = await service.extract(
-        doc_id,
-        section_statuses=[
-            {
-                "section_ref": "§8.4",
-                "kind": "tbd",
-                "heading": "文案配置",
-                "annotation": "文案待确认，不可编造 oracle",
-            }
-        ],
-    )
+    items = await service.extract(doc_id)
 
     by_type = {sheet_type: [item for item in items if item.sheet_type == sheet_type] for sheet_type in CheatSheetType}
     assert len(by_type[CheatSheetType.MUST_TEST]) == 1
     assert len(by_type[CheatSheetType.CONFUSION_PAIR]) == 1
     assert len(by_type[CheatSheetType.SECTION_PRIORITY]) == 1
-    assert len(by_type[CheatSheetType.PRD_STATUS]) == 3
+    assert len(by_type[CheatSheetType.PRD_STATUS]) == 2
 
     must_test = by_type[CheatSheetType.MUST_TEST][0]
     assert must_test.review_tier == "sample"
@@ -169,6 +159,7 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
     assert must_test.ai_content["section_ref"] == "§5.7.1"
     assert str(rule.id) in must_test.source_entity_ids
     assert str(rule_constrains.id) in must_test.source_relation_ids
+    assert must_test.dedup_key == "must_test:rule_target_name|field_定向包名"
 
     confusion_item = by_type[CheatSheetType.CONFUSION_PAIR][0]
     assert confusion_item.review_tier == "must"
@@ -176,15 +167,17 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
     assert confusion_item.ai_content["item_b"] == "投放链接"
     assert confusion_item.ai_content["distinction"] == "监测链接用于归因，投放链接用于投放"
     assert confusion_item.source_section_refs == ["§5.4"]
+    assert confusion_item.dedup_key == "confusion_pair:concept_delivery_link|concept_monitor_link|mutually_exclusive"
 
     priority_item = by_type[CheatSheetType.SECTION_PRIORITY][0]
     assert priority_item.review_tier == "must"
     assert priority_item.ai_content["local_section"] == "§5.7.1 定向包名称"
     assert priority_item.ai_content["global_section"] == "§5.0.3 全局字数规则"
     assert "局部规则优先" in priority_item.ai_content["resolution"]
+    assert priority_item.dedup_key == "section_priority:§5.0.3|§5.7.1|section_priority"
 
     prd_status_kinds = {item.ai_content["status_kind"] for item in by_type[CheatSheetType.PRD_STATUS]}
-    assert prd_status_kinds == {"unreachable", "transition", "tbd"}
+    assert prd_status_kinds == {"unreachable", "state_transition"}
     unreachable_item = next(
         item for item in by_type[CheatSheetType.PRD_STATUS] if item.ai_content["status_kind"] == "unreachable"
     )
@@ -192,6 +185,7 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
     assert unreachable_item.ai_content["subject"] == "关键行为"
     assert unreachable_item.ai_content["context"] == "投放方式"
     assert str(unreachable.id) in unreachable_item.source_relation_ids
+    assert unreachable_item.dedup_key == "prd_status:unreachable:concept_key_behavior"
 
     repo.get_entities_by_document.assert_awaited_once_with(doc_id)
     repo.get_relations_by_document.assert_awaited_once_with(doc_id)
@@ -230,6 +224,35 @@ async def test_section_priority_neutral_note_does_not_claim_local_wins():
     resolution = items[0].ai_content["resolution"]
     assert "同一口径" in resolution
     assert "局部规则优先" not in resolution
+
+
+@pytest.mark.asyncio
+async def test_extract_dedupes_items_by_stable_dedup_key():
+    """同一 stable dedup_key 的重复关系只产出一条，避免继承审核态时放大 approved。"""
+    doc_id = uuid4()
+    monitor_link = _entity(
+        name="监测链接",
+        canonical_key="concept_monitor_link",
+        entity_type="concept",
+        section_ref="§5.4",
+    )
+    delivery_link = _entity(
+        name="投放链接",
+        canonical_key="concept_delivery_link",
+        entity_type="concept",
+        section_ref="§5.4",
+    )
+    first = _relation(monitor_link, delivery_link, "mutually_exclusive", note="监测链接与投放链接不同")
+    second = _relation(delivery_link, monitor_link, "mutually_exclusive", note="投放链接与监测链接不同")
+    repo = AsyncMock()
+    repo.get_entities_by_document = AsyncMock(return_value=[monitor_link, delivery_link])
+    repo.get_relations_by_document = AsyncMock(return_value=[first, second])
+    service = CheatSheetExtractorService(repo)
+
+    items = await service.extract(doc_id)
+
+    assert len(items) == 1
+    assert items[0].dedup_key == "confusion_pair:concept_delivery_link|concept_monitor_link|mutually_exclusive"
 
 
 @pytest.mark.asyncio

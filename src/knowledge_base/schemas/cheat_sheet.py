@@ -12,6 +12,7 @@ class CheatSheetItemCreate(BaseModel):
 
     sheet_type: CheatSheetType = Field(description="条目类型")
     title: str = Field(description="QA 可读标题")
+    dedup_key: str = Field(description="稳定合并键；用于 re-extract 继承 QA 裁定")
     ai_content: dict = Field(description="AI 提取内容")
     review_tier: str | None = Field(default=None, description="审核档位：must/sample/batch")
     source_entity_ids: list[str] | None = Field(default=None, description="溯源实体 ID")
@@ -27,6 +28,7 @@ class CheatSheetItemSchema(BaseModel):
     sheet_id: UUID
     sheet_type: CheatSheetType
     title: str
+    dedup_key: str
     ai_content: dict
     qa_content: dict | None = None
     review_status: str

@@ -94,7 +94,7 @@
 - [ ] **Step 1：写迁移** —
   - `knowledge.cheat_sheets(id uuid pk, document_id uuid fk→documents CASCADE, system_id uuid, version int default 1, status varchar(20) default 'draft', source_entity_count int, source_relation_count int, extracted_at timestamptz, created_at timestamptz)`；**`UNIQUE(document_id, version)`**（防并发撞号 + 保证「取最新 version」单调）。
   - `knowledge.cheat_sheet_items(id uuid pk, sheet_id uuid fk→cheat_sheets CASCADE, sheet_type varchar(30), title varchar(500), dedup_key varchar(200) not null, ai_content jsonb not null, qa_content jsonb null, review_status varchar(20) default 'pending', review_tier varchar(10), review_comment text null, reviewed_by varchar(50) null, reviewed_at timestamptz null, source_entity_ids jsonb null, source_relation_ids jsonb null, source_section_refs jsonb null, sort_order int default 0, created_at timestamptz, updated_at timestamptz)`；索引 `(sheet_id, sheet_type)`、`(sheet_id, review_status)`、`(sheet_id, dedup_key)`。含 `downgrade`。
-  - **`dedup_key`（🔴-1 核心）** = 稳定结构化合并键，**绝不用 LLM 生成的 title**，由提取器确定性算出（见 Task 1.1）：confusion_pair/section_priority 用排序后的 `源canonical_key|目标canonical_key|relation_type`；must_test 用 `rule canonical_key`（或 source_quote 的 hash）；prd_status 用 `status_kind|subject canonical_key`。re-extract 时按它匹配继承 QA 裁定。
+  - **`dedup_key`（🔴-1 核心）** = 稳定结构化合并键，**绝不用 LLM 生成的 title**，由提取器确定性算出（见 Task 1.1）：confusion_pair/section_priority 用排序后的 `源canonical_key|目标canonical_key|relation_type`；must_test 用 `rule canonical_key|target canonical_key`（同一规则约束多个对象时也不串用 QA 裁定）；prd_status 用 `status_kind|subject canonical_key`。re-extract 时按它匹配继承 QA 裁定。
 - [ ] **Step 2：加枚举** — `CheatSheetType{must_test, confusion_pair, section_priority, prd_status}`；`CheatSheetReviewStatus{pending, approved, rejected}`；（`review_tier` 用字符串 `must/sample/batch`，标分级审核档位）。
 - [ ] **Step 3：加模型** — `CheatSheet` + `CheatSheetItem` ORM 映射上表。
 - [ ] **Step 4：跑迁移** — `uv run alembic upgrade head`；`downgrade -1 && upgrade head` 验可逆。
@@ -286,7 +286,7 @@
 
 | 指标 | v5 基线 | ②a 后（实测回填） | 红线 |
 |---|---|---|---|
-| cheat sheet 提取条数（4 类） | — | v2 实测：confusion_pair 33 / section_priority 14 / prd_status 84 / must_test 299（source：1000 实体 / 957 关系，全部 pending） | 4 类落库 |
+| cheat sheet 提取条数（4 类） | — | v4 实测（dedup_key 去重后）：confusion_pair 21 / section_priority 13 / prd_status 66 / must_test 295（source：1000 实体 / 957 关系） | 4 类落库 |
 | 高价值类提取准确率（抽查） | — | 抽查 high-value 约 30 条，可审准确率约 90%；发现 section_priority「同一口径」formatter 问题并已修复，复查通过 | ≥80% |
 | approved 条目数（分级审核后） | — | 抽样审核演练：confusion_pair 5 / section_priority 5 / prd_status 5 / must_test 5；另 rejected 1；`get_approved_for_injection` 四类非空 | — |
 | 类A 全局/局部错套 P0 | 16 | （待填，目标 ≤5） | ≤5 |

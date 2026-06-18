@@ -64,6 +64,7 @@ def _item(sheet_type: CheatSheetType, title: str, review_tier: str) -> CheatShee
     return CheatSheetItemCreate(
         sheet_type=sheet_type,
         title=title,
+        dedup_key=f"{sheet_type}:{title}",
         ai_content={"title": title},
         review_tier=review_tier,
         source_entity_ids=[],
