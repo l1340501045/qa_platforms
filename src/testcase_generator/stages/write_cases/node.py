@@ -208,7 +208,7 @@ async def _load_approved_cheat_sheet(parsed_context) -> dict:
     """按文档加载已审核 cheat sheet；开关关或异常时返回空。"""
     if not settings.cheat_sheet_injection_enabled:
         return {}
-    document_id = getattr(parsed_context.sources[0], "doc_id", None) if parsed_context.sources else None
+    document_id = _select_cheat_sheet_document_id(parsed_context)
     if document_id is None:
         return {}
     try:
@@ -217,6 +217,14 @@ async def _load_approved_cheat_sheet(parsed_context) -> dict:
     except Exception as exc:  # noqa: BLE001 — 注入失败不应阻断用例生成
         logger.warning("加载 cheat sheet 失败，跳过注入: doc=%s err=%s", document_id, exc)
         return {}
+
+
+def _select_cheat_sheet_document_id(parsed_context):
+    """优先选择 PRD 文档作为 cheat sheet scope，避免多 source 时误取技术文档。"""
+    for source in getattr(parsed_context, "sources", []):
+        if getattr(source, "doc_type", None) == "prd" and getattr(source, "trust_level", 5) <= 2:
+            return getattr(source, "doc_id", None)
+    return getattr(parsed_context.sources[0], "doc_id", None) if getattr(parsed_context, "sources", []) else None
 
 
 # ─── Node ──────────────────────────────────────────────────────────────────────
