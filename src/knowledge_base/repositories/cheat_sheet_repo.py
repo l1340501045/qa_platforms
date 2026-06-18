@@ -122,7 +122,7 @@ class CheatSheetRepository:
                     id=item.id,
                     sheet_type=sheet_type,
                     title=item.title,
-                    content=item.qa_content or item.ai_content,
+                    content=item.qa_content if item.qa_content is not None else item.ai_content,
                     review_tier=item.review_tier,
                     source_entity_ids=item.source_entity_ids,
                     source_relation_ids=item.source_relation_ids,

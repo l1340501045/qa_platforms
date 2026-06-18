@@ -217,6 +217,32 @@ async def test_get_approved_for_injection_returns_latest_version_grouped_by_type
 
 
 @pytest.mark.asyncio
+async def test_get_approved_for_injection_keeps_empty_qa_content(db_session: AsyncSession):
+    """QA 明确保存 {} 时也应优先注入 QA 版，而不是回退 AI 版。"""
+    document_id, system_id = await _seed_document(db_session)
+    repo = CheatSheetRepository(db_session)
+    sheet = await repo.save_sheet(
+        document_id,
+        system_id,
+        [
+            _item(
+                sheet_type=CheatSheetType.PRD_STATUS,
+                title="待确认文案",
+                ai_content={"status_kind": "tbd", "subject": "AI文案"},
+            )
+        ],
+    )
+    items = await repo.list_items(sheet.id)
+    items[0].review_status = CheatSheetReviewStatus.APPROVED
+    items[0].qa_content = {}
+    await db_session.flush()
+
+    approved = await repo.get_approved_for_injection(document_id)
+
+    assert approved[CheatSheetType.PRD_STATUS][0].content == {}
+
+
+@pytest.mark.asyncio
 async def test_get_approved_for_injection_returns_empty_dict_without_sheet(db_session: AsyncSession):
     """空库或未提取文档返回 {}，供注入侧安全兜底。"""
     repo = CheatSheetRepository(db_session)
