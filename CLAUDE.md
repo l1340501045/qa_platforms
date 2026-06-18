@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 AI 驱动的 QA 智能平台 — 上传需求文档，自动生成测试用例。三个核心模块 + 一个前端：
 
 - `src/platform_api` — FastAPI 后端（REST API、Celery 任务分发、数据持久化）
-- `src/testcase_generator` — LangGraph DAG 流水线（parse → comprehend → rule_extract → test_points → write_cases → review → backfill → verify → dedup → export）
+- `src/testcase_generator` — LangGraph DAG 流水线（主链 parse → comprehend → rule_extract → test_points → write_cases → review → verify → dedup → export；其中 comprehend 有 NO_GO 人工澄清分支、review 按需 `backfill` 回填循环——详见架构关键点）
 - `src/knowledge_base` — RAG 知识库（向量/图/混合检索、embedding、MinIO 存储）
 - `web/` — React 18 + Ant Design 5 + Zustand 前端
 
@@ -47,9 +47,9 @@ uv run alembic revision --autogenerate -m "描述"
 流水线定义在 `src/testcase_generator/pipeline/graph.py`，节点实现在 `src/testcase_generator/stages/` 各子目录的 `node.py`。状态流转通过 `PipelineState`（TypedDict）传递。
 
 关键流程：
-- `comprehend` 阶段有 Gate 路由（GO/CONDITIONAL/NO_GO），NO_GO 触发 LangGraph `interrupt()` 等待人工澄清
+- `comprehend` 后经 `gate_router`：GO/CONDITIONAL → `rule_extract`；NO_GO → 独立 `interrupt` 节点（LangGraph `interrupt()` 等待人工澄清），澄清后回 `comprehend` 重新评估
 - `rule_extract` 沿 PRD 章节树抽取明示业务规则，产出规则台账（`rule_extract_enabled` 开关控制，关时直通）
-- `review` → `backfill` 形成自循环（最多 `MAX_RECONCILE=2` 轮），覆盖零覆盖测试点
+- `review` 后经 `review_router`：达标 → `verify`；存在零覆盖/假覆盖测试点 → `backfill`。`backfill` 自循环（`backfill`→`backfill`，**不回 `review`**），定向回填零覆盖（追加）+ 假覆盖（替换），最多 `MAX_RECONCILE=2` 轮后 → `verify`
 - `verify` 做事实核验，`dedup` 做规则锚定近重复折叠
 
 ### 用例数量控制机制
