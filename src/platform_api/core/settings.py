@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # LLM 视觉模型（图解析用，OpenAI 兼容视觉接口；留空则传 images 时报错）
     llm_vision_model: str = ""
 
+    # ── 图解析（Image Caption）灰度开关 ──────────────────────────────────────
+    # 开：parse 时调视觉 LLM 描述图片并插回 content
+    # 关：parse 行为与接入前一致（不调视觉、content 不变）
+    image_caption_enabled: bool = False
+    image_caption_concurrency: int = 4
+
     # ── test_points 完整性兜底 ──────────────────────────────────────────────────
     # 开：批失败重试 + 单 feature 降级 + 缺额校验（修 9 feature 静默丢失）
     # 关：退回旧行为（失败批静默丢弃）——纯止血，默认开。

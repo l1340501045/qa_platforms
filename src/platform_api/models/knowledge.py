@@ -25,6 +25,7 @@ class Document(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     storage_path: Mapped[str] = mapped_column(String(500), nullable=False)
     image_refs: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="'[]'::jsonb")
+    image_captions: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     embedding_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'pending'")
     folder_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
