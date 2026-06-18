@@ -37,17 +37,7 @@ class CheatSheetExtractorService:
         """从文档实体图谱提取 4 类 cheat sheet。"""
         entities = await self.entity_repo.get_entities_by_document(document_id)
         relations = await self.entity_repo.get_relations_by_document(document_id)
-        by_id = {entity.id: entity for entity in entities}
-
-        items = [
-            *self._extract_must_test(by_id, relations),
-            *self._extract_confusion_pairs(by_id, relations),
-            *self._extract_section_priority(by_id, relations),
-            *self._extract_prd_status(by_id, relations, section_statuses or []),
-        ]
-        for index, item in enumerate(items):
-            item.sort_order = index
-        return items
+        return self._build_items(entities, relations, section_statuses or [])
 
     async def extract_and_save(
         self,
@@ -62,6 +52,23 @@ class CheatSheetExtractorService:
 
         entities = await self.entity_repo.get_entities_by_document(document_id)
         relations = await self.entity_repo.get_relations_by_document(document_id)
+        items = self._build_items(entities, relations, section_statuses or [])
+
+        return await self.cheat_sheet_repo.save_sheet(
+            document_id,
+            system_id,
+            items,
+            source_entity_count=len(entities),
+            source_relation_count=len(relations),
+        )
+
+    def _build_items(
+        self,
+        entities: list,
+        relations: list,
+        section_statuses: list[dict],
+    ) -> list[CheatSheetItemCreate]:
+        """按固定顺序组装 4 类条目，并统一回填 sort_order。"""
         by_id = {entity.id: entity for entity in entities}
         items = [
             *self._extract_must_test(by_id, relations),
@@ -71,14 +78,7 @@ class CheatSheetExtractorService:
         ]
         for index, item in enumerate(items):
             item.sort_order = index
-
-        return await self.cheat_sheet_repo.save_sheet(
-            document_id,
-            system_id,
-            items,
-            source_entity_count=len(entities),
-            source_relation_count=len(relations),
-        )
+        return items
 
     def _extract_must_test(self, by_id: dict, relations: list) -> list[CheatSheetItemCreate]:
         items: list[CheatSheetItemCreate] = []

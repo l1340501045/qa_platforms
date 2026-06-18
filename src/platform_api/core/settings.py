@@ -71,6 +71,7 @@ class Settings(BaseSettings):
     # ②a 期间默认关：未验收前不自动提取、不影响现有生成行为。
     cheat_sheet_extract_enabled: bool = False
     cheat_sheet_injection_enabled: bool = False
+    # 预留给后续批量/自动提取；当前手动 API 触发按单文档同步执行。
     cheat_sheet_extract_concurrency: int = 4
 
     # ── 实体图谱检索开关 ──────────────────────────────────────────────────────
