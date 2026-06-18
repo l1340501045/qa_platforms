@@ -10,18 +10,17 @@
 真实 DB 连接，不 mock。
 """
 
-import pytest
 import uuid
 
-from tests.platform_api.conftest import requires_db
-
-pytestmark = requires_db
-
+import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.database import get_session_factory
 from src.platform_api.services.case_tree_service import CaseTreeService
+from tests.platform_api.conftest import requires_db
+
+pytestmark = requires_db
 
 
 @pytest.fixture
@@ -122,7 +121,8 @@ async def seed_tree_data(db_session: AsyncSession):
         await db_session.execute(
             text(
                 "INSERT INTO testcase.test_cases "
-                "(id, batch_id, title, preconditions, steps, expected_results, priority, dimensions, provenance, trust_level, review_status) "
+                "(id, batch_id, title, preconditions, steps, expected_results, priority, "
+                "dimensions, provenance, trust_level, review_status) "
                 "VALUES (:id, :bid, :title, CAST(:preconds AS jsonb), CAST(:steps AS jsonb), "
                 "CAST(:expected AS jsonb), :pri, CAST(:dims AS jsonb), CAST(:prov AS jsonb), 1, :rs)"
             ),
@@ -272,12 +272,22 @@ async def test_case_tree_includes_pending_review_batches(db_session: AsyncSessio
     await db_session.execute(
         text(
             "INSERT INTO testcase.test_cases "
-            "(id, batch_id, title, preconditions, steps, expected_results, priority, dimensions, provenance, trust_level, review_status) "
-            'VALUES (:id, :bid, :title, \'[]\'::jsonb, \'[{"step_number":1,"action":"test"}]\'::jsonb, '
-            "'[\"ok\"]'::jsonb, 'P0', '[\"functional\"]'::jsonb, "
-            '\'{"derived_from":"t","source_section":"登录模块","trust_level":1}\'::jsonb, 1, \'pending\')'
+            "(id, batch_id, title, preconditions, steps, expected_results, priority, "
+            "dimensions, provenance, trust_level, review_status) "
+            "VALUES (:id, :bid, :title, CAST(:preconditions AS jsonb), CAST(:steps AS jsonb), "
+            "CAST(:expected_results AS jsonb), 'P0', CAST(:dimensions AS jsonb), "
+            "CAST(:provenance AS jsonb), 1, 'pending')"
         ),
-        {"id": case_id, "bid": batch_id, "title": "pending_review批次用例"},
+        {
+            "id": case_id,
+            "bid": batch_id,
+            "title": "pending_review批次用例",
+            "preconditions": "[]",
+            "steps": '[{"step_number":1,"action":"test"}]',
+            "expected_results": '["ok"]',
+            "dimensions": '["functional"]',
+            "provenance": '{"derived_from":"t","source_section":"登录模块","trust_level":1}',
+        },
     )
     await db_session.commit()
 
