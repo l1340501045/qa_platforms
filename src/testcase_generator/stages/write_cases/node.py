@@ -11,35 +11,39 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import List, Literal
+from typing import List
 from uuid import UUID
 
 import yaml
 from pydantic import BaseModel, Field
 
+from src.knowledge_base.repositories.cheat_sheet_repo import CheatSheetRepository
+from src.platform_api.core.database import async_session_factory
 from src.platform_api.core.settings import settings
-
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import (
     GeneratedTestCase,
     TestStep,
-    Provenance,
 )
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.stages.context_utils import (
-    collect_global_sections,
-    CrossFeatureIndex,
-)
-from src.testcase_generator.stages.write_cases.provenance_tagger import (
-    ProvenanceTagger,
-)
-from src.testcase_generator.stages.write_cases.confidence_scorer import (
-    ConfidenceScorer,
-)
 from src.testcase_generator.services.few_shot_retriever import (
     FewShotRetriever,
 )
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.context_utils import (
+    CrossFeatureIndex,
+    collect_global_sections,
+)
+from src.testcase_generator.stages.write_cases.cheat_sheet_inject import (
+    filter_cheat_sheet_for_feature,
+    format_cheat_sheet_for_prompt,
+)
+from src.testcase_generator.stages.write_cases.confidence_scorer import (
+    ConfidenceScorer,
+)
+from src.testcase_generator.stages.write_cases.provenance_tagger import (
+    ProvenanceTagger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +170,19 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 
 输出要求：严格按指定 JSON Schema 输出。"""
 
+CHEAT_SHEET_SYSTEM_PROMPT = """
+
+【如何应用 cheat sheet（审核通过的避坑手册，优先级高于一般联想）】
+- 易混对照：cheat_sheet.confusion_pair 列出的概念必须区分，绝不混写、互套或把同名近义词当成同一字段，
+  除非条目明确说明同一口径。
+- 章节优先级：cheat_sheet.section_priority 给出的局部/同一口径规则必须优先于泛化默认；
+  遇到冲突时按条目的 resolution 处理。
+- PRD 状态：cheat_sheet.prd_status 标记 unreachable/mock/future/tbd 的对象，只能生成
+  “待确认/不可达/本期不实现”类占位或负向断言，绝不编造确定 oracle。
+- 必测清单：cheat_sheet.must_test 是 QA 已确认的必测约束；相关测试点必须覆盖其 rule_text/test_hint，
+  不要把它当成额外灌水来源。
+"""
+
 
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -185,6 +202,21 @@ def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[l
     if len(tps) <= max_per_batch:
         return [tps] if tps else []
     return [tps[i : i + max_per_batch] for i in range(0, len(tps), max_per_batch)]
+
+
+async def _load_approved_cheat_sheet(parsed_context) -> dict:
+    """按文档加载已审核 cheat sheet；开关关或异常时返回空。"""
+    if not settings.cheat_sheet_injection_enabled:
+        return {}
+    document_id = getattr(parsed_context.sources[0], "doc_id", None) if parsed_context.sources else None
+    if document_id is None:
+        return {}
+    try:
+        async with async_session_factory() as session:
+            return await CheatSheetRepository(session).get_approved_for_injection(document_id)
+    except Exception as exc:  # noqa: BLE001 — 注入失败不应阻断用例生成
+        logger.warning("加载 cheat sheet 失败，跳过注入: doc=%s err=%s", document_id, exc)
+        return {}
 
 
 # ─── Node ──────────────────────────────────────────────────────────────────────
@@ -210,6 +242,7 @@ async def generate_cases(
     # 加载 few-shot 样本（硬约束#6，冷启动返回空列表不影响流程）
     retriever = FewShotRetriever()
     few_shot_samples = await retriever.retrieve_samples(system_id, all_feature_types)
+    approved_cheat_sheet = await _load_approved_cheat_sheet(parsed_context)
 
     # 构建 few-shot 注入段（全局共享，只构建一次）
     few_shot_section = ""
@@ -222,6 +255,7 @@ async def generate_cases(
     tp_by_feature: dict[str, list[TestPointSchema]] = defaultdict(list)
     for tp in test_points:
         tp_by_feature[tp.feature_id].append(tp)
+    feature_by_id = {feature.id: feature for feature in parsed_context.features}
 
     # 构建 feature_id → 相关上下文的映射（给足上下文，不粗暴截断）
     feature_context: dict[str, list[dict]] = defaultdict(list)
@@ -348,10 +382,20 @@ async def generate_cases(
                     for tp in batch_tps
                 ]
 
-                full_system_prompt = WRITE_CASES_SYSTEM_PROMPT + few_shot_section
+                cheat_sheet_section = CHEAT_SHEET_SYSTEM_PROMPT if settings.cheat_sheet_injection_enabled else ""
+                full_system_prompt = WRITE_CASES_SYSTEM_PROMPT + cheat_sheet_section + few_shot_section
+                prompt_payload = {"test_points": test_points_data, "requirement_context": relevant_context}
+                if settings.cheat_sheet_injection_enabled:
+                    feature = feature_by_id.get(feature_id)
+                    filtered_cheat_sheet = (
+                        format_cheat_sheet_for_prompt(filter_cheat_sheet_for_feature(feature, approved_cheat_sheet))
+                        if feature
+                        else {}
+                    )
+                    prompt_payload["cheat_sheet"] = filtered_cheat_sheet
 
                 user_content = json.dumps(
-                    {"test_points": test_points_data, "requirement_context": relevant_context},
+                    prompt_payload,
                     ensure_ascii=False,
                     indent=2,
                 )
