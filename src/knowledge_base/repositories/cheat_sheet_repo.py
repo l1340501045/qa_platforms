@@ -50,7 +50,7 @@ class CheatSheetRepository:
         self.session.add(sheet)
         await self.session.flush()
 
-        for item in items:
+        for index, item in enumerate(items):
             previous_item = previous_approved.get((str(item.sheet_type), item.title))
             review_status = CheatSheetReviewStatus.PENDING
             qa_content = None
@@ -80,7 +80,7 @@ class CheatSheetRepository:
                     source_entity_ids=item.source_entity_ids,
                     source_relation_ids=item.source_relation_ids,
                     source_section_refs=item.source_section_refs,
-                    sort_order=item.sort_order,
+                    sort_order=item.sort_order or index,
                 )
             )
 
