@@ -1,9 +1,30 @@
-"""pytest 配置 — 解决 asyncpg event loop 绑定问题"""
+"""pytest 配置 — 解决 asyncpg event loop 绑定问题
+
+集成测试分两类：
+- 需真实 DB：test_callbacks_persist / test_celery_tasks（标 requires_db）
+- 纯 mock：test_real_graph / test_full_pipeline（mock LLM+KB，不需 DB）
+"""
 
 import os
+import socket
+
 import pytest
 
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5434/qa_platforms")
+
+
+def _db_reachable() -> bool:
+    try:
+        with socket.create_connection(("localhost", 5434), timeout=0.2):
+            return True
+    except (OSError, ConnectionRefusedError, TimeoutError):
+        return False
+
+
+requires_db = pytest.mark.skipif(
+    not _db_reachable(),
+    reason="需 PostgreSQL (localhost:5434)，当前环境不可达",
+)
 
 
 @pytest.fixture(autouse=True)

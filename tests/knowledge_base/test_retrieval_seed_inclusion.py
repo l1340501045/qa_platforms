@@ -9,18 +9,19 @@
 """
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from uuid import uuid4
 
 import pytest
 
 from src.knowledge_base.schemas.common import SearchResult
-from src.knowledge_base.services.retrieval_service import RetrievalService
 
 
 def _make_service(seed_doc, graph_results, vector_results=None):
-    """构造一个 sub-service 全部被 mock 的 RetrievalService"""
-    svc = RetrievalService(session=AsyncMock())
+    """构造一个 sub-service 全部被 mock 的 RetrievalService（避免 EmbeddingClient 触发 SOCKS）"""
+    with patch("src.knowledge_base.services.search.vector_search.EmbeddingClient"):
+        from src.knowledge_base.services.retrieval_service import RetrievalService
+        svc = RetrievalService(session=AsyncMock())
     svc.doc_repo.get_by_id = AsyncMock(return_value=seed_doc)
     svc.graph_search.traverse_graph = AsyncMock(return_value=graph_results)
     svc.vector_search.search = AsyncMock(return_value=vector_results or [])
