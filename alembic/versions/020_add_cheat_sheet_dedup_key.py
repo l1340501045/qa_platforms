@@ -15,13 +15,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("cheat_sheet_items", sa.Column("dedup_key", sa.String(length=200), nullable=True), schema="knowledge")
+    op.add_column("cheat_sheet_items", sa.Column("dedup_key", sa.String(length=500), nullable=True), schema="knowledge")
     op.execute("UPDATE knowledge.cheat_sheet_items SET dedup_key = 'legacy:' || id::text WHERE dedup_key IS NULL")
     op.execute("""
         UPDATE knowledge.cheat_sheet_items AS item
         SET dedup_key = item.sheet_type || ':' ||
-            LEAST(source_entity.canonical_key, target_entity.canonical_key) || '|' ||
-            GREATEST(source_entity.canonical_key, target_entity.canonical_key) || '|' ||
+            CASE
+                WHEN item.sheet_type = 'section_priority' THEN
+                    source_entity.canonical_key || '|' || target_entity.canonical_key
+                ELSE
+                    LEAST(source_entity.canonical_key, target_entity.canonical_key) || '|' ||
+                    GREATEST(source_entity.canonical_key, target_entity.canonical_key)
+            END || '|' ||
             relation.relation_type
         FROM knowledge.entity_relations AS relation
         JOIN knowledge.entities AS source_entity ON source_entity.id = relation.source_entity_id

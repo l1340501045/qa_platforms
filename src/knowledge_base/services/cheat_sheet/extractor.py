@@ -284,6 +284,8 @@ def _dedupe_items_by_key(items: list[CheatSheetItemCreate]) -> list[CheatSheetIt
 
 
 def _relation_dedup_key(sheet_type: CheatSheetType, source, target, relation) -> str:
+    if sheet_type == CheatSheetType.SECTION_PRIORITY:
+        return f"{sheet_type}:{source.canonical_key}|{target.canonical_key}|{relation.relation_type}"
     return f"{sheet_type}:{_sorted_key(source.canonical_key, target.canonical_key)}|{relation.relation_type}"
 
 

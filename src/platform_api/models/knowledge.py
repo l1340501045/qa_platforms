@@ -162,7 +162,7 @@ class CheatSheetItem(Base):
     )
     sheet_type: Mapped[str] = mapped_column(String(30), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
-    dedup_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    dedup_key: Mapped[str] = mapped_column(String(500), nullable=False)
     ai_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
     qa_content: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     review_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'pending'")

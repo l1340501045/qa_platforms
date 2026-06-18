@@ -174,7 +174,7 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
     assert priority_item.ai_content["local_section"] == "§5.7.1 定向包名称"
     assert priority_item.ai_content["global_section"] == "§5.0.3 全局字数规则"
     assert "局部规则优先" in priority_item.ai_content["resolution"]
-    assert priority_item.dedup_key == "section_priority:§5.0.3|§5.7.1|section_priority"
+    assert priority_item.dedup_key == "section_priority:§5.7.1|§5.0.3|section_priority"
 
     prd_status_kinds = {item.ai_content["status_kind"] for item in by_type[CheatSheetType.PRD_STATUS]}
     assert prd_status_kinds == {"unreachable", "state_transition"}
@@ -224,6 +224,38 @@ async def test_section_priority_neutral_note_does_not_claim_local_wins():
     resolution = items[0].ai_content["resolution"]
     assert "同一口径" in resolution
     assert "局部规则优先" not in resolution
+
+
+@pytest.mark.asyncio
+async def test_section_priority_dedup_key_preserves_direction():
+    """section_priority 是有向关系，反向关系不能被排序成同一个 dedup_key。"""
+    doc_id = uuid4()
+    local_section = _entity(
+        name="§5.7.1 定向包名称",
+        canonical_key="§5.7.1",
+        entity_type="section",
+        section_ref="§5.7.1",
+    )
+    global_section = _entity(
+        name="§5.0.3 全局字数规则",
+        canonical_key="§5.0.3",
+        entity_type="section",
+        section_ref="§5.0.3",
+    )
+    forward = _relation(local_section, global_section, "section_priority", note="局部优先全局")
+    reverse = _relation(global_section, local_section, "section_priority", note="反向噪声样本")
+    repo = AsyncMock()
+    repo.get_entities_by_document = AsyncMock(return_value=[local_section, global_section])
+    repo.get_relations_by_document = AsyncMock(return_value=[forward, reverse])
+    service = CheatSheetExtractorService(repo)
+
+    items = await service.extract(doc_id)
+
+    assert len(items) == 2
+    assert {item.dedup_key for item in items} == {
+        "section_priority:§5.7.1|§5.0.3|section_priority",
+        "section_priority:§5.0.3|§5.7.1|section_priority",
+    }
 
 
 @pytest.mark.asyncio
