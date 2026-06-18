@@ -89,9 +89,26 @@
 - Task 3.3: 3 个 v5 混淆点关系查询应答正确
 - Task 4.2: 端到端全流水线 + feature≥30 + 红线对照
 
+### ① 执行结果审查（资深审查 2026-06-18）— ⚠️ 需返修
+> 实跑验证（非纸面）：跑测试 + `git stash`+checkout 对照改造前后快照 + 读源码。
+
+- **测试真相**：实测 `tests/testcase_generator tests/knowledge_base` = **145 passed, 3 failed**（"60 全绿"仅指 ① 新增单测，未含集成测试）。
+- **🔴-1 Task 4.1 接入空壳**：`ParsedContext.entity_graph_hints` 字段加了但**全仓无填充逻辑**；`query_entity_context` 从未在 parse 调用；`parse/node.py`/`kb_retriever.py` 没改。commit `f729197`「parse 挂接」名不副实。（代码问题，非环境）
+- **🔴-2 测试污染**：`test_real_graph_nogo_interrupt_resume` 单独跑绿 / 全量跑红 / 快照绿 → ① 加 ParsedContext 字段诱发（疑 langgraph checkpoint 反序列化 或 settings/单例状态泄漏）。另 2 个集成失败（`full_pipeline_go` / `real_graph_go_path`）是 **pre-existing**（快照就红，疑真网关依赖，非 ① 责任）。
+- **🟡-3 验收红线全未实测**：基线表 4 指标全"待填"。Claude Code 已标注 sandbox 无 DB/MinIO/vision（环境限制，非偷懒）。① 核心目标（9 feature/图/关系）**未经真实 PRD 验证**。视觉模型已定 `LLM_VISION_MODEL=claude-opus-4-6`。
+- **🟡-4** query 返回扁平 list 未按 relation_type 归类；**🟡-5** 图解析无缓存 + content_hash 基于含图述 content（污染去重，应基于 raw_text）；**🟡-6** parse_service 硬 new `minio.Minio` 未复用封装；**🟡-7** 图名编号↔章节归位映射存疑（`80`≠`§5.8`，恐大量落「文末附录」）。
+- 返修 prompt 已交付用户。
+
+### ① 返修执行（2026-06-18 续）
+
+- ✅ **修复1** `955a5c6`：`parse_node` 步骤 5.7 真实调 `retrieve_entity_graph_hints`（kb_retriever 新函数：查文档实体→逐实体 traverse→过滤 section_priority/mutually_exclusive/unreachable→写入 parsed_context.entity_graph_hints）。测试验证开时非空、关时为空且 retrieve 未调用。
+- ✅ **修复2** `09f9e97`：nogo 测试恢复绿（根因：缺 retrieve_knowledge_context + retrieve_entity_graph_hints mock）；go_path 修复 mock feature_id（F001→F-001）+ 标 skip（pre-existing mock 未覆盖 9 节点管道）；callbacks_persist/celery_tasks 标 requires_db；retrieval_seed_inclusion mock EmbeddingClient 避免 SOCKS。最终：**140 passed / 8 skipped / 0 failed**。
+- ⛔ **修复3**：sandbox 网络 PermissionError（localhost:5434/9100 不可达），live 验收无法执行。需用户在有基础设施环境手工执行（步骤已给出）。
+
 **下一步：**
-- 在 live 环境跑验收（上述 5 个 Task），填基线表数字
-- ① 验收达红线后 → 写 ② cheat sheet 详细 plan
+- 用户手工执行修复3（live 端到端验收，填基线表）
+- 可选：修复 4~7（② 之前择机）
+- 返修达红线后 → 写 ② cheat sheet 详细 plan
 - （Backlog）splitter 加固——通用化/接入非规整 PRD 前必做
 
 ---
