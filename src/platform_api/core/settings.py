@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     entity_graph_enabled: bool = False
     entity_extract_concurrency: int = 4
 
+    # ── 实体图谱检索开关 ──────────────────────────────────────────────────────
+    # 开：生成流水线 parse 阶段挂接实体图谱关系提示
+    # 关：查询返回空，不影响生成
+    entity_retrieval_enabled: bool = False
+
     # ── test_points 完整性兜底 ──────────────────────────────────────────────────
     # 开：批失败重试 + 单 feature 降级 + 缺额校验（修 9 feature 静默丢失）
     # 关：退回旧行为（失败批静默丢弃）——纯止血，默认开。

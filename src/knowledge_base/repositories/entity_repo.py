@@ -148,6 +148,31 @@ class EntityRepository:
             for row in result.fetchall()
         ]
 
+    async def find_entity_by_name(self, name: str, system_id: UUID) -> Entity | None:
+        """按名称/canonical_key 模糊匹配定位实体"""
+        # 先精确匹配 canonical_key
+        result = await self.session.execute(
+            select(Entity).where(Entity.system_id == system_id, Entity.canonical_key == name)
+        )
+        entity = result.scalars().first()
+        if entity:
+            return entity
+
+        # 再模糊匹配 name (ILIKE)
+        result = await self.session.execute(
+            select(Entity).where(Entity.system_id == system_id, Entity.name.ilike(f"%{name}%"))
+        )
+        return result.scalars().first()
+
+    async def get_entities_by_ids(self, entity_ids: list[UUID]) -> list[Entity]:
+        """批量获取实体"""
+        if not entity_ids:
+            return []
+        result = await self.session.execute(
+            select(Entity).where(Entity.id.in_(entity_ids))
+        )
+        return list(result.scalars().all())
+
     async def get_entities_by_document(self, document_id: UUID) -> list[Entity]:
         """获取文档的所有实体"""
         result = await self.session.execute(
