@@ -3,10 +3,10 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, Index, String, Text, DateTime, SmallInteger, Integer, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Integer, SmallInteger, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column
 
 from src.platform_api.models.public import Base
 
@@ -125,6 +125,54 @@ class EntityRelation(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_quote: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CheatSheet(Base):
+    __tablename__ = "cheat_sheets"
+    __table_args__ = {"schema": "knowledge"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge.documents.id", ondelete="CASCADE"), nullable=False
+    )
+    system_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'draft'")
+    source_entity_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_relation_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extracted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CheatSheetItem(Base):
+    __tablename__ = "cheat_sheet_items"
+    __table_args__ = (
+        Index("ix_cheat_sheet_items_sheet_type", "sheet_id", "sheet_type"),
+        Index("ix_cheat_sheet_items_sheet_review", "sheet_id", "review_status"),
+        {"schema": "knowledge"},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    sheet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge.cheat_sheets.id", ondelete="CASCADE"), nullable=False
+    )
+    sheet_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    ai_content: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    qa_content: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'pending'")
+    review_tier: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_entity_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    source_relation_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    source_section_refs: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class PrototypeLink(Base):

@@ -87,3 +87,20 @@ class EntityRelationType(StrEnum):
     UNREACHABLE = "unreachable"
     BELONGS_TO = "belongs_to"
     TRANSITIONS_TO = "transitions_to"
+
+
+class CheatSheetType(StrEnum):
+    """cheat sheet 条目类型"""
+
+    MUST_TEST = "must_test"
+    CONFUSION_PAIR = "confusion_pair"
+    SECTION_PRIORITY = "section_priority"
+    PRD_STATUS = "prd_status"
+
+
+class CheatSheetReviewStatus(StrEnum):
+    """cheat sheet 审核状态"""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
