@@ -52,6 +52,8 @@ async def retrieve_entity_graph_hints(
 ) -> list[dict]:
     """查询文档的实体图谱，返回高价值关系摘要（section_priority/mutually_exclusive/unreachable）。
 
+    只取一跳直接关系（get_relations_by_document），不做多跳 traverse——
+    避免 depth=2 间接关系被错误归因到 seed 实体（A→B→C 不应产出「A 与 C」）。
     供 parse_node 填充 ParsedContext.entity_graph_hints。
     """
     from src.knowledge_base.repositories.entity_repo import EntityRepository
@@ -63,38 +65,27 @@ async def retrieve_entity_graph_hints(
         if not entities:
             return []
 
+        relations = await repo.get_relations_by_document(document_id)
+        emap = {e.id: e for e in entities}
+
         hints: list[dict] = []
-        seen_pairs: set[tuple[str, str, str]] = set()
-
-        for entity in entities:
-            neighbors = await repo.traverse_entities(entity.id, max_depth=2)
-            for neighbor_id, depth, relation_type, direction in neighbors:
-                if relation_type not in _HIGH_VALUE_RELATION_TYPES:
-                    continue
-
-                neighbor_entities = await repo.get_entities_by_ids([neighbor_id])
-                if not neighbor_entities:
-                    continue
-                neighbor = neighbor_entities[0]
-
-                pair_key = (entity.canonical_key, neighbor.canonical_key, relation_type)
-                if pair_key in seen_pairs:
-                    continue
-                seen_pairs.add(pair_key)
-
-                hints.append({
-                    "relation_type": relation_type,
-                    "source_entity": entity.canonical_key,
-                    "target_entity": neighbor.canonical_key,
-                    "source_name": entity.name,
-                    "target_name": neighbor.name,
-                    "note": f"{entity.name} → {neighbor.name}",
-                    "direction": direction,
-                    "depth": depth,
-                })
+        for r in relations:
+            if r.relation_type not in _HIGH_VALUE_RELATION_TYPES:
+                continue
+            s, t = emap.get(r.source_entity_id), emap.get(r.target_entity_id)
+            if not s or not t:
+                continue
+            hints.append({
+                "relation_type": r.relation_type,
+                "source_entity": s.canonical_key,
+                "target_entity": t.canonical_key,
+                "source_name": s.name,
+                "target_name": t.name,
+                "note": r.note or f"{s.name} → {t.name}",
+            })
 
         logger.info(
-            "entity_graph_hints: doc=%s entities=%d hints=%d",
-            document_id, len(entities), len(hints),
+            "entity_graph_hints: doc=%s entities=%d relations=%d hints=%d",
+            document_id, len(entities), len(relations), len(hints),
         )
         return hints
