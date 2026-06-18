@@ -67,6 +67,12 @@ class Settings(BaseSettings):
     entity_graph_enabled: bool = True
     entity_extract_concurrency: int = 4
 
+    # ── cheat sheet 提取/注入灰度开关 ────────────────────────────────────────
+    # ②a 期间默认关：未验收前不自动提取、不影响现有生成行为。
+    cheat_sheet_extract_enabled: bool = False
+    cheat_sheet_injection_enabled: bool = False
+    cheat_sheet_extract_concurrency: int = 4
+
     # ── 实体图谱检索开关 ──────────────────────────────────────────────────────
     # 开：生成流水线 parse 阶段挂接实体图谱关系提示
     # 关：查询返回空，不影响生成

@@ -5,9 +5,11 @@ from __future__ import annotations
 from collections.abc import Iterable
 from uuid import UUID
 
+from src.knowledge_base.repositories.cheat_sheet_repo import CheatSheetRepository
 from src.knowledge_base.repositories.entity_repo import EntityRepository
 from src.knowledge_base.schemas.cheat_sheet import CheatSheetItemCreate
 from src.platform_api.models.enums import CheatSheetType, EntityRelationType, EntityType
+from src.platform_api.models.knowledge import CheatSheet
 
 _REVIEW_TIER_MUST = "must"
 _REVIEW_TIER_SAMPLE = "sample"
@@ -17,8 +19,14 @@ _PRD_STATUS_KINDS = {"mock", "future", "tbd"}
 class CheatSheetExtractorService:
     """把实体图谱关系提炼成 QA 可审核 cheat sheet 条目。"""
 
-    def __init__(self, entity_repo: EntityRepository):
+    def __init__(
+        self,
+        entity_repo: EntityRepository,
+        *,
+        cheat_sheet_repo: CheatSheetRepository | None = None,
+    ):
         self.entity_repo = entity_repo
+        self.cheat_sheet_repo = cheat_sheet_repo
 
     async def extract(
         self,
@@ -40,6 +48,37 @@ class CheatSheetExtractorService:
         for index, item in enumerate(items):
             item.sort_order = index
         return items
+
+    async def extract_and_save(
+        self,
+        document_id: UUID,
+        system_id: UUID,
+        *,
+        section_statuses: list[dict] | None = None,
+    ) -> CheatSheet:
+        """提取并保存为新的 cheat sheet version。"""
+        if self.cheat_sheet_repo is None:
+            raise RuntimeError("cheat_sheet_repo is required for extract_and_save")
+
+        entities = await self.entity_repo.get_entities_by_document(document_id)
+        relations = await self.entity_repo.get_relations_by_document(document_id)
+        by_id = {entity.id: entity for entity in entities}
+        items = [
+            *self._extract_must_test(by_id, relations),
+            *self._extract_confusion_pairs(by_id, relations),
+            *self._extract_section_priority(by_id, relations),
+            *self._extract_prd_status(by_id, relations, section_statuses or []),
+        ]
+        for index, item in enumerate(items):
+            item.sort_order = index
+
+        return await self.cheat_sheet_repo.save_sheet(
+            document_id,
+            system_id,
+            items,
+            source_entity_count=len(entities),
+            source_relation_count=len(relations),
+        )
 
     def _extract_must_test(self, by_id: dict, relations: list) -> list[CheatSheetItemCreate]:
         items: list[CheatSheetItemCreate] = []

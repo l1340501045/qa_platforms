@@ -195,3 +195,39 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
 
     repo.get_entities_by_document.assert_awaited_once_with(doc_id)
     repo.get_relations_by_document.assert_awaited_once_with(doc_id)
+
+
+@pytest.mark.asyncio
+async def test_extract_and_save_persists_items_with_source_counts():
+    """extract_and_save 编排提取结果落库，并记录实体/关系来源数量。"""
+    doc_id = uuid4()
+    system_id = uuid4()
+    rule = _entity(
+        name="必测规则",
+        canonical_key="rule_required",
+        entity_type="rule",
+        description="必须覆盖必测规则",
+    )
+    field = _entity(name="字段A", canonical_key="field_a", entity_type="field", section_ref="§1")
+    relation = _relation(rule, field, "rule_constrains")
+
+    entity_repo = AsyncMock()
+    entity_repo.get_entities_by_document = AsyncMock(return_value=[rule, field])
+    entity_repo.get_relations_by_document = AsyncMock(return_value=[relation])
+    cheat_sheet_repo = AsyncMock()
+    saved_sheet = MagicMock()
+    saved_sheet.id = uuid4()
+    saved_sheet.version = 1
+    cheat_sheet_repo.save_sheet = AsyncMock(return_value=saved_sheet)
+    service = CheatSheetExtractorService(entity_repo, cheat_sheet_repo=cheat_sheet_repo)
+
+    result = await service.extract_and_save(doc_id, system_id)
+
+    assert result is saved_sheet
+    cheat_sheet_repo.save_sheet.assert_awaited_once()
+    _, args, kwargs = cheat_sheet_repo.save_sheet.mock_calls[0]
+    assert args[0] == doc_id
+    assert args[1] == system_id
+    assert len(args[2]) == 1
+    assert kwargs["source_entity_count"] == 2
+    assert kwargs["source_relation_count"] == 1
