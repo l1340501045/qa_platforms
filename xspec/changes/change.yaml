@@ -1,0 +1,57 @@
+# 变更元数据（机器可读）
+# 说明：此文件由 /xf/brainstorm 生成，后续步骤持续更新 phase 字段。
+
+id: "CHG-20260609-001"
+name: "用例可视化与平台信息架构重构"
+description: "解决用例生成后无处查看的系统缺陷，重构平台信息架构，建设完整的用例查看、版本追溯和通知体验"
+
+status: "in-progress"
+phase: "implement"
+
+project_profile: "general"
+
+priority: "P0"
+created_at: "2026-06-09"
+updated_at: "2026-06-10"
+author: "echo_lacey"
+
+source_doc: "Playwright 探索 http://localhost:3000/ 发现的系统缺陷"
+
+scope:
+  include:
+    - "信息架构重构：侧边栏扩展、新增用例中心入口、系统详情多 Tab"
+    - "树形用例库：PRD → 功能模块 → 用例三级树形展开（模块层复用 provenance）"
+    - "用例详情面板：展示全字段（步骤/前置条件/预期结果/可信度/溯源）"
+    - "通知机制：全局铃铛 + 站内消息列表，完成/失败推送"
+    - "面包屑导航：所有子页面有面包屑，消灭死胡同"
+    - "全局搜索：跨系统/跨文档搜索用例"
+    - "导出体验优化：下拉选择替代手填 UUID，工作台快捷导出"
+    - "流水线可观测性：消费 stage_artifacts 展示阶段状态/耗时/失败原因，支持从失败步重试"
+    - "用例身份锚点（混合方案）：确定性规则 + AI 语义兜底，建立逻辑用例 ID"
+    - "单条用例版本化：版本记录 + 演化原因 + 差异对比视图"
+    - "trust_level 语义修正：统一前后端档位定义"
+    - "跨版本 review 状态继承规则设计"
+  exclude:
+    - "多人实时协作编辑"
+    - "Playwright 自动化脚本生成动线（仅预留锚点）"
+    - "移动端适配"
+    - "CI/CD 集成"
+    - "数据分析报表"
+
+affected_modules:
+  - name: "platform-web"
+    change_type: "modified"
+    module_type: "web-frontend"
+    summary: "信息架构重构（侧边栏/路由/多Tab）、用例中心页面（树形+详情面板）、通知铃铛、全局搜索、面包屑导航、导出优化、可观测性展示；第二段增加版本历史/差异对比视图"
+
+  - name: "platform-api"
+    change_type: "modified"
+    module_type: "web-backend"
+    summary: "批次列表 API、用例树形 API、通知消息 API、搜索 API、导出下拉选项 API、trust_level 语义修正；第二段增加逻辑用例 ID + 版本记录 API、锚点匹配 API"
+
+  - name: "testcase-generator"
+    change_type: "modified"
+    module_type: "ai-agent"
+    summary: "第一段不动（禁止改生成流水线）；第二段改造 iteration_service 建立逻辑用例 ID + 版本写入，对齐 quality_flywheel"
+
+depends_on: []

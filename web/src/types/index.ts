@@ -417,3 +417,102 @@ export interface CreateExportRequest {
   system_id?: string;
   format: ExportFormat;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 搜索相关类型（契约 §3.8）
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 搜索结果条目 */
+export interface SearchResultItem {
+  id: string;
+  title: string;
+  priority: Priority;
+  trust_level: number;
+  review_status: ReviewStatus;
+  system_id: string;
+  system_name: string;
+  document_id: string;
+  document_title: string;
+  batch_id: string;
+  score: number;
+  created_at: string;
+}
+
+/** 搜索响应 */
+export interface SearchResponse extends PaginatedData<SearchResultItem> {
+  query: string;
+}
+
+/** 搜索请求参数 */
+export interface SearchParams {
+  q: string;
+  system_id?: string;
+  priority?: Priority;
+  review_status?: ReviewStatus;
+  page?: number;
+  per_page?: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 通知相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 通知类型 */
+export type NotificationType = 'batch_completed' | 'batch_failed' | 'batch_suspended';
+
+/** 通知条目 */
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  read: boolean;
+  actor: string;
+  created_at: string;
+}
+
+/** 未读数响应 */
+export interface UnreadCountResponse {
+  count: number;
+}
+
+/** 全部标记已读响应 */
+export interface MarkAllReadResponse {
+  updated_count: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 用例树相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 用例树节点 — 用例级 */
+export interface CaseTreeCase {
+  id: string;
+  title: string;
+  priority: Priority;
+  trust_level: number;
+  review_status: ReviewStatus;
+}
+
+/** 用例树节点 — 模块级 */
+export interface CaseTreeModule {
+  module_name: string;
+  case_count: number;
+  cases: CaseTreeCase[];
+}
+
+/** 用例树节点 — 文档级 */
+export interface CaseTreeDocument {
+  document_id: string;
+  document_title: string;
+  modules: CaseTreeModule[];
+}
+
+/** 用例树请求参数 */
+export interface CaseTreeParams {
+  batch_id?: string;
+  priority?: Priority;
+  review_status?: ReviewStatus;
+}

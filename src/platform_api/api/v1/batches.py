@@ -22,12 +22,22 @@ from src.platform_api.schemas.batch import (
 from src.platform_api.services.clarification_service import ClarificationService
 from src.platform_api.services.generation_service import GenerationService
 from src.platform_api.services.review_service import ReviewService
+from src.platform_api.services.batch_list_service import BatchListService
+from src.platform_api.services.retry_service import RetryService
 
 router = APIRouter(tags=["批次管理"])
 
 
 def _get_generation_service(session: AsyncSession = Depends(get_session)) -> GenerationService:
     return GenerationService(session)
+
+
+def _get_batch_list_service(session: AsyncSession = Depends(get_session)) -> BatchListService:
+    return BatchListService(session)
+
+
+def _get_retry_service(session: AsyncSession = Depends(get_session)) -> RetryService:
+    return RetryService(session)
 
 
 def _get_clarification_service(session: AsyncSession = Depends(get_session)) -> ClarificationService:
@@ -67,6 +77,18 @@ async def trigger_generation(
     return JSONResponse(status_code=202, content=success({"batch_id": str(batch_resp.id)}))
 
 
+# ─── 批次选项（导出用下拉） ───
+
+
+@router.get("/batches/options")
+async def list_batch_options(
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """获取可导出的批次选项列表（前端下拉选择器）"""
+    options = await service.list_batch_options()
+    return success(options)
+
+
 # ─── 获取批次详情（合并响应：batch + stage_progress + cases + open_questions） ───
 
 
@@ -79,6 +101,9 @@ async def get_batch_detail(
     session: AsyncSession = Depends(get_session),
 ):
     """获取批次完整详情（合并批次信息、阶段进度、用例列表）"""
+    from sqlalchemy import select
+    from src.platform_api.models.testcase import StageArtifact
+
     gen_service = GenerationService(session)
     review_service = ReviewService(session)
 
@@ -88,9 +113,30 @@ async def get_batch_detail(
     # 获取阶段进度（获取 batch_status 含 open_questions）
     status_resp = await gen_service.get_batch_status(batch_id)
 
-    # 构建 stage_progress
+    # 查询所有 stage_artifacts 用于可观测性透传
+    artifacts_stmt = select(StageArtifact).where(StageArtifact.batch_id == batch_id).order_by(StageArtifact.created_at)
+    artifacts_result = await session.execute(artifacts_stmt)
+    artifacts_map = {a.stage: a for a in artifacts_result.scalars().all()}
+
+    # 构建 stage_progress（含增强字段）
     current_stage = batch_resp.current_stage
     stages = _build_stage_progress(current_stage, batch_resp.status)
+
+    # 透传 stage_artifacts 的可观测性字段
+    for stage in stages:
+        artifact = artifacts_map.get(stage["name"])
+        if artifact:
+            stage["duration_ms"] = artifact.duration_ms
+            stage["started_at"] = artifact.started_at.isoformat() if artifact.started_at else None
+            stage["completed_at"] = artifact.completed_at.isoformat() if artifact.completed_at else None
+            stage["error_message"] = (
+                artifact.artifact.get("error") if artifact.status == "failed" and artifact.artifact else None
+            )
+        else:
+            stage["duration_ms"] = None
+            stage["started_at"] = None
+            stage["completed_at"] = None
+            stage["error_message"] = None
 
     # 计算进度汇总字段
     completed_stages = sum(1 for s in stages if s["status"] == "completed")
@@ -306,3 +352,16 @@ def _build_stage_progress(current_stage: str | None, batch_status: str) -> list[
                 stages.append({"name": stage_name, "status": "completed"})
 
     return stages
+
+
+# ─── 失败重试 ───
+
+
+@router.post("/batches/{batch_id}/retry")
+async def retry_batch(
+    batch_id: UUID,
+    service: RetryService = Depends(_get_retry_service),
+):
+    """从失败阶段重试批次生成任务"""
+    result = await service.retry_batch(batch_id)
+    return success(result)

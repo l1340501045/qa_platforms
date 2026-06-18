@@ -12,6 +12,8 @@ import type {
   CreateSystemRequest,
   UpdateSystemRequest,
   CreateSystemAssociationRequest,
+  CaseTreeDocument,
+  CaseTreeParams,
 } from '../types';
 
 /** 创建系统 POST /systems */
@@ -64,4 +66,39 @@ export async function deleteSystemAssociation(
   assocId: string,
 ): Promise<void> {
   await api.delete(`/systems/${systemId}/associations/${assocId}`);
+}
+
+/** 获取系统级用例树 GET /systems/:id/case-tree */
+export async function getCaseTree(
+  systemId: string,
+  params?: CaseTreeParams,
+): Promise<CaseTreeDocument[]> {
+  const res = await api.get(`/systems/${systemId}/case-tree`, { params });
+  return res.data.tree;
+}
+
+/** 系统选项列表 GET /systems/options */
+export async function listSystemOptions(): Promise<Array<{ id: string; name: string }>> {
+  const res = await api.get('/systems/options');
+  return res.data;
+}
+
+/** 系统下批次列表（用于批次切换器） GET /systems/:id/batches */
+export interface SystemBatchItem {
+  id: string;
+  document_id: string;
+  document_title: string;
+  status: string;
+  total_cases: number | null;
+  created_at: string;
+}
+
+export async function listSystemBatches(
+  systemId: string,
+  params?: { page?: number; per_page?: number; status?: string },
+): Promise<{ items: SystemBatchItem[]; total: number }> {
+  const res = await api.get(`/systems/${systemId}/batches`, {
+    params: { page: 1, per_page: 100, ...params },
+  });
+  return res.data;
 }

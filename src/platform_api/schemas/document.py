@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 # ─── 文档类型枚举 ───
@@ -48,6 +48,12 @@ class DocumentResponse(BaseModel):
     image_refs: dict | list
     created_at: datetime
     updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> str:
+        """前端兼容字段：映射 embedding_status → status"""
+        return self.embedding_status
 
     model_config = {"from_attributes": True, "populate_by_name": True}
 

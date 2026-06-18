@@ -2,7 +2,9 @@
 
 固化自离线探针 `.qa_probe/rule_extract/extract_rules.py`：
   - 并发抽取（信号量限流），单元失败隔离（不抛、计入 failed_units）；
-  - 汇总时统一编号 R-001.. 并回填来源模块标题。
+  - 汇总时统一编号 R-001.. 并回填来源模块标题；
+  - **同源段落合并**（P0-1 修复）：单元内 source_quote 在原文中字符距离 ≤ 阈值
+    的连续规则视为同一段落多次切片，强制合并为一条规则——治灌水第一根因。
 """
 
 from __future__ import annotations
@@ -11,9 +13,16 @@ import asyncio
 import json
 import logging
 
-from src.testcase_generator.schemas.rule import RuleItem, RuleLedger, UnitRules
+from src.testcase_generator.schemas.rule import ExtractedRule, RuleItem, RuleLedger, UnitRules
 
 logger = logging.getLogger(__name__)
+
+
+# 同源段落合并阈值：两条规则的 source_quote 在 unit 原文中的最近 char 距离 ≤ 此值时
+# 视为同一段落的多次切片，强制合并为一条规则。
+# 200 字 ≈ 1-2 个段落或一个 list/table 块的范围；F-008 §5.6.6 删除二次确认（10 拆 1）、
+# F-009 §5.7 过滤时间字段联动（6 拆 1）等典型同源拆分均能命中。
+_SAME_PARAGRAPH_DIST = 200
 
 
 _SYS = """角色：你是资深测试分析师。下面给你某 PRD 的【一个模块的完整原文】和一份全局摘要。
@@ -30,6 +39,91 @@ _SYS = """角色：你是资深测试分析师。下面给你某 PRD 的【一�
 严格按指定 JSON Schema 输出。"""
 
 
+def _quote_offset_in_text(quote: str, text: str) -> int:
+    """source_quote 在原文中的首次出现位置；找不到返回 -1。
+
+    模糊匹配优先：完整片段命中失败时退回前 30 个非空白字符的子串匹配，吸收 PRD 原文与
+    LLM 输出之间的全/半角、空白、标点轻微差异。"""
+    if not quote or not text:
+        return -1
+    pos = text.find(quote)
+    if pos >= 0:
+        return pos
+    # 模糊：取 quote 的前 30 个非空白字符做子串匹配
+    short = "".join(ch for ch in quote if not ch.isspace())[:30]
+    if not short:
+        return -1
+    return text.find(short)
+
+
+def _merge_same_paragraph_rules(
+    rules: list[ExtractedRule], unit_text: str
+) -> tuple[list[ExtractedRule], int]:
+    """同 unit 内相邻规则若 source_quote 在原文位置距离 ≤ _SAME_PARAGRAPH_DIST 则合并。
+
+    Returns:
+        (merged_rules, dropped_count)
+    """
+    if len(rules) <= 1 or not unit_text:
+        return list(rules), 0
+
+    # 计算每条规则 source_quote 在 unit_text 中的位置；找不到的位置标 -1
+    indexed = []
+    for r in rules:
+        pos = _quote_offset_in_text(r.source_quote, unit_text)
+        indexed.append((pos, r))
+
+    # 按 pos 升序（找不到的 -1 留尾），同段落聚类
+    located = [(p, r) for p, r in indexed if p >= 0]
+    not_located = [r for p, r in indexed if p < 0]
+    located.sort(key=lambda x: x[0])
+
+    if not located:
+        return list(rules), 0
+
+    merged: list[ExtractedRule] = []
+    cur_pos, cur_rule = located[0]
+    cur_quotes = [cur_rule.source_quote] if cur_rule.source_quote else []
+    cur_rules_text = [cur_rule.rule]
+    cur_category = cur_rule.category
+    dropped = 0
+
+    for pos, r in located[1:]:
+        if pos - cur_pos <= _SAME_PARAGRAPH_DIST:
+            # 同段落：合并（拼 rule 文本，保留首条 source_quote/category）
+            if r.rule and r.rule not in cur_rules_text:
+                cur_rules_text.append(r.rule)
+            if r.source_quote and r.source_quote not in cur_quotes:
+                cur_quotes.append(r.source_quote)
+            dropped += 1
+            cur_pos = pos  # 滑动 anchor，让长段落多条仍可串起来
+            continue
+        # 不同段落：flush 当前
+        merged.append(
+            ExtractedRule(
+                rule="；".join(cur_rules_text),
+                source_quote=cur_quotes[0] if cur_quotes else "",
+                category=cur_category,
+            )
+        )
+        cur_pos = pos
+        cur_rule = r
+        cur_quotes = [r.source_quote] if r.source_quote else []
+        cur_rules_text = [r.rule]
+        cur_category = r.category
+
+    merged.append(
+        ExtractedRule(
+            rule="；".join(cur_rules_text),
+            source_quote=cur_quotes[0] if cur_quotes else "",
+            category=cur_category,
+        )
+    )
+    # source_quote 找不到的规则原样保留（不参与合并）
+    merged.extend(not_located)
+    return merged, dropped
+
+
 async def _extract_one(client, sem: asyncio.Semaphore, unit: dict, digest: str) -> dict:
     """抽取单个模块单元；失败隔离（返回 ok=False，不抛）。"""
     user = json.dumps(
@@ -43,10 +137,21 @@ async def _extract_one(client, sem: asyncio.Semaphore, unit: dict, digest: str) 
     async with sem:
         try:
             out: UnitRules = await client.generate_structured(_SYS, user, UnitRules, temperature=0.2)
-            return {"title": unit["title"], "ok": True, "rules": out.rules}
         except Exception as e:  # noqa: BLE001 — 单元失败隔离：不让一个坏单元拖垮整批
             logger.warning("规则抽取单元失败（已隔离）: %s — %s: %s", unit.get("title"), type(e).__name__, e)
             return {"title": unit["title"], "ok": False, "error": str(e), "rules": []}
+
+    # P0-1 同源段落合并：unit 内 source_quote 在原文位置 ≤ 200 char 视同一段落
+    merged_rules, dropped = _merge_same_paragraph_rules(out.rules, unit.get("text", ""))
+    if dropped:
+        logger.info(
+            "rule_extract 同源合并: %s — %d→%d (合并 %d 条同段落规则)",
+            unit.get("title"),
+            len(out.rules),
+            len(merged_rules),
+            dropped,
+        )
+    return {"title": unit["title"], "ok": True, "rules": merged_rules}
 
 
 async def extract_rules(units: list[dict], digest: str, client, concurrency: int = 4) -> RuleLedger:

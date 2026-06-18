@@ -1,9 +1,12 @@
 import { Layout, Menu } from 'antd';
 import {
+  ApartmentOutlined,
   AppstoreOutlined,
   ExportOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import NotificationBell from '../components/NotificationBell';
 
 const { Sider, Content, Header } = Layout;
 
@@ -12,6 +15,16 @@ const menuItems = [
     key: '/systems',
     icon: <AppstoreOutlined />,
     label: '系统管理',
+  },
+  {
+    key: '/case-library',
+    icon: <ApartmentOutlined />,
+    label: '用例库',
+  },
+  {
+    key: '/search',
+    icon: <SearchOutlined />,
+    label: '用例搜索',
   },
   {
     key: '/exports',
@@ -24,11 +37,21 @@ function MainLayout() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // 匹配侧边栏高亮：/systems, /systems/:id/documents, /documents/:id, /batches/:id 都高亮系统管理
+  // 匹配侧边栏高亮
   const pathname = location.pathname;
   let selectedKey = '/systems';
   if (pathname.startsWith('/exports')) {
     selectedKey = '/exports';
+  } else if (pathname.startsWith('/search')) {
+    selectedKey = '/search';
+  } else if (pathname.startsWith('/case-library')) {
+    selectedKey = '/case-library';
+  } else if (
+    pathname.startsWith('/systems') ||
+    pathname.startsWith('/documents') ||
+    pathname.startsWith('/batches')
+  ) {
+    selectedKey = '/systems';
   }
 
   return (
@@ -63,9 +86,11 @@ function MainLayout() {
             borderBottom: '1px solid #f0f0f0',
             display: 'flex',
             alignItems: 'center',
+            justifyContent: 'space-between',
           }}
         >
           <h2 style={{ margin: 0, fontSize: 16 }}>QA 智能测试平台</h2>
+          <NotificationBell />
         </Header>
         <Content style={{ margin: 24, padding: 24, background: '#fff', borderRadius: 8, overflow: 'auto' }}>
           <Outlet />

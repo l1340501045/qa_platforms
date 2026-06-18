@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
+  Alert,
   Badge,
   Button,
   Input,
@@ -26,6 +27,7 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 
 import { useTestcaseStore } from '../../stores/testcaseStore';
+import CaseDetailDrawer from '../../components/CaseDetailDrawer';
 import type {
   BatchStatus,
   ClarifyAnswer,
@@ -77,11 +79,11 @@ const PRIORITY_COLOR: Record<string, string> = {
   P3: 'default',
 };
 
-// ─── 可信度颜色 ───
-function getTrustColor(level: number): string {
-  if (level >= 0.8) return '#52c41a';
-  if (level >= 0.6) return '#faad14';
-  return '#f5222d';
+// ─── 可信度（契约 §6：1=最可信/绿，5=最不可信/红） ───
+function getTrustDisplay(level: number): { color: string; label: string } {
+  if (level <= 2) return { color: '#52c41a', label: '高可信' };
+  if (level === 3) return { color: '#faad14', label: '中可信' };
+  return { color: '#f5222d', label: '低可信' };
 }
 
 // ─── Review 状态 Tag ───
@@ -113,6 +115,7 @@ const Workbench: React.FC = () => {
     submitClarification,
     reviewCase,
     triggerIterate,
+    retryBatch,
     archiveBatch,
     clearBatch,
   } = useTestcaseStore();
@@ -125,6 +128,8 @@ const Workbench: React.FC = () => {
   const [modifyCaseId, setModifyCaseId] = useState<string | null>(null);
   const [modifyComment, setModifyComment] = useState('');
   const [modifySubmitting, setModifySubmitting] = useState(false);
+  const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+  const [retrySubmitting, setRetrySubmitting] = useState(false);
 
   // Ref to track if gate modal was auto-shown for current suspended state
   const gateAutoShownRef = useRef(false);
@@ -152,7 +157,12 @@ const Workbench: React.FC = () => {
   // ─── 根据状态决定是否轮询 ───
   useEffect(() => {
     if (!batchId || !batch) return;
-    if (batch.status === 'running' || batch.status === 'suspended' || batch.status === 'completed') {
+    if (
+      batch.status === 'pending' ||
+      batch.status === 'running' ||
+      batch.status === 'suspended' ||
+      batch.status === 'completed'
+    ) {
       startPolling(batchId);
     }
     return () => {
@@ -280,6 +290,20 @@ const Workbench: React.FC = () => {
     }
   }, [modifyCaseId, modifyComment, reviewCase]);
 
+  // ─── 重试/重新入队 ───
+  const handleRetry = useCallback(async () => {
+    if (!batchId) return;
+    setRetrySubmitting(true);
+    try {
+      await retryBatch(batchId);
+      message.success('任务已重新入队，等待 Worker 处理');
+    } catch {
+      // 错误 toast 已由全局拦截器处理
+    } finally {
+      setRetrySubmitting(false);
+    }
+  }, [batchId, retryBatch]);
+
   // ─── 触发迭代 ───
   const handleIterate = useCallback(async () => {
     if (!batchId) return;
@@ -368,6 +392,9 @@ const Workbench: React.FC = () => {
         key: 'title',
         ellipsis: true,
         width: '30%',
+        render: (text: string, record: TestCase) => (
+          <a onClick={() => setDetailCaseId(record.id)}>{text}</a>
+        ),
       },
       {
         title: '优先级',
@@ -381,11 +408,10 @@ const Workbench: React.FC = () => {
         dataIndex: 'trust_level',
         key: 'trust_level',
         width: 80,
-        render: (val: number) => (
-          <span style={{ color: getTrustColor(val), fontWeight: 600 }}>
-            {(val * 100).toFixed(0)}%
-          </span>
-        ),
+        render: (val: number) => {
+          const { color, label } = getTrustDisplay(val);
+          return <span style={{ color, fontWeight: 600 }}>{label}</span>;
+        },
       },
       {
         title: 'Review 状态',
@@ -460,6 +486,36 @@ const Workbench: React.FC = () => {
         <h2 style={{ margin: 0 }}>{batch.document_title || '用例工作台'}</h2>
         <Badge status={badgeCfg.status} text={badgeCfg.text} />
       </div>
+
+      {/* ─── 等待 Worker / 失败提示 ─── */}
+      {batch.status === 'pending' && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="任务已创建，等待 Worker 处理"
+          description="如长时间无进展，请确认 Redis 与 Celery Worker 已启动，或点击下方按钮重新入队。"
+          action={
+            <Button size="small" loading={retrySubmitting} onClick={handleRetry}>
+              重新触发
+            </Button>
+          }
+        />
+      )}
+      {batch.status === 'failed' && (
+        <Alert
+          type="error"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="生成任务失败"
+          description="可从失败阶段重试，或重新入队整批重跑。"
+          action={
+            <Button size="small" danger loading={retrySubmitting} onClick={handleRetry}>
+              重试
+            </Button>
+          }
+        />
+      )}
 
       {/* ─── 阶段进度条 ─── */}
       <Steps
@@ -574,6 +630,13 @@ const Workbench: React.FC = () => {
           onChange={(e) => setModifyComment(e.target.value)}
         />
       </Modal>
+
+      {/* ─── 用例详情 Drawer ─── */}
+      <CaseDetailDrawer
+        caseId={detailCaseId}
+        open={!!detailCaseId}
+        onClose={() => setDetailCaseId(null)}
+      />
     </div>
   );
 };

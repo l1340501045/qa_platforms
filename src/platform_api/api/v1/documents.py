@@ -14,6 +14,7 @@ from src.platform_api.core.database import get_session
 from src.platform_api.core.response import PaginationParams, paginated_response, success
 from src.platform_api.schemas.document import CreateDocumentAssociationRequest
 from src.platform_api.services.document_service import DocumentService
+from src.platform_api.services.batch_list_service import BatchListService
 
 router = APIRouter(prefix="/documents", tags=["文档管理"])
 
@@ -23,6 +24,10 @@ systems_doc_router = APIRouter(prefix="/systems", tags=["文档管理"])
 
 def _get_service(session: AsyncSession = Depends(get_session)) -> DocumentService:
     return DocumentService(session)
+
+
+def _get_batch_list_service(session: AsyncSession = Depends(get_session)) -> BatchListService:
+    return BatchListService(session)
 
 
 # ─── 文档列表（契约: GET /systems/:id/documents） ───
@@ -116,3 +121,20 @@ async def delete_document_association(
 ):
     """删除文档关联（软删除）"""
     await service.delete_association(association_id)
+
+
+# ─── 文档批次列表 ───
+
+
+@router.get("/{document_id}/batches")
+async def list_document_batches(
+    document_id: UUID,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None, description="状态筛选"),
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """获取文档的生成批次列表"""
+    items, total = await service.list_by_document(document_id, status=status, page=page, per_page=per_page)
+    params = PaginationParams(page=page, per_page=per_page)
+    return success(paginated_response(items, total, params))

@@ -1,6 +1,9 @@
 """Celery 应用配置"""
 
+import os
+
 from celery import Celery
+from celery.signals import worker_process_init
 
 from src.platform_api.core.settings import settings
 
@@ -33,3 +36,21 @@ celery_app.conf.update(
     broker_transport_options={"visibility_timeout": 21600},
     result_backend_transport_options={"visibility_timeout": 21600},
 )
+
+
+@worker_process_init.connect
+def _init_worker_db_mode(**_kwargs):
+    """每个 worker 子进程启动即切到 DB NullPool 模式。
+
+    Celery 任务用 asyncio.run() 每次新建事件循环；进程级 QueuePool 会把上一个
+    任务（其事件循环已关闭）的 asyncpg 连接复用到新循环，触发
+    "got Future attached to a different loop" 崩溃（长驻 worker 跑第二个任务必现）。
+    NullPool 每次用完即弃连接，从根上规避跨循环复用。
+
+    通过信号自动设置，避免依赖启动命令手动传 QA_WORKER_MODE=1 而遗漏。
+    reset_engine 清掉 fork 前可能已被创建的 QueuePool engine 单例。
+    """
+    os.environ["QA_WORKER_MODE"] = "1"
+    from src.platform_api.core.database import reset_engine
+
+    reset_engine()

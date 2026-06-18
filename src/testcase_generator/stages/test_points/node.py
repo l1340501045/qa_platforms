@@ -205,6 +205,88 @@ def _gate_quality_dimensions(
     return kept
 
 
+# 内容规模分档（P1-1 修复）：按 feature.description 字数动态决定非核心维度上限 +
+# **维度测试点数量上限**。审查发现：
+#   - F-018 80 字 PRD → 84 case（tier 1 砍）
+#   - 本 PRD §3 合并 2145 字（含 UI 原型表格）→ 78 测试点仍灌水（tier 3 砍）
+#   - 大 PRD §5.x 模块 4000-7000 字（多子节）→ 进 tier 4 维持原门控
+# 仅控制维度数量不够：LLM 在每个维度内还会展开 3-7 个测试点，故同时设"维度测试点上限"。
+# 锚定测试点（带 rule_id）始终全部保留——它们是规则覆盖闸的依据，不受此截断影响。
+#   tier 1 — feature ≤ 300 字 OR 非 spec 章节：仅核心维度，维度测试点 ≤ 0（仅锚定）
+#   tier 2 — feature ≤ 1200 字（小型）：≤ 2 个非核心维度，维度测试点 ≤ 5
+#   tier 3 — feature ≤ 3000 字（中型）：≤ 4 个非核心维度，维度测试点 ≤ 15
+#   tier 4 — feature > 3000 字（大型）：维持 _gate_quality_dimensions 关键词门控，不截断
+_TIER1_MAX_CHARS = 300
+_TIER2_MAX_CHARS = 1200
+_TIER3_MAX_CHARS = 3000
+_TIER2_NON_CORE_LIMIT = 2
+_TIER3_NON_CORE_LIMIT = 4
+_TIER1_DIM_TP_CAP = 0
+_TIER2_DIM_TP_CAP = 5
+_TIER3_DIM_TP_CAP = 15
+
+
+def _dim_tp_cap_for(section_kind: str, feature_desc_chars: int) -> int | None:
+    """返回 feature 维度测试点上限；None 表示不截断（tier 4）。"""
+    is_non_spec = section_kind in {"summary", "flow", "mock", "future", "tbd"}
+    chars = feature_desc_chars or 0
+    if is_non_spec or chars <= _TIER1_MAX_CHARS:
+        return _TIER1_DIM_TP_CAP
+    if chars <= _TIER2_MAX_CHARS:
+        return _TIER2_DIM_TP_CAP
+    if chars <= _TIER3_MAX_CHARS:
+        return _TIER3_DIM_TP_CAP
+    return None
+
+# 稀薄/非 spec 章节仍允许保留的核心维度白名单（不被维度增强裁掉）。
+# 选择标准：维度名以"功能正确性 / 输入校验 / 边界值 / 权限"为核心，覆盖 PRD 即便很短也
+# 必然存在的基本可测点。其他维度（性能/集成/安全派生/网络/编码等）一律剔除。
+_CORE_DIMENSIONS = frozenset({
+    "functional_correctness", "happy_path", "negative_path",
+    "invalid_input", "boundary_value", "format_validation",
+    "access_control", "permission_denied",
+    "state_transition",
+})
+
+
+def _gate_by_section_kind(
+    dims: list[dict], section_kind: str, feature_desc_chars: int
+) -> list[dict]:
+    """章节性质 + 内容规模分档门控（P1-1 修复）：
+
+    防止 LLM 对中小型 feature 机械展开 9 维度产生灌水（典例：F-018 80 字 → 84 case；
+    本次 §3 合并 1500 字 → 78 测试点）。
+
+    - section_kind in {summary, flow, mock, future, tbd}：整章不做维度增强（tier 1）
+    - 否则按 feature.description 字数分档限制非核心维度数量
+    - 不在 _DIMENSION_GATE 中的"质量属性维度"（已被 _gate_quality_dimensions 关键词门控
+      过一道筛）按字数限额裁出最多 N 个；多出的按列表前后顺序保留前 N 个（稳定）。
+    """
+    is_non_spec = section_kind in {"summary", "flow", "mock", "future", "tbd"}
+    chars = feature_desc_chars or 0
+
+    # tier 1：仅核心维度
+    if is_non_spec or chars <= _TIER1_MAX_CHARS:
+        return [d for d in dims if d.get("name") in _CORE_DIMENSIONS]
+
+    # tier 4：大型 feature 不再二次裁剪（保持原行为）
+    if chars > _TIER3_MAX_CHARS:
+        return dims
+
+    # tier 2 / tier 3：核心全留 + 非核心按上限裁
+    limit = _TIER2_NON_CORE_LIMIT if chars <= _TIER2_MAX_CHARS else _TIER3_NON_CORE_LIMIT
+    kept: list[dict] = []
+    non_core_count = 0
+    for d in dims:
+        if d.get("name") in _CORE_DIMENSIONS:
+            kept.append(d)
+            continue
+        if non_core_count < limit:
+            kept.append(d)
+            non_core_count += 1
+    return kept
+
+
 # ─── 分批生成 ────────────────────────────────────────────────────────────────────
 
 # 单批输入字符预估上限与功能点数上限。双上限确保「输入不超长」且「输出测试点数量可控」。
@@ -317,6 +399,13 @@ async def test_points_node(state: PipelineState) -> dict:
         applicable_dims = _gate_quality_dimensions(
             applicable_dims, f"{feature.name}\n{feature.description}", global_signal_text
         )
+        # P1-1 修复：章节性质门控 + 稀薄章节门控
+        # summary/flow/mock/future/tbd 章节、或 description < 200 字的稀薄章节，
+        # 不再机械全展 9 维度，仅保留核心维度（功能正确性/输入校验/边界/权限/状态）。
+        section_kind = getattr(feature, "section_kind", "spec") or "spec"
+        applicable_dims = _gate_by_section_kind(
+            applicable_dims, section_kind, len(feature.description or "")
+        )
 
         dims_info = []
         for dim in applicable_dims:
@@ -397,7 +486,37 @@ async def test_points_node(state: PipelineState) -> dict:
         )
         test_points.append(tp)
 
-    # 5. 重新编号（因可能有跳过的）
+    # 5a. 维度测试点数量分档截断（P1-1 强化）：按 feature 字数 tier 限制每 feature
+    #     的维度测试点上限。锚定测试点（带 rule_id）始终全保留——它们是规则覆盖闸依据。
+    #     这一步在重编号 + 漏测注入 + 锚点追加之前执行，仅作用在 LLM 生成的维度路径。
+    feature_meta: dict[str, tuple[str, int]] = {}
+    for feat in parsed_context.features:
+        feature_meta[feat.id] = (
+            getattr(feat, "section_kind", "spec") or "spec",
+            len(feat.description or ""),
+        )
+    capped: list[TestPointSchema] = []
+    capped_by_feat: dict[str, int] = {}
+    dropped_by_feat: dict[str, int] = {}
+    for tp in test_points:
+        kind, chars = feature_meta.get(tp.feature_id, ("spec", 0))
+        cap = _dim_tp_cap_for(kind, chars)
+        if cap is None:
+            capped.append(tp)
+            continue
+        if capped_by_feat.get(tp.feature_id, 0) < cap:
+            capped.append(tp)
+            capped_by_feat[tp.feature_id] = capped_by_feat.get(tp.feature_id, 0) + 1
+        else:
+            dropped_by_feat[tp.feature_id] = dropped_by_feat.get(tp.feature_id, 0) + 1
+    if dropped_by_feat:
+        logger.info(
+            "test-points 分档截断: %s",
+            ", ".join(f"{fid}↓{cnt}" for fid, cnt in dropped_by_feat.items()),
+        )
+    test_points = capped
+
+    # 5b. 重新编号（因可能有跳过的 + tier 截断后空号）
     for idx, tp in enumerate(test_points, start=1):
         tp.id = f"TP-{idx:03d}"
 

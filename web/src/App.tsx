@@ -9,6 +9,8 @@ const KnowledgePage = lazy(() => import('./pages/Knowledge'));
 const DocumentDetailPage = lazy(() => import('./pages/DocumentDetail'));
 const WorkbenchPage = lazy(() => import('./pages/Workbench'));
 const ExportsPage = lazy(() => import('./pages/Exports'));
+const SearchPage = lazy(() => import('./pages/Search'));
+const CaseLibraryPage = lazy(() => import('./pages/CaseLibrary'));
 
 const PageLoading = () => (
   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
@@ -27,6 +29,8 @@ function App() {
           <Route path="documents/:documentId" element={<DocumentDetailPage />} />
           <Route path="batches/:batchId" element={<WorkbenchPage />} />
           <Route path="exports" element={<ExportsPage />} />
+          <Route path="search" element={<SearchPage />} />
+          <Route path="case-library" element={<CaseLibraryPage />} />
         </Route>
       </Routes>
     </Suspense>

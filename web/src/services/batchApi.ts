@@ -13,6 +13,7 @@ import type {
   ReviewRequest,
   PaginationParams,
   ReviewStatus,
+  TestCase,
 } from '../types';
 
 export interface BatchQueryParams extends PaginationParams {
@@ -62,11 +63,28 @@ export async function archiveBatch(batchId: string): Promise<ArchiveResponse> {
   return res.data;
 }
 
+/** 重试/重新入队 POST /batches/:id/retry */
+export async function retryBatch(batchId: string): Promise<{
+  batch_id: string;
+  status: string;
+  fallback: boolean;
+  resumed_from_stage: string | null;
+}> {
+  const res = await api.post(`/batches/${batchId}/retry`);
+  return res.data;
+}
+
 /** Review 用例 PATCH /testcases/:id/review */
 export async function reviewTestCase(
   caseId: string,
   body: ReviewRequest,
 ): Promise<ReviewResponse> {
   const res = await api.patch(`/testcases/${caseId}/review`, body);
+  return res.data;
+}
+
+/** 获取用例详情 GET /testcases/:id */
+export async function getTestCaseDetail(caseId: string): Promise<TestCase> {
+  const res = await api.get(`/testcases/${caseId}`);
   return res.data;
 }

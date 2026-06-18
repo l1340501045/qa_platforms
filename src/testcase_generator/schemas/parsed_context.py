@@ -49,6 +49,11 @@ class FeatureItem(BaseModel):
     source_refs: list[str] = Field(default_factory=list, description="来源引用列表")
     feature_type: str = Field(default="general", description="功能类型标签")
     sub_features: list[FeatureItem] = Field(default_factory=list, description="子功能")
+    section_kind: SectionKind = Field(
+        default="spec",
+        description="对应 PRD 章节性质（透传自 SectionExtract.section_kind），决定下游"
+                    "维度增强是否跳过：summary/flow/mock/future/tbd 章节不再做维度展开",
+    )
 
 
 class SourceItem(BaseModel):

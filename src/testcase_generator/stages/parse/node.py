@@ -117,6 +117,20 @@ async def parse_node(state: PipelineState) -> dict:
     # 5.5 章节性质分类（标 section_kind，供下游 oracle 策略 + verify 关卡使用）
     await classify_sections(parsed_context.sources)
 
+    # 5.6 把 section_kind 透传给 feature（按 source_ref 反查），供 test_points 维度门控使用：
+    #     summary/mock/future/tbd 章节不再机械全展 9 维度，避免 F-001 元章节、
+    #     §9 字段汇总、§7.3 后续迭代等 PRD 性质章节产出无 oracle 占位用例。
+    section_kind_by_ref: dict[str, str] = {}
+    for src in parsed_context.sources:
+        for sec in src.sections:
+            section_kind_by_ref[sec.source_ref] = sec.section_kind
+    for feat in parsed_context.features:
+        for ref in feat.source_refs:
+            kind = section_kind_by_ref.get(ref)
+            if kind and kind != "spec":
+                feat.section_kind = kind  # type: ignore[assignment]
+                break
+
     logger.info(
         "parse_node complete: sources=%d, features=%d, prototype_obs=%d",
         registry.count,
@@ -315,24 +329,63 @@ def _extract_sections(result: SearchResult, doc_type: str) -> list[SectionExtrac
     return sections
 
 
+# 归一化 feature heading 用于同名合并（根因 P0-2：parse 把同 PRD 章节切成两个 feature
+# 导致 F-012/F-013 灾难型重复）。剥掉中英章节号前缀、空白与全/半角标点差异，仅保留主体名。
+_HEADING_NUM_PREFIX = re.compile(
+    r"^[#\s§]*"  # 允许开头有 #、空白、§ 等
+    r"(?:第\s*[一二三四五六七八九十百千零\d]+\s*[章节条款部分]?\s*[、,，.．:：\-—\s]*|"
+    r"[一二三四五六七八九十百千零]+\s*[、,，.．:：\-—\s]+|"
+    r"\d+(?:[.．]\d+)*[、,，.．:：\-—\s]*)"
+)
+_HEADING_LEADING_MARK = re.compile(r"^[#\s§]+")  # 兜底剥掉残留的 #/§/空白
+_HEADING_PUNCT = re.compile(r"[\s\u3000\-_–—、,，.．:：;；()（）\[\]【】§]+")
+
+
+def _normalize_heading(heading: str) -> str:
+    """归一化章节标题为合并键：去章节号前缀、去标点空白、统一小写。"""
+    if not heading:
+        return ""
+    h = _HEADING_LEADING_MARK.sub("", heading.strip())
+    h = _HEADING_NUM_PREFIX.sub("", h)
+    h = _HEADING_PUNCT.sub("", h).lower()
+    return h
+
+
 def _extract_features_from_sections(
     sections: list[SectionExtract],
     start_index: int,
 ) -> list[FeatureItem]:
-    """从 PRD 章节中提取功能点"""
+    """从 PRD 章节中提取功能点。
+
+    根因修复（P0-2）：相同归一化标题（去章节号 + 去标点空白后相等）的多个 section
+    强制合并为一个 feature——避免 PRD 同名章节被切成两个 feature 导致下游测试点 ×2、
+    用例 ×N 的"双 feature 灾难"（典例 F-012/F-013「六类投放方式字段对照」）。
+    合并后 description 为各原 section 内容拼接，source_refs 累积。
+    """
     features: list[FeatureItem] = []
+    by_key: dict[str, FeatureItem] = {}
 
     for section in sections:
         if not section.content:
             continue
+        key = _normalize_heading(section.heading)
+        if key and key in by_key:
+            existing = by_key[key]
+            if section.content not in existing.description:
+                existing.description = f"{existing.description}\n\n{section.content}"
+            if section.source_ref not in existing.source_refs:
+                existing.source_refs.append(section.source_ref)
+            continue
+
         feature_id = f"F-{start_index + len(features) + 1:03d}"
-        features.append(
-            FeatureItem(
-                id=feature_id,
-                name=section.heading,
-                description=section.content,
-                source_refs=[section.source_ref],
-            )
+        feature = FeatureItem(
+            id=feature_id,
+            name=section.heading,
+            description=section.content,
+            source_refs=[section.source_ref],
         )
+        features.append(feature)
+        if key:
+            by_key[key] = feature
 
     return features
