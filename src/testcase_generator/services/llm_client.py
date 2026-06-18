@@ -2,8 +2,10 @@
 
 通过 settings.llm_base_url 指向自建网关（OpenAI 兼容协议）。
 只调主模型，失败重试主模型，重试耗尽才报错；不切备用模型。
+支持多模态：传 images 参数时用 vision model + multimodal messages。
 """
 
+import base64
 import json
 import logging
 import time
@@ -134,8 +136,16 @@ class LLMClient:
         user_content: str,
         output_schema: Type[T],
         temperature: float = 0.3,
+        images: list[bytes] | None = None,
     ) -> T:
-        """调用主模型并强制输出为指定 schema；失败重试主模型，不切备用模型"""
+        """调用主模型并强制输出为指定 schema；失败重试主模型，不切备用模型。
+
+        传 images 时使用 vision model + multimodal messages；不传时走纯文本路径。
+        """
+        if images and not settings.llm_vision_model:
+            raise ValueError("图解析需配置 LLM_VISION_MODEL 环境变量")
+
+        model = settings.llm_vision_model if images else self.primary_model
         schema_name = output_schema.__name__
         attempt_count = 0
         start_time = time.monotonic()
@@ -144,7 +154,7 @@ class LLMClient:
             stop=stop_after_attempt(settings.llm_max_retries),
             wait=wait_exponential(min=1, max=10),
             before_sleep=lambda rs: logger.warning(
-                f"primary model {self.primary_model} attempt {rs.attempt_number} failed, "
+                f"model {model} attempt {rs.attempt_number} failed, "
                 f"retrying: {rs.outcome.exception()}"
             ),
             reraise=True,
@@ -152,7 +162,7 @@ class LLMClient:
         async def _attempt() -> T:
             nonlocal attempt_count
             attempt_count += 1
-            return await self._call(self.primary_model, system_prompt, user_content, output_schema, temperature)
+            return await self._call(model, system_prompt, user_content, output_schema, temperature, images=images)
 
         try:
             result = await _attempt()
@@ -166,7 +176,7 @@ class LLMClient:
                 )
             )
             logger.info(
-                f"LLM 调用成功: schema={schema_name} attempts={attempt_count} duration={duration_ms / 1000:.1f}s"
+                f"LLM 调用成功: schema={schema_name} model={model} attempts={attempt_count} duration={duration_ms / 1000:.1f}s"
             )
             return result
         except Exception as e:
@@ -189,6 +199,7 @@ class LLMClient:
         user_content: str,
         output_schema: Type[T],
         temperature: float,
+        images: list[bytes] | None = None,
     ) -> T:
         """单次调用（OpenAI 兼容 JSON mode + 加强 schema 约束 + 校验）"""
         schema_json = json.dumps(output_schema.model_json_schema(), ensure_ascii=False, indent=2)
@@ -205,10 +216,23 @@ class LLMClient:
             f"4. 完整 JSON Schema：\n{schema_json}"
         )
 
-        messages = [
-            {"role": "system", "content": system_prompt + schema_instruction},
-            {"role": "user", "content": user_content},
-        ]
+        if images:
+            user_msg_content: list[dict] = [{"type": "text", "text": user_content}]
+            for img_bytes in images:
+                b64 = base64.b64encode(img_bytes).decode()
+                user_msg_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64}"},
+                })
+            messages = [
+                {"role": "system", "content": system_prompt + schema_instruction},
+                {"role": "user", "content": user_msg_content},
+            ]
+        else:
+            messages = [
+                {"role": "system", "content": system_prompt + schema_instruction},
+                {"role": "user", "content": user_content},
+            ]
 
         # JSON mode：让网关/后端在解码层就只产出合法 JSON，根治长输出的分隔符/截断错误。
         # 网关不支持 response_format 时（通常报 400/不识别参数）一次性永久回退到纯 prompt 约束。

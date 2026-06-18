@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     # 容错解析」保障。保留此开关：将来换成真正支持 json_object 的网关时置 True 即可启用。
     llm_json_mode: bool = False
 
+    # LLM 视觉模型（图解析用，OpenAI 兼容视觉接口；留空则传 images 时报错）
+    llm_vision_model: str = ""
+
     # ── test_points 完整性兜底 ──────────────────────────────────────────────────
     # 开：批失败重试 + 单 feature 降级 + 缺额校验（修 9 feature 静默丢失）
     # 关：退回旧行为（失败批静默丢弃）——纯止血，默认开。
