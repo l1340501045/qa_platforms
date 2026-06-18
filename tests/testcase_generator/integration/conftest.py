@@ -33,3 +33,23 @@ def reset_db_engine_per_test():
     from src.platform_api.core.database import reset_engine
 
     reset_engine()
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings():
+    """每个集成测试结束后还原 settings 三开关 + 清 LLM 单例，防跨测试状态泄漏。"""
+    from src.platform_api.core.settings import settings
+    import src.testcase_generator.services.llm_client as llm_mod
+
+    original_image = settings.image_caption_enabled
+    original_entity = settings.entity_graph_enabled
+    original_retrieval = settings.entity_retrieval_enabled
+    original_guard = settings.test_points_completeness_guard
+
+    yield
+
+    settings.image_caption_enabled = original_image
+    settings.entity_graph_enabled = original_entity
+    settings.entity_retrieval_enabled = original_retrieval
+    settings.test_points_completeness_guard = original_guard
+    llm_mod._llm_client = None
