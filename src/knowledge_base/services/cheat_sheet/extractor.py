@@ -160,10 +160,7 @@ class CheatSheetExtractorService:
                         "local_section": local_section.name,
                         "global_section": global_section.name,
                         "applies_when": relation.note,
-                        "resolution": (
-                            f"涉及「{local_section.name}」时，以局部规则优先，"
-                            f"不能直接套用「{global_section.name}」。"
-                        ),
+                        "resolution": self._section_priority_resolution(local_section, global_section, relation.note),
                     },
                     review_tier=_REVIEW_TIER_MUST,
                     source_entity_ids=self._entity_ids([local_section, global_section]),
@@ -264,6 +261,14 @@ class CheatSheetExtractorService:
             ):
                 return relation
         return None
+
+    @staticmethod
+    def _section_priority_resolution(local_section, global_section, note: str | None) -> str:
+        note_text = note or ""
+        neutral_markers = ("一致", "对齐", "统一", "无优先级差异")
+        if any(marker in note_text for marker in neutral_markers):
+            return f"「{local_section.name}」与「{global_section.name}」需按同一口径处理：{note_text}"
+        return f"涉及「{local_section.name}」时，以局部规则优先，不能直接套用「{global_section.name}」。"
 
     @staticmethod
     def _entity_ids(entities: list) -> list[str]:

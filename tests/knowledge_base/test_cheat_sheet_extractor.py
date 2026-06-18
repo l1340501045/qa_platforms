@@ -198,6 +198,41 @@ async def test_extract_builds_four_cheat_sheet_types_with_tier_and_sources():
 
 
 @pytest.mark.asyncio
+async def test_section_priority_neutral_note_does_not_claim_local_wins():
+    """note 表示规则统一/无优先级差异时，不应硬写成局部优先。"""
+    doc_id = uuid4()
+    local_section = _entity(
+        name="新建/编辑链接校验规则",
+        canonical_key="§5.4.3",
+        entity_type="section",
+        section_ref="§5.4.3",
+    )
+    global_section = _entity(
+        name="导入校验规则汇总",
+        canonical_key="§5.4.4",
+        entity_type="section",
+        section_ref="§5.4.4",
+    )
+    relation = _relation(
+        local_section,
+        global_section,
+        "section_priority",
+        note="新建/编辑校验规则与Excel导入校验完全一致，两者对齐无优先级差异",
+    )
+    repo = AsyncMock()
+    repo.get_entities_by_document = AsyncMock(return_value=[local_section, global_section])
+    repo.get_relations_by_document = AsyncMock(return_value=[relation])
+    service = CheatSheetExtractorService(repo)
+
+    items = await service.extract(doc_id)
+
+    assert len(items) == 1
+    resolution = items[0].ai_content["resolution"]
+    assert "同一口径" in resolution
+    assert "局部规则优先" not in resolution
+
+
+@pytest.mark.asyncio
 async def test_extract_and_save_persists_items_with_source_counts():
     """extract_and_save 编排提取结果落库，并记录实体/关系来源数量。"""
     doc_id = uuid4()
