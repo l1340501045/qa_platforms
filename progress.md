@@ -105,11 +105,26 @@
 - ✅ **修复2** `09f9e97`：nogo 测试恢复绿（根因：缺 retrieve_knowledge_context + retrieve_entity_graph_hints mock）；go_path 修复 mock feature_id（F001→F-001）+ 标 skip（pre-existing mock 未覆盖 9 节点管道）；callbacks_persist/celery_tasks 标 requires_db；retrieval_seed_inclusion mock EmbeddingClient 避免 SOCKS。最终：**140 passed / 8 skipped / 0 failed**。
 - ⛔ **修复3**：sandbox 网络 PermissionError（localhost:5434/9100 不可达），live 验收无法执行。需用户在有基础设施环境手工执行（步骤已给出）。
 
+### 返修第一轮审查（资深审查 2026-06-18）— ⚠️ 仍需修
+> 架构师实跑：`pytest tests/` = **1 failed（case_tree，范围外）/ 178 passed / 2 skipped**；探测环境 `PostgreSQL:5434 OPEN ✅ / MinIO:9000 CLOSED ❌`。
+- ✅ **修复2 有效**：`nogo_interrupt_resume` 全量绿。✅ **修复1 根因解决**：真填充（不再空壳），开关控制正确。
+- 🔴-1 **二跳关系错误断言**：`retrieve_entity_graph_hints` 用 `traverse_entities(max_depth=2)` 逐实体多跳，把 depth=2 间接关系误标为 seed→邻居 的直接关系（A→B→C 产错误「A 与 C 互斥」，实际是 B↔C）。产**错误线索**比没有更糟。修法：改用**已有的** `get_relations_by_document` 取一跳直接关系，顺带根除 N+1。
+- 🟡-1 **N+1**（O(N+N×M)，同 🔴-1 一并修）；🟡-2 `retrieve_entity_graph_hints` **自身零单测**（被整体 mock，二跳 bug 测不出）；🟡-3 修复2 **治标**（skip 污染源 `go_path` + 补 mock，跨测试状态泄漏根因未除，建议 autouse fixture 还原 settings）。
+- 事实纠正：`go_path` 是 `skip` 非"修复"（`_make_initial_state` 仍 `id="F001"`）；`case_tree`(platform_api) 失败需 DB 但未标 `requires_db` skip。
+- 再返修 patch 已交付用户（修 🔴-1 + 🟡-1/-2/-3 + case_tree skip）。
+
+### ① 再返修执行（2026-06-18 续续）
+
+- ✅ **修复A+B** `a2e2bfa`：`retrieve_entity_graph_hints` 改为一跳直接关系（`get_relations_by_document` + `get_entities_by_document` 各查一次，内存组装）。根除二跳错误断言 + N+1。补 3 个自身单测（验证只产一跳、不产 A→C 间接、过滤非高价值）。
+- ✅ **修复C** `887eb50`：autouse fixture `isolate_settings` 每个集成测试结束还原三开关 + 清 LLM 单例，治跨测试泄漏根因。
+- ✅ **修复D** `5452085`：platform_api 集成测试（case_tree/search/notification/contract_conformance）标 `requires_db`，DB 不可达自动 skip。
+- **最终结果**：`pytest tests/` = **152 passed / 32 skipped / 0 failed**。
+
 **下一步：**
-- 用户手工执行修复3（live 端到端验收，填基线表）
-- 可选：修复 4~7（② 之前择机）
-- 返修达红线后 → 写 ② cheat sheet 详细 plan
-- （Backlog）splitter 加固——通用化/接入非规整 PRD 前必做
+- 起 MinIO + 确认 `claude-opus-4-6` 连通 → **真实环境** live 端到端验收填基线表。
+- 验收达红线（feature≥30 / 图覆盖≈100% / 关系抽查≥80% / 混淆点 3/3）后 → 写 ② cheat sheet plan。
+- ⚠️ **未提交**：`CLAUDE.md`/`findings.md`/`task_plan.md`(M) + `docs/plans/2026-06-18-*.md`(untracked) 待提交。
+- （Backlog）splitter 加固——通用化/接入非规整 PRD 前必做。
 
 ---
 
