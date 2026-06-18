@@ -16,7 +16,11 @@ from src.testcase_generator.schemas.parsed_context import (
     SectionExtract,
 )
 from src.testcase_generator.schemas.pipeline_state import PipelineState
-from src.testcase_generator.stages.parse.kb_retriever import retrieve_knowledge_context
+from src.platform_api.core.settings import settings
+from src.testcase_generator.stages.parse.kb_retriever import (
+    retrieve_entity_graph_hints,
+    retrieve_knowledge_context,
+)
 from src.testcase_generator.stages.parse.section_classifier import classify_sections
 from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
@@ -131,11 +135,17 @@ async def parse_node(state: PipelineState) -> dict:
                 feat.section_kind = kind  # type: ignore[assignment]
                 break
 
+    # 5.7 实体图谱关系提示（entity_retrieval_enabled 开关控制）
+    if settings.entity_retrieval_enabled:
+        hints = await retrieve_entity_graph_hints(document_id, system_id)
+        parsed_context.entity_graph_hints = hints
+
     logger.info(
-        "parse_node complete: sources=%d, features=%d, prototype_obs=%d",
+        "parse_node complete: sources=%d, features=%d, prototype_obs=%d, entity_hints=%d",
         registry.count,
         len(features),
         len(prototype_observations) if prototype_observations else 0,
+        len(parsed_context.entity_graph_hints),
     )
 
     return {

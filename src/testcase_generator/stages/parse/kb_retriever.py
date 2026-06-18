@@ -1,10 +1,19 @@
 """T018: 进程内调用 knowledge-base RetrievalService"""
 
+import logging
 from uuid import UUID
 
 from src.knowledge_base.db import async_session_factory
 from src.knowledge_base.schemas.common import RetrievalContext
 from src.knowledge_base.services.retrieval_service import RetrievalService
+
+logger = logging.getLogger(__name__)
+
+_HIGH_VALUE_RELATION_TYPES = frozenset({
+    "section_priority",
+    "mutually_exclusive",
+    "unreachable",
+})
 
 
 async def retrieve_knowledge_context(
@@ -35,3 +44,57 @@ async def retrieve_knowledge_context(
             top_k=top_k,
             query=query,
         )
+
+
+async def retrieve_entity_graph_hints(
+    document_id: UUID,
+    system_id: UUID,
+) -> list[dict]:
+    """查询文档的实体图谱，返回高价值关系摘要（section_priority/mutually_exclusive/unreachable）。
+
+    供 parse_node 填充 ParsedContext.entity_graph_hints。
+    """
+    from src.knowledge_base.repositories.entity_repo import EntityRepository
+
+    async with async_session_factory() as session:
+        repo = EntityRepository(session)
+        entities = await repo.get_entities_by_document(document_id)
+
+        if not entities:
+            return []
+
+        hints: list[dict] = []
+        seen_pairs: set[tuple[str, str, str]] = set()
+
+        for entity in entities:
+            neighbors = await repo.traverse_entities(entity.id, max_depth=2)
+            for neighbor_id, depth, relation_type, direction in neighbors:
+                if relation_type not in _HIGH_VALUE_RELATION_TYPES:
+                    continue
+
+                neighbor_entities = await repo.get_entities_by_ids([neighbor_id])
+                if not neighbor_entities:
+                    continue
+                neighbor = neighbor_entities[0]
+
+                pair_key = (entity.canonical_key, neighbor.canonical_key, relation_type)
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+
+                hints.append({
+                    "relation_type": relation_type,
+                    "source_entity": entity.canonical_key,
+                    "target_entity": neighbor.canonical_key,
+                    "source_name": entity.name,
+                    "target_name": neighbor.name,
+                    "note": f"{entity.name} → {neighbor.name}",
+                    "direction": direction,
+                    "depth": depth,
+                })
+
+        logger.info(
+            "entity_graph_hints: doc=%s entities=%d hints=%d",
+            document_id, len(entities), len(hints),
+        )
+        return hints
