@@ -66,10 +66,15 @@ async def backfill_node(state: PipelineState) -> dict:
 
     parsed_context = state["parsed_context"]
     system_id = UUID(state["system_id"])
+    document_id = UUID(state["document_id"])
     # 起始号取所有现有用例（含被移除前的全集）的最大序号，避免与保留用例撞号
     start_counter = _max_case_counter(final_cases)
     new_cases, failed = await generate_cases(
-        parsed_context, target_tps, system_id, start_counter=start_counter
+        parsed_context,
+        target_tps,
+        system_id,
+        document_id=document_id,
+        start_counter=start_counter,
     )
 
     merged = kept_cases + new_cases

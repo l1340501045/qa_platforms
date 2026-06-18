@@ -165,7 +165,7 @@ async def test_generate_cases_injects_approved_cheat_sheet_when_enabled(monkeypa
     monkeypatch.setattr(write_cases_node, "CheatSheetRepository", lambda session: FakeRepo(), raising=False)
     _patch_common(monkeypatch, captured)
 
-    await write_cases_node.generate_cases(_parsed_context(doc_id), _test_points(), uuid4())
+    await write_cases_node.generate_cases(_parsed_context(doc_id), _test_points(), uuid4(), document_id=doc_id)
 
     payload = json.loads(captured["user_content"])
     assert payload["cheat_sheet"]["confusion_pair"][0]["title"] == "易混：IAP vs IAA"
@@ -173,8 +173,8 @@ async def test_generate_cases_injects_approved_cheat_sheet_when_enabled(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_generate_cases_loads_cheat_sheet_from_prd_source_when_tech_doc_first(monkeypatch):
-    """多 source 时优先用 PRD 文档加载 cheat sheet，不误取第一个技术文档。"""
+async def test_generate_cases_loads_cheat_sheet_from_explicit_document_id(monkeypatch):
+    """多 source 时使用显式 document_id 加载 cheat sheet，不从 parsed_context 猜测。"""
     tech_doc_id = uuid4()
     prd_doc_id = uuid4()
     captured = {}
@@ -201,6 +201,7 @@ async def test_generate_cases_loads_cheat_sheet_from_prd_source_when_tech_doc_fi
         _parsed_context_with_tech_first(tech_doc_id, prd_doc_id),
         _test_points(),
         uuid4(),
+        document_id=prd_doc_id,
     )
 
     payload = json.loads(captured["user_content"])

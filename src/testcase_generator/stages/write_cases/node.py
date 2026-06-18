@@ -204,11 +204,10 @@ def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[l
     return [tps[i : i + max_per_batch] for i in range(0, len(tps), max_per_batch)]
 
 
-async def _load_approved_cheat_sheet(parsed_context) -> dict:
+async def _load_approved_cheat_sheet(document_id: UUID | None) -> dict:
     """按文档加载已审核 cheat sheet；开关关或异常时返回空。"""
     if not settings.cheat_sheet_injection_enabled:
         return {}
-    document_id = _select_cheat_sheet_document_id(parsed_context)
     if document_id is None:
         return {}
     try:
@@ -219,14 +218,6 @@ async def _load_approved_cheat_sheet(parsed_context) -> dict:
         return {}
 
 
-def _select_cheat_sheet_document_id(parsed_context):
-    """优先选择 PRD 文档作为 cheat sheet scope，避免多 source 时误取技术文档。"""
-    for source in getattr(parsed_context, "sources", []):
-        if getattr(source, "doc_type", None) == "prd" and getattr(source, "trust_level", 5) <= 2:
-            return getattr(source, "doc_id", None)
-    return getattr(parsed_context.sources[0], "doc_id", None) if getattr(parsed_context, "sources", []) else None
-
-
 # ─── Node ──────────────────────────────────────────────────────────────────────
 
 
@@ -235,6 +226,7 @@ async def generate_cases(
     test_points: list[TestPointSchema],
     system_id: UUID,
     *,
+    document_id: UUID | None = None,
     start_counter: int = 0,
 ) -> tuple[list[GeneratedTestCase], list[dict]]:
     """对给定测试点集生成用例的核心例程（write_cases 与 backfill 共用）。
@@ -250,7 +242,7 @@ async def generate_cases(
     # 加载 few-shot 样本（硬约束#6，冷启动返回空列表不影响流程）
     retriever = FewShotRetriever()
     few_shot_samples = await retriever.retrieve_samples(system_id, all_feature_types)
-    approved_cheat_sheet = await _load_approved_cheat_sheet(parsed_context)
+    approved_cheat_sheet = await _load_approved_cheat_sheet(document_id)
 
     # 构建 few-shot 注入段（全局共享，只构建一次）
     few_shot_section = ""
@@ -527,8 +519,14 @@ async def write_cases_node(state: PipelineState) -> dict:
     parsed_context = state["parsed_context"]
     test_points: list[TestPointSchema] = state["test_points"]
     system_id = UUID(state["system_id"])
+    document_id = UUID(state["document_id"])
 
-    all_test_cases, failed_features = await generate_cases(parsed_context, test_points, system_id)
+    all_test_cases, failed_features = await generate_cases(
+        parsed_context,
+        test_points,
+        system_id,
+        document_id=document_id,
+    )
 
     return {
         "test_cases": all_test_cases,

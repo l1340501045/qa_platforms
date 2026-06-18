@@ -10,14 +10,15 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from src.testcase_generator.stages.review import backfill_node as bf_mod
-from src.testcase_generator.stages.review.backfill_node import backfill_node
 from src.testcase_generator.schemas.audit_report import AuditReport
 from src.testcase_generator.schemas.parsed_context import ParsedContext
+from src.testcase_generator.schemas.test_case import GeneratedTestCase, Provenance, TestStep
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.schemas.test_case import GeneratedTestCase, TestStep, Provenance
+from src.testcase_generator.stages.review import backfill_node as bf_mod
+from src.testcase_generator.stages.review.backfill_node import backfill_node
 
 SYS_ID = "22222222-2222-2222-2222-222222222222"
+DOC_ID = "11111111-1111-1111-1111-111111111111"
 
 
 def _tp(tp_id: str, rule_id: str | None) -> TestPointSchema:
@@ -50,6 +51,7 @@ def _state() -> dict:
         "final_test_cases": [_tc("TC-001", "TP-001")],
         "audit_report": audit,
         "parsed_context": ParsedContext(sources=[], features=[]),
+        "document_id": DOC_ID,
         "system_id": SYS_ID,
         "reconcile_iterations": 0,
         "rules": [
@@ -72,6 +74,7 @@ async def test_backfill_refreshes_rule_coverage_when_gate_on(monkeypatch):
     assert rep.covered_rules == 2  # R-001 + R-002
     assert rep.uncovered_rule_codes == []
     assert rep.rule_coverage == 1.0
+    assert fake_gen.await_args.kwargs["document_id"].hex == DOC_ID.replace("-", "")
 
 
 @pytest.mark.asyncio
