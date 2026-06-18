@@ -85,6 +85,7 @@ def _state_with_rules() -> dict:
 
 async def _run_node(monkeypatch, enabled: bool) -> list:
     monkeypatch.setattr(tp_node.settings, "rule_driven_testpoints_enabled", enabled)
+    monkeypatch.setattr(tp_node.settings, "test_points_completeness_guard", False)
     # LLM 维度路径返回空（不影响开关验证），锚点路径独立于 LLM
     fake_client = AsyncMock()
     fake_client.generate_structured = AsyncMock(return_value=TestPointsLLMOutput(test_points=[]))
