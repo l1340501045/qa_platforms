@@ -43,6 +43,13 @@ const relationTypeLabels: Record<DocRelationType, string> = {
   general: '通用关联',
 };
 
+const EMBEDDING_STATUS: Record<string, { label: string; color: string }> = {
+  pending: { label: '待嵌入', color: 'default' },
+  processing: { label: '嵌入中', color: 'processing' },
+  completed: { label: '已完成', color: 'success' },
+  failed: { label: '嵌入失败', color: 'error' },
+};
+
 const DocumentDetailPage: React.FC = () => {
   const { documentId } = useParams<{ documentId: string }>();
   const navigate = useNavigate();
@@ -187,8 +194,9 @@ const DocumentDetailPage: React.FC = () => {
 
   if (loading || !currentDocument) {
     return (
-      <div style={{ padding: 24, textAlign: 'center' }}>
-        <Spin size="large" tip="加载中..." />
+      <div style={{ padding: 48, textAlign: 'center' }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 16, color: '#8c8c8c' }}>加载中...</div>
       </div>
     );
   }
@@ -211,7 +219,16 @@ const DocumentDetailPage: React.FC = () => {
               {currentDocument.doc_type}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item label="状态">{currentDocument.status}</Descriptions.Item>
+          <Descriptions.Item label="嵌入状态">
+            {(() => {
+              const cfg = EMBEDDING_STATUS[currentDocument.embedding_status ?? ''];
+              return cfg ? (
+                <Tag color={cfg.color}>{cfg.label}</Tag>
+              ) : (
+                currentDocument.embedding_status || '-'
+              );
+            })()}
+          </Descriptions.Item>
           <Descriptions.Item label="存储路径">
             {currentDocument.storage_path}
           </Descriptions.Item>

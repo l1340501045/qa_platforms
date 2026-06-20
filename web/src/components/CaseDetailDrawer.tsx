@@ -7,6 +7,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Descriptions,
   Drawer,
+  Empty,
   Spin,
   Steps,
   Tag,
@@ -178,8 +179,22 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({ caseId, open, onClo
               </div>
             )}
 
-            {/* 溯源信息 */}
-            {caseData.provenance && (
+            {/* 三者皆空时兜底，避免大片留白 */}
+            {preconditions.length === 0 &&
+              steps.length === 0 &&
+              expectedResults.length === 0 && (
+                <Empty
+                  description="该用例暂无前置条件 / 步骤 / 预期结果"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  style={{ margin: '24px 0' }}
+                />
+              )}
+
+            {/* 溯源信息（仅当有实际字段时显示，避免孤立标题） */}
+            {caseData.provenance &&
+              (caseData.provenance.source_section ||
+                caseData.provenance.verbatim_excerpt ||
+                caseData.provenance.derived_from) && (
               <div style={{ marginBottom: 24 }}>
                 <Text strong style={{ display: 'block', marginBottom: 8 }}>
                   溯源 (Provenance)

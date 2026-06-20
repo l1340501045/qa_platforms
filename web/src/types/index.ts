@@ -159,6 +159,7 @@ export interface Document {
   doc_type: DocType;
   folder_path: string | null;
   status: DocStatus;
+  embedding_status?: string;
   association_count?: number;
   created_at: string;
   updated_at: string;
