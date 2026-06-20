@@ -236,6 +236,8 @@ const SearchPage: React.FC = () => {
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="系统筛选"
           style={{ width: 180 }}
           value={systemId}
@@ -244,6 +246,8 @@ const SearchPage: React.FC = () => {
         />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="优先级"
           style={{ width: 120 }}
           value={priority}
@@ -257,6 +261,8 @@ const SearchPage: React.FC = () => {
         />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="Review 状态"
           style={{ width: 140 }}
           value={reviewStatus}

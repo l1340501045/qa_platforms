@@ -3,7 +3,6 @@ import {
   Button,
   Card,
   Col,
-  Drawer,
   Form,
   Input,
   message,
@@ -11,6 +10,7 @@ import {
   Pagination,
   Row,
   Spin,
+  Tooltip,
   Typography,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
@@ -35,7 +35,7 @@ const SystemsPage: React.FC = () => {
     deleteSystem,
   } = useKnowledgeStore();
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingSystem, setEditingSystem] = useState<System | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
@@ -48,17 +48,17 @@ const SystemsPage: React.FC = () => {
     fetchSystems({ page, per_page: pageSize });
   };
 
-  const openCreateDrawer = () => {
+  const openCreateModal = () => {
     setEditingSystem(null);
     form.resetFields();
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
-  const openEditDrawer = (system: System, e: React.MouseEvent) => {
+  const openEditModal = (system: System, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingSystem(system);
     form.setFieldsValue({ name: system.name, description: system.description || '' });
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
   const handleSubmit = async () => {
@@ -72,7 +72,7 @@ const SystemsPage: React.FC = () => {
         await createSystem(values);
         message.success('系统创建成功');
       }
-      setDrawerOpen(false);
+      setModalOpen(false);
       form.resetFields();
     } catch (err: any) {
       if (err?.errorFields) return; // form validation error
@@ -107,7 +107,7 @@ const SystemsPage: React.FC = () => {
         <Typography.Title level={3} style={{ margin: 0 }}>
           系统列表
         </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           新建系统
         </Button>
       </div>
@@ -120,8 +120,12 @@ const SystemsPage: React.FC = () => {
                 hoverable
                 onClick={() => navigate(`/systems/${system.id}/documents`)}
                 actions={[
-                  <EditOutlined key="edit" onClick={(e) => openEditDrawer(system, e)} />,
-                  <DeleteOutlined key="delete" onClick={(e) => handleDelete(system, e)} />,
+                  <Tooltip title="编辑" key="edit">
+                    <EditOutlined onClick={(e) => openEditModal(system, e)} />
+                  </Tooltip>,
+                  <Tooltip title="删除" key="delete">
+                    <DeleteOutlined onClick={(e) => handleDelete(system, e)} />
+                  </Tooltip>,
                 ]}
               >
                 <Meta
@@ -162,16 +166,15 @@ const SystemsPage: React.FC = () => {
         </div>
       )}
 
-      <Drawer
+      <Modal
         title={editingSystem ? '编辑系统' : '新建系统'}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={400}
-        extra={
-          <Button type="primary" onClick={handleSubmit} loading={submitting}>
-            {editingSystem ? '保存' : '创建'}
-          </Button>
-        }
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={handleSubmit}
+        confirmLoading={submitting}
+        okText={editingSystem ? '保存' : '创建'}
+        cancelText="取消"
+        destroyOnHidden
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -185,7 +188,7 @@ const SystemsPage: React.FC = () => {
             <Input.TextArea rows={4} placeholder="请输入系统描述（可选）" />
           </Form.Item>
         </Form>
-      </Drawer>
+      </Modal>
     </div>
   );
 };

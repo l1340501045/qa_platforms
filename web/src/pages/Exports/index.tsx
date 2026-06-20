@@ -6,9 +6,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge,
   Button,
-  Input,
   Modal,
   Radio,
+  Select,
   Spin,
   Table,
   message,
@@ -17,6 +17,8 @@ import { PlusOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
 import { createExport, listExports } from '../../services/exportApi';
+import { listSystemOptions, listSystemBatches } from '../../services/systemApi';
+import type { SystemBatchItem } from '../../services/systemApi';
 import type {
   CreateExportRequest,
   ExportFormat,
@@ -53,6 +55,9 @@ const Exports: React.FC = () => {
   const [formFormat, setFormFormat] = useState<ExportFormat>('markdown');
   const [formBatchId, setFormBatchId] = useState('');
   const [formSystemId, setFormSystemId] = useState('');
+  const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [batchOptions, setBatchOptions] = useState<SystemBatchItem[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
 
   // ─── 轮询 ───
   const pollTimerRef = useRef<number | null>(null);
@@ -132,12 +137,12 @@ const Exports: React.FC = () => {
 
   // ─── 创建导出 ───
   const handleCreate = useCallback(async () => {
-    if (formScope === 'batch' && !formBatchId.trim()) {
-      message.warning('请输入 Batch ID');
+    if (formScope === 'batch' && !formBatchId) {
+      message.warning('请选择批次');
       return;
     }
-    if (formScope === 'system' && !formSystemId.trim()) {
-      message.warning('请输入 System ID');
+    if (formScope === 'system' && !formSystemId) {
+      message.warning('请选择系统');
       return;
     }
 
@@ -167,6 +172,35 @@ const Exports: React.FC = () => {
     setFormFormat('markdown');
     setFormBatchId('');
     setFormSystemId('');
+    setBatchOptions([]);
+  };
+
+  // 打开新建弹窗时懒加载系统选项
+  const openCreateModal = () => {
+    setModalOpen(true);
+    if (systemOptions.length === 0) {
+      listSystemOptions().then(setSystemOptions).catch(() => {});
+    }
+  };
+
+  // 选中系统后加载该系统可见批次（batch scope 联动）
+  const handleSystemChange = (sysId: string) => {
+    setFormSystemId(sysId);
+    setFormBatchId('');
+    setBatchOptions([]);
+    if (sysId) {
+      setBatchLoading(true);
+      listSystemBatches(sysId, { per_page: 100 })
+        .then((res) =>
+          setBatchOptions(
+            res.items.filter((b) =>
+              ['pending_review', 'completed', 'archived'].includes(b.status),
+            ),
+          ),
+        )
+        .catch(() => setBatchOptions([]))
+        .finally(() => setBatchLoading(false));
+    }
   };
 
   // ─── 表格列 ───
@@ -232,7 +266,7 @@ const Exports: React.FC = () => {
       {/* ─── 顶部 ─── */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <h2 style={{ margin: 0 }}>导出中心</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
           新建导出
         </Button>
       </div>
@@ -270,7 +304,15 @@ const Exports: React.FC = () => {
       >
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 8 }}>范围：</div>
-          <Radio.Group value={formScope} onChange={(e) => setFormScope(e.target.value)}>
+          <Radio.Group
+            value={formScope}
+            onChange={(e) => {
+              const v = e.target.value as ExportScope;
+              setFormScope(v);
+              setFormBatchId('');
+              if (v === 'batch' && formSystemId) handleSystemChange(formSystemId);
+            }}
+          >
             <Radio value="batch">批次</Radio>
             <Radio value="system">系统</Radio>
           </Radio.Group>
@@ -284,27 +326,59 @@ const Exports: React.FC = () => {
           </Radio.Group>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          {formScope === 'batch' ? (
-            <>
-              <div style={{ marginBottom: 8 }}>Batch ID：</div>
-              <Input
-                placeholder="请输入批次 ID"
-                value={formBatchId}
-                onChange={(e) => setFormBatchId(e.target.value)}
+        {formScope === 'batch' ? (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}>系统：</div>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择系统"
+                style={{ width: '100%' }}
+                value={formSystemId || undefined}
+                onChange={handleSystemChange}
+                options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
               />
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom: 8 }}>System ID：</div>
-              <Input
-                placeholder="请输入系统 ID"
-                value={formSystemId}
-                onChange={(e) => setFormSystemId(e.target.value)}
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}>批次：</div>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder={formSystemId ? '选择批次' : '请先选择系统'}
+                style={{ width: '100%' }}
+                value={formBatchId || undefined}
+                onChange={setFormBatchId}
+                loading={batchLoading}
+                disabled={!formSystemId}
+                options={batchOptions.map((b) => {
+                  const statusLabel =
+                    b.status === 'pending_review' ? '待审阅' :
+                    b.status === 'completed' ? '已完成' :
+                    b.status === 'archived' ? '已落库' : b.status;
+                  const date = new Date(b.created_at).toLocaleDateString('zh-CN');
+                  return {
+                    value: b.id,
+                    label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${statusLabel}`,
+                  };
+                })}
               />
-            </>
-          )}
-        </div>
+            </div>
+          </>
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>系统：</div>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择系统"
+              style={{ width: '100%' }}
+              value={formSystemId || undefined}
+              onChange={setFormSystemId}
+              options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+            />
+          </div>
+        )}
       </Modal>
     </div>
   );

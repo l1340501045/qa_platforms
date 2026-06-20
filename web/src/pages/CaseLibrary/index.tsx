@@ -310,6 +310,8 @@ const CaseLibraryPage: React.FC = () => {
       {/* ─── 筛选栏 ─── */}
       <Space style={{ marginBottom: 16 }} wrap>
         <Select
+          showSearch
+          optionFilterProp="label"
           placeholder="选择系统"
           style={{ width: 200 }}
           value={selectedSystemId}
@@ -321,6 +323,8 @@ const CaseLibraryPage: React.FC = () => {
         />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="批次（默认=最新）"
           style={{ width: 340 }}
           value={selectedBatchId}
@@ -339,6 +343,8 @@ const CaseLibraryPage: React.FC = () => {
         />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="优先级"
           style={{ width: 120 }}
           value={priority}
@@ -352,6 +358,8 @@ const CaseLibraryPage: React.FC = () => {
         />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="Review 状态"
           style={{ width: 140 }}
           value={reviewStatus}

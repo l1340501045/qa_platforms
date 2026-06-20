@@ -528,6 +528,8 @@ const Workbench: React.FC = () => {
       <div style={{ marginBottom: 16 }}>
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="Review 状态筛选"
           style={{ width: 180 }}
           value={reviewFilter}

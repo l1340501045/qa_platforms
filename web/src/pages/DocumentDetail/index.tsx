@@ -5,7 +5,6 @@ import {
   Card,
   Descriptions,
   Form,
-  Input,
   message,
   Modal,
   Select,
@@ -17,8 +16,9 @@ import {
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import { triggerGeneration } from '../../services/batchApi';
-import { createDocAssociation, getDocAssociations } from '../../services/documentApi';
-import type { DocAssociations, DocRelationType } from '../../types';
+import { createDocAssociation, getDocAssociations, listDocuments } from '../../services/documentApi';
+import { listSystemOptions } from '../../services/systemApi';
+import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
 const docTypeColorMap: Record<string, string> = {
@@ -54,6 +54,9 @@ const DocumentDetailPage: React.FC = () => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addForm] = Form.useForm();
   const [addSubmitting, setAddSubmitting] = useState(false);
+  const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [docOptions, setDocOptions] = useState<Document[]>([]);
+  const [docLoading, setDocLoading] = useState(false);
 
   useEffect(() => {
     if (!documentId) return;
@@ -98,6 +101,27 @@ const DocumentDetailPage: React.FC = () => {
     } finally {
       setGenerating(false);
     }
+  };
+
+  const openAddModal = () => {
+    addForm.resetFields();
+    setDocOptions([]);
+    setAddModalOpen(true);
+    if (systemOptions.length === 0) {
+      listSystemOptions().then(setSystemOptions).catch(() => {});
+    }
+  };
+
+  // 选目标系统后加载该系统文档（排除当前文档）
+  const handleAssocSystemChange = (sysId: string) => {
+    addForm.setFieldsValue({ target_document_id: undefined });
+    setDocOptions([]);
+    if (!sysId) return;
+    setDocLoading(true);
+    listDocuments(sysId, { per_page: 100 })
+      .then((res) => setDocOptions(res.items.filter((d) => d.id !== documentId)))
+      .catch(() => setDocOptions([]))
+      .finally(() => setDocLoading(false));
   };
 
   const handleAddAssociation = async () => {
@@ -193,7 +217,7 @@ const DocumentDetailPage: React.FC = () => {
           <Button type="primary" onClick={handleGenerate} loading={generating}>
             生成测试用例
           </Button>
-          <Button onClick={() => setAddModalOpen(true)}>添加关联</Button>
+          <Button onClick={openAddModal}>添加关联</Button>
         </Space>
       </Card>
 
@@ -220,18 +244,38 @@ const DocumentDetailPage: React.FC = () => {
       >
         <Form form={addForm} layout="vertical">
           <Form.Item
-            name="target_document_id"
-            label="目标文档 ID"
-            rules={[{ required: true, message: '请输入目标文档 ID' }]}
+            name="system_id"
+            label="目标系统"
+            rules={[{ required: true, message: '请选择系统' }]}
           >
-            <Input placeholder="请输入要关联的文档 ID" />
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择目标文档所属系统"
+              onChange={handleAssocSystemChange}
+              options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+            />
+          </Form.Item>
+          <Form.Item
+            name="target_document_id"
+            label="目标文档"
+            rules={[{ required: true, message: '请选择目标文档' }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择要关联的文档"
+              loading={docLoading}
+              disabled={docOptions.length === 0}
+              options={docOptions.map((d) => ({ value: d.id, label: d.title }))}
+            />
           </Form.Item>
           <Form.Item
             name="relation_type"
             label="关联类型"
             rules={[{ required: true, message: '请选择关联类型' }]}
           >
-            <Select placeholder="请选择关联类型">
+            <Select showSearch optionFilterProp="children" placeholder="请选择关联类型">
               {Object.entries(relationTypeLabels).map(([value, label]) => (
                 <Select.Option key={value} value={value}>
                   {label}

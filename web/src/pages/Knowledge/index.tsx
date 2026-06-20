@@ -231,7 +231,6 @@ const KnowledgePage: React.FC = () => {
 
       <Space style={{ marginBottom: 24 }}>
         <Upload
-          // @ts-expect-error antd 透传 webkitdirectory 以支持文件夹上传
           directory
           showUploadList={false}
           beforeUpload={collectFile}
