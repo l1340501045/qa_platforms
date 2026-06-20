@@ -516,3 +516,33 @@ export interface CaseTreeParams {
   priority?: Priority;
   review_status?: ReviewStatus;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Cheat Sheet（知识速查表）相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** cheat sheet 条目类型 */
+export type CheatSheetType = 'must_test' | 'confusion_pair' | 'section_priority' | 'prd_status';
+
+/** cheat sheet 审核状态 */
+export type CheatSheetReviewStatus = 'pending' | 'approved' | 'rejected';
+
+/** cheat sheet 条目（对齐后端 _serialize_item） */
+export interface CheatSheetItem {
+  id: string;
+  sheet_id: string;
+  sheet_type: CheatSheetType;
+  title: string;
+  dedup_key: string;
+  ai_content: Record<string, unknown>;
+  qa_content: Record<string, unknown> | null;
+  review_status: CheatSheetReviewStatus;
+  review_tier: string | null;
+  review_comment: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  source_entity_ids: string[] | null;
+  source_relation_ids: string[] | null;
+  source_section_refs: string[] | null;
+  sort_order: number;
+}

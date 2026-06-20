@@ -18,6 +18,7 @@ import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import { triggerGeneration } from '../../services/batchApi';
 import { createDocAssociation, getDocAssociations, listDocuments } from '../../services/documentApi';
 import { listSystemOptions } from '../../services/systemApi';
+import CheatSheetDrawer from '../../components/CheatSheetDrawer';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -57,6 +58,7 @@ const DocumentDetailPage: React.FC = () => {
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [docOptions, setDocOptions] = useState<Document[]>([]);
   const [docLoading, setDocLoading] = useState(false);
+  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
 
   useEffect(() => {
     if (!documentId) return;
@@ -218,6 +220,7 @@ const DocumentDetailPage: React.FC = () => {
             生成测试用例
           </Button>
           <Button onClick={openAddModal}>添加关联</Button>
+          <Button onClick={() => setCheatSheetOpen(true)}>知识速查表</Button>
         </Space>
       </Card>
 
@@ -285,6 +288,12 @@ const DocumentDetailPage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      <CheatSheetDrawer
+        documentId={documentId ?? null}
+        open={cheatSheetOpen}
+        onClose={() => setCheatSheetOpen(false)}
+      />
     </div>
   );
 };
