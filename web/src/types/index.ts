@@ -546,3 +546,34 @@ export interface CheatSheetItem {
   source_section_refs: string[] | null;
   sort_order: number;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 解析产物（知识图谱）相关类型 — Stage 1 GraphRAG
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 实体（knowledge.entities） */
+export interface KgEntity {
+  id: string;
+  entity_type: string;
+  name: string;
+  section_ref: string | null;
+  description: string | null;
+  source_quote: string | null;
+}
+
+/** 实体关系（knowledge.entity_relations） */
+export interface KgRelation {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relation_type: string;
+  note: string | null;
+}
+
+/** 文档解析产物聚合 */
+export interface KnowledgeGraph {
+  stats: { entity_count: number; relation_count: number; image_count: number };
+  entities: KgEntity[];
+  relations: KgRelation[];
+  image_captions: Record<string, unknown>;
+}

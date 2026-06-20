@@ -19,6 +19,7 @@ import { triggerGeneration } from '../../services/batchApi';
 import { createDocAssociation, getDocAssociations, listDocuments } from '../../services/documentApi';
 import { listSystemOptions } from '../../services/systemApi';
 import CheatSheetDrawer from '../../components/CheatSheetDrawer';
+import ParseResultDrawer from '../../components/ParseResultDrawer';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -59,6 +60,7 @@ const DocumentDetailPage: React.FC = () => {
   const [docOptions, setDocOptions] = useState<Document[]>([]);
   const [docLoading, setDocLoading] = useState(false);
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
+  const [parseOpen, setParseOpen] = useState(false);
 
   useEffect(() => {
     if (!documentId) return;
@@ -221,6 +223,7 @@ const DocumentDetailPage: React.FC = () => {
           </Button>
           <Button onClick={openAddModal}>添加关联</Button>
           <Button onClick={() => setCheatSheetOpen(true)}>知识速查表</Button>
+          <Button onClick={() => setParseOpen(true)}>解析详情</Button>
         </Space>
       </Card>
 
@@ -293,6 +296,12 @@ const DocumentDetailPage: React.FC = () => {
         documentId={documentId ?? null}
         open={cheatSheetOpen}
         onClose={() => setCheatSheetOpen(false)}
+      />
+
+      <ParseResultDrawer
+        documentId={documentId ?? null}
+        open={parseOpen}
+        onClose={() => setParseOpen(false)}
       />
     </div>
   );

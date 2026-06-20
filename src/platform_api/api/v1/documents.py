@@ -8,13 +8,17 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.knowledge_base.repositories.entity_repo import EntityRepository
 from src.platform_api.core.database import get_session
+from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
+from src.platform_api.models.knowledge import Document
 from src.platform_api.schemas.document import CreateDocumentAssociationRequest
-from src.platform_api.services.document_service import DocumentService
 from src.platform_api.services.batch_list_service import BatchListService
+from src.platform_api.services.document_service import DocumentService
 
 router = APIRouter(prefix="/documents", tags=["文档管理"])
 
@@ -72,6 +76,60 @@ async def get_document(
     """获取文档详情"""
     doc = await service.get_document(document_id)
     return success(doc)
+
+
+# ─── 文档解析产物：实体图谱 + 图片理解（Stage 1 GraphRAG 产物） ───
+
+
+@router.get("/{document_id}/knowledge-graph")
+async def get_document_knowledge_graph(
+    document_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """获取文档解析产物：实体、关系、图片 AI 理解 + 统计概览（只读）。"""
+    doc_result = await session.execute(select(Document).where(Document.id == document_id))
+    doc = doc_result.scalars().first()
+    if doc is None:
+        raise ApiError("E4041", "文档不存在")
+
+    entity_repo = EntityRepository(session)
+    entities = await entity_repo.get_entities_by_document(document_id)
+    relations = await entity_repo.get_relations_by_document(document_id)
+
+    captions = doc.image_captions or {}
+    image_count = len(captions) if isinstance(captions, (dict, list)) else 0
+
+    return success(
+        {
+            "stats": {
+                "entity_count": len(entities),
+                "relation_count": len(relations),
+                "image_count": image_count,
+            },
+            "entities": [
+                {
+                    "id": str(e.id),
+                    "entity_type": e.entity_type,
+                    "name": e.name,
+                    "section_ref": e.section_ref,
+                    "description": e.description,
+                    "source_quote": e.source_quote,
+                }
+                for e in entities
+            ],
+            "relations": [
+                {
+                    "id": str(r.id),
+                    "source_entity_id": str(r.source_entity_id),
+                    "target_entity_id": str(r.target_entity_id),
+                    "relation_type": r.relation_type,
+                    "note": r.note,
+                }
+                for r in relations
+            ],
+            "image_captions": captions,
+        }
+    )
 
 
 # ─── 文档删除 ───
