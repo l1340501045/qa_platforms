@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     # rule_extract 阶段抽规则的并发（输出短，可略高于生成阶段的 llm_concurrency）
     rule_extract_concurrency: int = 4
 
+    # ── Hybrid 跨功能点规格检索（关键词 + 向量 + RRF）─────────────────────────────
+    # 关闭时 CrossFeatureIndex 行为与改造前完全一致（纯关键词，不调 embedding，零额外开销）。
+    hybrid_cross_retrieval_enabled: bool = False
+    # RRF 融合常数；候选集较小（数十~一两百）时可调到 20 锐化排名差异，默认 60 为业界稳健值。
+    hybrid_cross_rrf_k: int = 60
+
     # Embedding（默认复用 LLM 网关，可单独覆盖）
     openai_api_key: str = ""  # 兼容旧字段，作为各处 key 的最终回退
     embedding_base_url: str = ""  # 留空回退 llm_base_url
