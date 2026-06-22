@@ -390,7 +390,9 @@ async def generate_cases(
                     feedback_lines = "\n".join(f"- {comment}" for comment in feedback.values() if comment)
                     if feedback_lines:
                         feedback_section = (
-                            "\n\n【QA 修改意见（必须严格按以下意见重写相关用例，不要偏离原测试点意图）】\n"
+                            "\n\n【QA 修改意见（对相关用例的权威纠正，优先级高于原测试点/原用例；"
+                            "请先理解意见的业务含义，冲突时一律以 QA 意见为准，"
+                            "允许推翻原有断言、过滤规则或方向，不要保留与意见相悖的原结论）】\n"
                             + feedback_lines
                         )
                 full_system_prompt = (
