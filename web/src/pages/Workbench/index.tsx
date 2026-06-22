@@ -390,10 +390,16 @@ const Workbench: React.FC = () => {
         title: '标题',
         dataIndex: 'title',
         key: 'title',
-        ellipsis: true,
         width: '30%',
         render: (text: string, record: TestCase) => (
-          <a onClick={() => setDetailCaseId(record.id)}>{text}</a>
+          <Space size={4} align="start">
+            {record.iteration > 1 && (
+              <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>
+                已重写
+              </Tag>
+            )}
+            <a onClick={() => setDetailCaseId(record.id)}>{text}</a>
+          </Space>
         ),
       },
       {
@@ -641,6 +647,14 @@ const Workbench: React.FC = () => {
         editable
         onReview={async (caseId, status, comment) => {
           await reviewCase(caseId, status, comment);
+        }}
+        onUpdated={() => {
+          if (!batchId) return;
+          fetchBatchDetail(batchId, {
+            page: casesPage,
+            per_page: casesPerPage,
+            review_status: reviewFilter,
+          }).catch(() => message.error('刷新用例列表失败'));
         }}
       />
     </div>

@@ -73,6 +73,8 @@ interface CaseDetailDrawerProps {
   onReview?: (caseId: string, status: ReviewAction, comment?: string) => Promise<void>;
   /** 传入 true 启用编辑和 AI 重写能力 */
   editable?: boolean;
+  /** 用例被人工编辑 / AI 重写后回调，供父级刷新列表，避免列表展示旧标题/旧状态 */
+  onUpdated?: () => void;
 }
 
 // ─── 步骤编辑器 ─────────────────────────────────────────────────────────────────
@@ -214,6 +216,7 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
   onClose,
   onReview,
   editable = false,
+  onUpdated,
 }) => {
   const [loading, setLoading] = useState(false);
   const [caseData, setCaseData] = useState<TestCase | null>(null);
@@ -320,6 +323,7 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
       setCaseData(updated);
       setEditing(false);
       setEditForm(null);
+      onUpdated?.();
       message.success('保存成功');
     } catch {
       message.error('保存失败');
@@ -356,7 +360,8 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
             pollRef.current = null;
             setCaseData(latest);
             setRegenerating(false);
-            message.success('AI 重写完成');
+            onUpdated?.();
+            message.success('AI 重写完成，状态已转「待审」，原修改意见已保留供追溯');
             return;
           }
         } catch {
@@ -483,7 +488,14 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
                   {REVIEW_TAG[caseData.review_status as ReviewStatus]?.label || caseData.review_status}
                 </Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="迭代次数">{caseData.iteration}</Descriptions.Item>
+              <Descriptions.Item label="迭代次数">
+                {caseData.iteration}
+                {caseData.iteration > 1 && (
+                  <Tag color="purple" style={{ marginLeft: 8 }}>
+                    已重写
+                  </Tag>
+                )}
+              </Descriptions.Item>
             </Descriptions>
 
             {/* 前置条件 */}
@@ -594,11 +606,11 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
               </div>
             )}
 
-            {/* Review 意见 */}
+            {/* Review 意见 / 重写依据 */}
             {caseData.review_comment && (
               <div>
                 <Text strong style={{ display: 'block', marginBottom: 8 }}>
-                  Review 意见
+                  {caseData.iteration > 1 ? '上次重写依据的意见' : 'Review 意见'}
                 </Text>
                 <Paragraph style={{ background: '#f5f5f5', padding: 12, borderRadius: 4 }}>
                   {caseData.review_comment}

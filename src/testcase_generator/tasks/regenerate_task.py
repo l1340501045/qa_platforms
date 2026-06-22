@@ -109,7 +109,10 @@ async def _regenerate_case(case_id: str, comment: str) -> dict:
         case.priority = llm_output.priority
         case.iteration = case.iteration + 1
         case.review_status = ReviewStatus.PENDING
-        case.review_comment = None
+        # 将本次重写依据（QA 填写的修改意见）写入 review_comment 作为追溯：
+        # iteration>1 时前端据此展示「上次重写依据的意见」，让 QA 在标题被 AI 改写后
+        # 仍能回看「这条是按什么意见改的」，避免追溯断链。
+        case.review_comment = comment
 
         await session.commit()
 
