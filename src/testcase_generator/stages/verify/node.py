@@ -27,7 +27,7 @@ from src.testcase_generator.stages.verify.verifier import (
 logger = logging.getLogger(__name__)
 
 
-def _build_feature_sections(
+async def _build_feature_sections(
     parsed_context: ParsedContext,
     feature_ids: set[str],
     feature_query: dict[str, str] | None = None,
@@ -81,12 +81,12 @@ def _build_feature_sections(
     # 跨功能点规格检索注入（与 write_cases 口径一致，治"假阴性空壳"根因 A2）：
     # 核验时也要看到"被折到别处的规格"，否则会把据此写的确定断言误判 ungrounded/undefined。
     if feature_query:
-        cross_index = CrossFeatureIndex(parsed_context)
+        cross_index = await CrossFeatureIndex.build(parsed_context)
         for fid in feature_ids:
             q = feature_query.get(fid, "")
             if not q:
                 continue
-            for cs in cross_index.query(q, seen[fid], top_k=3):
+            for cs in await cross_index.query(q, seen[fid], top_k=3):
                 _add(
                     fid,
                     PrdSection(
@@ -139,7 +139,7 @@ async def verify_node(state: PipelineState) -> dict:
     feature_query: dict[str, str] = defaultdict(str)
     for tp in test_points:
         feature_query[tp.feature_id] += f"{tp.dimension} {tp.description}\n"
-    sections_by_feature = _build_feature_sections(parsed_context, feature_ids, dict(feature_query))
+    sections_by_feature = await _build_feature_sections(parsed_context, feature_ids, dict(feature_query))
 
     verifications = await verify_cases(verify_inputs, sections_by_feature)
 
