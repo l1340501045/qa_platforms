@@ -5,9 +5,14 @@
  */
 import React, { useEffect, useState } from 'react';
 import {
+  Button,
   Descriptions,
   Drawer,
   Empty,
+  Input,
+  Modal,
+  Popconfirm,
+  Space,
   Spin,
   Steps,
   Tag,
@@ -40,15 +45,35 @@ function getTrustDisplay(level: number): { color: string; label: string } {
   return { color: '#f5222d', label: '低可信' };
 }
 
+type ReviewAction = 'confirmed' | 'needs_modification' | 'deleted';
+
 interface CaseDetailDrawerProps {
   caseId: string | null;
   open: boolean;
   onClose: () => void;
+  /** 传入则抽屉底部显示审核操作（确认/需修改/删除）；不传则只读浏览 */
+  onReview?: (caseId: string, status: ReviewAction, comment?: string) => Promise<void>;
 }
 
-const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({ caseId, open, onClose }) => {
+const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({ caseId, open, onClose, onReview }) => {
   const [loading, setLoading] = useState(false);
   const [caseData, setCaseData] = useState<TestCase | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [modifyOpen, setModifyOpen] = useState(false);
+  const [modifyComment, setModifyComment] = useState('');
+
+  const handleReview = async (status: ReviewAction, comment?: string) => {
+    if (!caseId || !onReview) return;
+    setReviewing(true);
+    try {
+      await onReview(caseId, status, comment);
+      onClose();
+    } catch {
+      /* 父级 / 拦截器已统一提示 */
+    } finally {
+      setReviewing(false);
+    }
+  };
 
   useEffect(() => {
     if (!caseId || !open) {
@@ -96,6 +121,37 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({ caseId, open, onClo
       onClose={onClose}
       width={640}
       destroyOnClose
+      footer={
+        onReview && caseData ? (
+          <Space>
+            <Button
+              type="primary"
+              loading={reviewing}
+              disabled={caseData.review_status === 'confirmed'}
+              onClick={() => handleReview('confirmed')}
+            >
+              确认
+            </Button>
+            <Button
+              loading={reviewing}
+              disabled={caseData.review_status === 'needs_modification'}
+              onClick={() => setModifyOpen(true)}
+            >
+              需修改
+            </Button>
+            <Popconfirm
+              title="确定删除该用例？"
+              okText="删除"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => handleReview('deleted')}
+            >
+              <Button danger loading={reviewing} disabled={caseData.review_status === 'deleted'}>
+                删除
+              </Button>
+            </Popconfirm>
+          </Space>
+        ) : undefined
+      }
     >
       <Spin spinning={loading}>
         {caseData && (
@@ -240,6 +296,31 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({ caseId, open, onClo
           </>
         )}
       </Spin>
+
+      <Modal
+        title="需修改 — 填写修改意见"
+        open={modifyOpen}
+        onCancel={() => setModifyOpen(false)}
+        confirmLoading={reviewing}
+        okText="提交"
+        cancelText="取消"
+        onOk={async () => {
+          if (!modifyComment.trim()) {
+            message.warning('请填写修改意见');
+            return;
+          }
+          await handleReview('needs_modification', modifyComment.trim());
+          setModifyOpen(false);
+          setModifyComment('');
+        }}
+      >
+        <Input.TextArea
+          rows={4}
+          value={modifyComment}
+          onChange={(e) => setModifyComment(e.target.value)}
+          placeholder="请输入修改意见（必填）"
+        />
+      </Modal>
     </Drawer>
   );
 };

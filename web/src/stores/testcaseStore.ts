@@ -166,7 +166,7 @@ export const useTestcaseStore = create<TestcaseState>((set, get) => ({
     action: 'confirmed' | 'needs_modification' | 'deleted',
     comment?: string,
   ) => {
-    const resp = await reviewTestCase(caseId, { action, comment });
+    const resp = await reviewTestCase(caseId, { status: action, comment });
     // 局部更新用例状态
     set((state) => ({
       cases: state.cases.map((c) =>

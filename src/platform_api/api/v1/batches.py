@@ -12,18 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.platform_api.core.database import get_session
 from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
-from src.platform_api.core.stage_names import PIPELINE_STAGES, to_canonical
+from src.platform_api.core.stage_names import PIPELINE_STAGES
 from src.platform_api.schemas.batch import (
-    BatchResponse,
     ClarificationRequest,
     GenerateRequest,
     IterateRequest,
 )
+from src.platform_api.services.batch_list_service import BatchListService
 from src.platform_api.services.clarification_service import ClarificationService
 from src.platform_api.services.generation_service import GenerationService
-from src.platform_api.services.review_service import ReviewService
-from src.platform_api.services.batch_list_service import BatchListService
 from src.platform_api.services.retry_service import RetryService
+from src.platform_api.services.review_service import ReviewService
 
 router = APIRouter(tags=["批次管理"])
 
@@ -77,6 +76,22 @@ async def trigger_generation(
     return JSONResponse(status_code=202, content=success({"batch_id": str(batch_resp.id)}))
 
 
+# ─── 全局批次列表（审核中心） ───
+
+
+@router.get("/batches")
+async def list_batches(
+    status: str | None = Query(None, description="按状态过滤"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """全局批次列表（跨系统，支持按状态过滤 + 分页）"""
+    params = PaginationParams(page=page, per_page=per_page)
+    items, total = await service.list_all(status=status, page=page, per_page=per_page)
+    return success(paginated_response(items, total, params))
+
+
 # ─── 批次选项（导出用下拉） ───
 
 
@@ -102,6 +117,7 @@ async def get_batch_detail(
 ):
     """获取批次完整详情（合并批次信息、阶段进度、用例列表）"""
     from sqlalchemy import select
+
     from src.platform_api.models.testcase import StageArtifact
 
     gen_service = GenerationService(session)

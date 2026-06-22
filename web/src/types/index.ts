@@ -319,6 +319,20 @@ export interface TestCase {
   updated_at: string;
 }
 
+// ─── 审核中心批次（全局列表） ───
+
+export interface ReviewBatch {
+  id: string;
+  document_id: string;
+  document_title: string;
+  system_id: string;
+  system_name: string;
+  status: BatchStatus;
+  total_cases: number | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
 // ─── 生成/澄清/迭代/归档响应 ───
 
 export interface GenerateResponse {
@@ -403,7 +417,7 @@ export interface ClarifyRequest {
 }
 
 export interface ReviewRequest {
-  action: 'confirmed' | 'needs_modification' | 'deleted';
+  status: 'confirmed' | 'needs_modification' | 'deleted';
   comment?: string;
 }
 

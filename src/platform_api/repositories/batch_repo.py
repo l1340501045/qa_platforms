@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select, update, func, and_, case as sql_case
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.models.knowledge import Document
@@ -167,6 +167,54 @@ class BatchRepository(BaseRepository[TestBatch]):
 
         result = await self.session.execute(stmt)
         return [row._asdict() for row in result.all()]
+
+    async def find_all(
+        self,
+        status: str | None = None,
+        page: int = 1,
+        per_page: int = 20,
+    ) -> tuple[list[dict], int]:
+        """
+        全局批次列表（跨系统），关联 document_title + system_name
+
+        Returns:
+            tuple[list[dict], int]: (批次列表, 总数)
+        """
+        base_query = (
+            select(
+                TestBatch.id,
+                TestBatch.document_id,
+                Document.title.label("document_title"),
+                TestBatch.system_id,
+                System.name.label("system_name"),
+                TestBatch.status,
+                TestBatch.total_cases,
+                TestBatch.started_at,
+                TestBatch.completed_at,
+                TestBatch.created_at,
+            )
+            .join(Document, TestBatch.document_id == Document.id)
+            .join(System, TestBatch.system_id == System.id)
+        )
+
+        count_query = select(func.count()).select_from(TestBatch)
+
+        if status is not None:
+            base_query = base_query.where(TestBatch.status == status)
+            count_query = count_query.where(TestBatch.status == status)
+
+        base_query = base_query.order_by(TestBatch.created_at.desc())
+
+        offset = (page - 1) * per_page
+        base_query = base_query.offset(offset).limit(per_page)
+
+        result = await self.session.execute(base_query)
+        items = [row._asdict() for row in result.all()]
+
+        count_result = await self.session.execute(count_query)
+        total = count_result.scalar() or 0
+
+        return items, total
 
     async def update_status(self, batch_id: UUID, status: str) -> TestBatch | None:
         """更新批次状态"""

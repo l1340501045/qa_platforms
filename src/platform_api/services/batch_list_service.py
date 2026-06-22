@@ -36,6 +36,15 @@ class BatchListService:
         """获取文档下的批次列表"""
         return await self.batch_repo.find_by_document(document_id, status, page, per_page)
 
+    async def list_all(
+        self,
+        status: str | None = None,
+        page: int = 1,
+        per_page: int = 20,
+    ) -> tuple[list[dict], int]:
+        """全局批次列表（跨系统）"""
+        return await self.batch_repo.find_all(status, page, per_page)
+
     async def list_batch_options(self) -> list[dict]:
         """获取可导出批次选项"""
         return await self.batch_repo.find_options()

@@ -11,13 +11,25 @@ import type {
   ArchiveResponse,
   ReviewResponse,
   ReviewRequest,
+  PaginatedData,
   PaginationParams,
+  ReviewBatch,
   ReviewStatus,
   TestCase,
 } from '../types';
 
 export interface BatchQueryParams extends PaginationParams {
   review_status?: ReviewStatus;
+}
+
+/** 全局批次列表 GET /batches */
+export async function listBatches(params?: {
+  status?: string;
+  page?: number;
+  per_page?: number;
+}): Promise<PaginatedData<ReviewBatch>> {
+  const res = await api.get('/batches', { params });
+  return res.data;
 }
 
 /** 触发用例生成 POST /documents/:id/generate → 202 */

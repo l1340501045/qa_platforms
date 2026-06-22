@@ -2,6 +2,7 @@ import { Layout, Menu } from 'antd';
 import {
   ApartmentOutlined,
   AppstoreOutlined,
+  AuditOutlined,
   ExportOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
@@ -20,6 +21,11 @@ const menuItems = [
     key: '/case-library',
     icon: <ApartmentOutlined />,
     label: '用例库',
+  },
+  {
+    key: '/review',
+    icon: <AuditOutlined />,
+    label: '审核中心',
   },
   {
     key: '/search',
@@ -46,10 +52,11 @@ function MainLayout() {
     selectedKey = '/search';
   } else if (pathname.startsWith('/case-library')) {
     selectedKey = '/case-library';
+  } else if (pathname.startsWith('/review') || pathname.startsWith('/batches')) {
+    selectedKey = '/review';
   } else if (
     pathname.startsWith('/systems') ||
-    pathname.startsWith('/documents') ||
-    pathname.startsWith('/batches')
+    pathname.startsWith('/documents')
   ) {
     selectedKey = '/systems';
   }
