@@ -113,6 +113,7 @@ async def get_batch_detail(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     review_status: str | None = Query(None, description="按 review 状态过滤"),
+    q: str | None = Query(None, description="按用例标题模糊搜索"),
     session: AsyncSession = Depends(get_session),
 ):
     """获取批次完整详情（合并批次信息、阶段进度、用例列表）"""
@@ -164,6 +165,7 @@ async def get_batch_detail(
     cases_resp = await review_service.get_cases_by_batch(
         batch_id=batch_id,
         review_status=review_status,
+        keyword=q,
         offset=params.offset,
         limit=params.limit,
     )
@@ -314,6 +316,7 @@ async def archive_batch(
 async def get_batch_cases(
     batch_id: UUID,
     review_status: str | None = Query(None, description="按 review 状态过滤"),
+    q: str | None = Query(None, description="按用例标题模糊搜索"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     service: ReviewService = Depends(_get_review_service),
@@ -323,6 +326,7 @@ async def get_batch_cases(
     result = await service.get_cases_by_batch(
         batch_id=batch_id,
         review_status=review_status,
+        keyword=q,
         offset=params.offset,
         limit=params.limit,
     )

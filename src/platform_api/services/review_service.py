@@ -60,12 +60,19 @@ class ReviewService:
         return TestCaseResponse.model_validate(case)
 
     async def get_cases_by_batch(
-        self, batch_id: UUID, review_status: str | None = None, offset: int = 0, limit: int = 50
+        self,
+        batch_id: UUID,
+        review_status: str | None = None,
+        keyword: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
     ) -> TestCaseListResponse:
-        """获取批次用例列表（支持按 review_status 过滤）"""
+        """获取批次用例列表（支持按 review_status 过滤 + 标题关键词模糊搜索）"""
         filters = [TestCase.batch_id == batch_id]
         if review_status:
             filters.append(TestCase.review_status == review_status)
+        if keyword and keyword.strip():
+            filters.append(TestCase.title.ilike(f"%{keyword.strip()}%"))
 
         # 查询列表
         stmt = select(TestCase).where(*filters).order_by(TestCase.created_at.asc()).offset(offset).limit(limit)

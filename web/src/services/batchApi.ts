@@ -20,6 +20,7 @@ import type {
 
 export interface BatchQueryParams extends PaginationParams {
   review_status?: ReviewStatus;
+  q?: string;
 }
 
 /** 全局批次列表 GET /batches */

@@ -130,6 +130,7 @@ const Workbench: React.FC = () => {
   const [modifySubmitting, setModifySubmitting] = useState(false);
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
   const [retrySubmitting, setRetrySubmitting] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState('');
 
   // Ref to track if gate modal was auto-shown for current suspended state
   const gateAutoShownRef = useRef(false);
@@ -195,9 +196,10 @@ const Workbench: React.FC = () => {
         page,
         per_page: pageSize,
         review_status: reviewFilter,
+        q: searchKeyword || undefined,
       }).catch(() => message.error('加载用例列表失败'));
     },
-    [batchId, fetchBatchDetail, reviewFilter],
+    [batchId, fetchBatchDetail, reviewFilter, searchKeyword],
   );
 
   const handleFilterChange = useCallback(
@@ -208,9 +210,25 @@ const Workbench: React.FC = () => {
         page: 1,
         per_page: casesPerPage,
         review_status: value,
+        q: searchKeyword || undefined,
       }).catch(() => message.error('加载用例列表失败'));
     },
-    [batchId, casesPerPage, fetchBatchDetail],
+    [batchId, casesPerPage, fetchBatchDetail, searchKeyword],
+  );
+
+  const handleSearch = useCallback(
+    (value: string) => {
+      const kw = value.trim();
+      setSearchKeyword(kw);
+      if (!batchId) return;
+      fetchBatchDetail(batchId, {
+        page: 1,
+        per_page: casesPerPage,
+        review_status: reviewFilter,
+        q: kw || undefined,
+      }).catch(() => message.error('搜索用例失败'));
+    },
+    [batchId, casesPerPage, fetchBatchDetail, reviewFilter],
   );
 
   // ─── 澄清提交 ───
@@ -531,7 +549,14 @@ const Workbench: React.FC = () => {
       />
 
       {/* ─── 筛选栏 ─── */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <Input.Search
+          allowClear
+          enterButton
+          placeholder="按用例标题搜索（模糊匹配，回车/点按钮搜索）"
+          style={{ width: 340 }}
+          onSearch={handleSearch}
+        />
         <Select
           allowClear
           showSearch
@@ -654,6 +679,7 @@ const Workbench: React.FC = () => {
             page: casesPage,
             per_page: casesPerPage,
             review_status: reviewFilter,
+            q: searchKeyword || undefined,
           }).catch(() => message.error('刷新用例列表失败'));
         }}
       />
