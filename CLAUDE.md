@@ -21,7 +21,7 @@ AI 驱动的 QA 智能平台 — 上传需求文档，自动生成测试用例�
 ```bash
 # 后端
 uv run uvicorn src.platform_api.main:app --reload --port 8000
-uv run celery -A src.platform_api.core.celery_app worker --loglevel=info
+uv run celery -A src.platform_api.core.celery_app worker -Q testcase_generation,kb_parsing,export --loglevel=info
 
 # 前端
 cd web && npm run dev          # localhost:3000, 代理 /api → :8000

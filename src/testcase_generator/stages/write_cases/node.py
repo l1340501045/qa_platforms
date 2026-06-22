@@ -393,6 +393,14 @@ async def generate_cases(
                         else {}
                     )
                     prompt_payload["cheat_sheet"] = filtered_cheat_sheet
+                    _injected = sum(len(v) for v in filtered_cheat_sheet.values())
+                    if _injected:
+                        logger.info(
+                            "cheat sheet 注入: feature=%s 注入 %d 条（类型: %s）",
+                            feature_id,
+                            _injected,
+                            ",".join(filtered_cheat_sheet.keys()),
+                        )
 
                 user_content = json.dumps(
                     prompt_payload,
