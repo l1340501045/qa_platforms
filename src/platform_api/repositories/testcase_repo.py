@@ -50,6 +50,7 @@ class TestCaseRepository(BaseRepository[TestCase]):
                 TestCase.priority,
                 TestCase.trust_level,
                 TestCase.review_status,
+                TestCase.iteration,
                 TestCase.provenance,
                 TestCase.batch_id,
                 TestBatch.document_id,

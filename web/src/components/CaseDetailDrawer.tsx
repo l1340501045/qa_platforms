@@ -75,6 +75,10 @@ interface CaseDetailDrawerProps {
   editable?: boolean;
   /** 用例被人工编辑 / AI 重写后回调，供父级刷新列表，避免列表展示旧标题/旧状态 */
   onUpdated?: () => void;
+  /** 启用「审核/编辑完自动跳到下一条」 */
+  autoAdvance?: boolean;
+  /** 请求父级切到下一条用例（autoAdvance 时审核/编辑完调用；无下一条时父级负责关闭抽屉） */
+  onRequestNext?: () => void;
 }
 
 // ─── 步骤编辑器 ─────────────────────────────────────────────────────────────────
@@ -217,6 +221,8 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
   onReview,
   editable = false,
   onUpdated,
+  autoAdvance = false,
+  onRequestNext,
 }) => {
   const [loading, setLoading] = useState(false);
   const [caseData, setCaseData] = useState<TestCase | null>(null);
@@ -247,7 +253,11 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
     setReviewing(true);
     try {
       await onReview(caseId, status, comment);
-      onClose();
+      if (autoAdvance && onRequestNext) {
+        onRequestNext();
+      } else {
+        onClose();
+      }
     } catch {
       /* 父级 / 拦截器已统一提示 */
     } finally {
@@ -320,11 +330,15 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
         steps: editForm.steps,
         expected_results: editForm.expected_results,
       });
-      setCaseData(updated);
       setEditing(false);
       setEditForm(null);
       onUpdated?.();
       message.success('保存成功');
+      if (autoAdvance && onRequestNext) {
+        onRequestNext();
+      } else {
+        setCaseData(updated);
+      }
     } catch {
       message.error('保存失败');
     } finally {

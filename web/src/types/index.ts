@@ -509,6 +509,7 @@ export interface CaseTreeCase {
   priority: Priority;
   trust_level: number;
   review_status: ReviewStatus;
+  iteration: number;
 }
 
 /** 用例树节点 — 模块级 */

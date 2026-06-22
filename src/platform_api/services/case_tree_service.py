@@ -79,6 +79,7 @@ class CaseTreeService:
                     "priority": case["priority"],
                     "trust_level": case["trust_level"],
                     "review_status": case["review_status"],
+                    "iteration": case["iteration"],
                 }
             )
 
