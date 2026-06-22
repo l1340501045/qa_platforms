@@ -16,6 +16,7 @@ celery_app = Celery(
     include=[
         "src.testcase_generator.tasks.pipeline_task",
         "src.knowledge_base.tasks.parse_task",
+        "src.platform_api.tasks.export_task",
     ],
 )
 
