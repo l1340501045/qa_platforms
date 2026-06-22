@@ -320,12 +320,12 @@ async def generate_cases(
     # 跨功能点规格检索注入（治"假阴性空壳"根因 A2）：某测试点行为可能定义在别的功能点
     # 章节里（深层子节被折进别处）。按本功能点测试点描述检索全 PRD spec，补注 top-K
     # 跨章节参考，让模型据此写确定断言而非误判留白。scope=cross_ref。
-    cross_index = CrossFeatureIndex(parsed_context)
+    cross_index = await CrossFeatureIndex.build(parsed_context)
     for fid, fid_tps in tp_by_feature.items():
         query_text = "\n".join(
             f"{tp.dimension} {tp.description}" for tp in fid_tps
         )
-        for cs in cross_index.query(query_text, ctx_seen[fid], top_k=3):
+        for cs in await cross_index.query(query_text, ctx_seen[fid], top_k=3):
             key = (cs.source_ref or "", cs.heading or "")
             ctx_seen[fid].add(key)
             feature_context[fid].append(
