@@ -14,8 +14,8 @@ from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.stages.context_utils import (
-    collect_global_sections,
     CrossFeatureIndex,
+    collect_global_sections,
 )
 from src.testcase_generator.stages.verify.verifier import (
     PrdSection,
