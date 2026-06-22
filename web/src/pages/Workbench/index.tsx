@@ -638,6 +638,7 @@ const Workbench: React.FC = () => {
         caseId={detailCaseId}
         open={!!detailCaseId}
         onClose={() => setDetailCaseId(null)}
+        editable
         onReview={async (caseId, status, comment) => {
           await reviewCase(caseId, status, comment);
         }}

@@ -228,10 +228,12 @@ async def generate_cases(
     *,
     document_id: UUID | None = None,
     start_counter: int = 0,
+    feedback: dict | None = None,
 ) -> tuple[list[GeneratedTestCase], list[dict]]:
     """对给定测试点集生成用例的核心例程（write_cases 与 backfill 共用）。
 
     返回 (生成的用例列表, 失败子批列表)。用例编号从 start_counter+1 起递增。
+    feedback: QA 修改意见 {case_id: comment}，注入到 prompt 让 AI 按意见重写。
     """
     # 推断 feature_types 用于 few-shot 查询
     all_feature_types: list[str] = []
@@ -383,7 +385,17 @@ async def generate_cases(
                 ]
 
                 cheat_sheet_section = CHEAT_SHEET_SYSTEM_PROMPT if settings.cheat_sheet_injection_enabled else ""
-                full_system_prompt = WRITE_CASES_SYSTEM_PROMPT + cheat_sheet_section + few_shot_section
+                feedback_section = ""
+                if feedback:
+                    feedback_lines = "\n".join(f"- {comment}" for comment in feedback.values() if comment)
+                    if feedback_lines:
+                        feedback_section = (
+                            "\n\n【QA 修改意见（必须严格按以下意见重写相关用例，不要偏离原测试点意图）】\n"
+                            + feedback_lines
+                        )
+                full_system_prompt = (
+                    WRITE_CASES_SYSTEM_PROMPT + cheat_sheet_section + feedback_section + few_shot_section
+                )
                 prompt_payload = {"test_points": test_points_data, "requirement_context": relevant_context}
                 if settings.cheat_sheet_injection_enabled:
                     feature = feature_by_id.get(feature_id)
@@ -527,13 +539,18 @@ async def write_cases_node(state: PipelineState) -> dict:
     parsed_context = state["parsed_context"]
     test_points: list[TestPointSchema] = state["test_points"]
     system_id = UUID(state["system_id"])
-    document_id = UUID(state["document_id"])
+    document_id = UUID(state["document_id"]) if state.get("document_id") else None
+
+    # 迭代场景：generation_config.feedback 携带 QA 修改意见
+    generation_config = state.get("generation_config") or {}
+    iteration_feedback = generation_config.get("feedback") if isinstance(generation_config, dict) else None
 
     all_test_cases, failed_features = await generate_cases(
         parsed_context,
         test_points,
         system_id,
         document_id=document_id,
+        feedback=iteration_feedback,
     )
 
     return {

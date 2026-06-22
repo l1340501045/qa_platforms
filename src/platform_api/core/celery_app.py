@@ -15,6 +15,8 @@ celery_app = Celery(
     # "Received unregistered task" 报错堆积在队列里（生产异步链路完全失效）。
     include=[
         "src.testcase_generator.tasks.pipeline_task",
+        "src.testcase_generator.tasks.regenerate_task",
+        "src.testcase_generator.tasks.iterate_task",
         "src.knowledge_base.tasks.parse_task",
         "src.platform_api.tasks.export_task",
     ],

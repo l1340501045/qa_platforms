@@ -228,11 +228,11 @@ async def trigger_iterate(
     body: IterateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """触发迭代 — 基于人工反馈重跑部分用例生成"""
+    """触发迭代 — 基于人工反馈重跑部分用例生成（异步 Celery 派发）"""
+    from src.platform_api.core.celery_app import celery_app
     from src.platform_api.models.enums import BatchStatus
     from src.platform_api.models.testcase import TestBatch
     from src.platform_api.repositories.base import BaseRepository
-    from src.testcase_generator.services.iteration_service import IterationService
 
     # 验证 batch 存在并检查状态
     batch_repo = BaseRepository(session, TestBatch)
@@ -243,22 +243,23 @@ async def trigger_iterate(
     if batch.status not in (BatchStatus.PENDING_REVIEW, BatchStatus.REVIEWING):
         raise ApiError("E4001", f"批次当前状态为 '{batch.status}'，仅 pending_review/reviewing 可迭代")
 
-    # 调用迭代服务
-    iteration_service = IterationService()
-    await iteration_service.iterate(
-        batch_id=batch_id,
-        modified_case_ids=body.modified_case_ids,
-        feedback=body.feedback or {},
+    # 异步派发到 Celery（不在 HTTP 请求中 await LLM 执行）
+    celery_app.send_task(
+        "testcase_generator.iterate_batch",
+        kwargs={
+            "batch_id": str(batch_id),
+            "modified_case_ids": body.modified_case_ids,
+            "feedback": body.feedback or {},
+        },
+        queue="testcase_generation",
     )
 
-    # 刷新 batch 状态
-    await session.refresh(batch)
     return JSONResponse(
         status_code=202,
         content=success(
             {
                 "batch_id": str(batch.id),
-                "status": batch.status,
+                "status": "reviewing",
                 "iteration": getattr(batch, "iteration", 2),
                 "cases_to_regenerate": len(body.modified_case_ids),
             }

@@ -11,7 +11,6 @@ from src.platform_api.models.testcase import TestCase
 from src.platform_api.repositories.base import BaseRepository
 from src.platform_api.schemas.testcase import TestCaseListResponse, TestCaseResponse
 
-
 VALID_REVIEW_STATUSES = {s.value for s in ReviewStatus}
 
 
@@ -36,6 +35,21 @@ class ReviewService:
         await self.session.flush()
         await self.session.refresh(case)
 
+        return TestCaseResponse.model_validate(case)
+
+    async def update_case(self, case_id: UUID, data: dict) -> TestCaseResponse:
+        """人工编辑用例（只更新传入的非 None 字段）"""
+        case = await self.repo.get_by_id(case_id)
+        if case is None:
+            raise ApiError("E4041", "用例不存在")
+
+        editable_fields = {"title", "preconditions", "steps", "expected_results", "priority"}
+        for field, value in data.items():
+            if field in editable_fields and value is not None:
+                setattr(case, field, value)
+
+        await self.session.flush()
+        await self.session.refresh(case)
         return TestCaseResponse.model_validate(case)
 
     async def get_case_detail(self, case_id: UUID) -> TestCaseResponse:

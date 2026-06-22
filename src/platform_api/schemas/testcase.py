@@ -7,6 +7,22 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
+class UpdateTestCaseRequest(BaseModel):
+    """人工编辑用例请求（全部可选，只更新传入字段）"""
+
+    title: str | None = None
+    preconditions: list[str] | None = None
+    steps: list[dict] | None = None
+    expected_results: list[str] | None = None
+    priority: str | None = None
+
+
+class RegenerateRequest(BaseModel):
+    """单条 AI 重写请求"""
+
+    comment: str = Field(..., min_length=1, description="QA 修改意见")
+
+
 class TestCaseResponse(BaseModel):
     """完整用例响应"""
 

@@ -100,3 +100,21 @@ export async function getTestCaseDetail(caseId: string): Promise<TestCase> {
   const res = await api.get(`/testcases/${caseId}`);
   return res.data;
 }
+
+/** 人工编辑用例 PATCH /testcases/:id */
+export async function updateTestCase(
+  caseId: string,
+  body: Partial<Pick<TestCase, 'title' | 'preconditions' | 'steps' | 'expected_results' | 'priority'>>,
+): Promise<TestCase> {
+  const res = await api.patch(`/testcases/${caseId}`, body);
+  return res.data;
+}
+
+/** 单条 AI 重写 POST /testcases/:id/regenerate → 202 */
+export async function regenerateTestCase(
+  caseId: string,
+  comment: string,
+): Promise<{ status: string; case_id: string }> {
+  const res = await api.post(`/testcases/${caseId}/regenerate`, { comment });
+  return res.data;
+}
