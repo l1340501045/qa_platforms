@@ -13,8 +13,14 @@ needs_spec（ungrounded），或在留白处反向编造断言。
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+from src.knowledge_base.services.embedding.embedding_client import EmbeddingClient
+from src.platform_api.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # 跨功能点常驻章节的标题关键字（命中即视为全局规则，注入所有功能点）。
 # 既含通用 QA-PRD 术语（全局/通用/字段约束/错误码/校验规则/字数），
@@ -93,17 +99,33 @@ class _Candidate:
     terms: frozenset[str]
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b:
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
 class CrossFeatureIndex:
-    """全 PRD spec 章节的词项索引；按测试点描述检索跨功能点参考章节。"""
+    """全 PRD spec 章节索引；按测试点描述检索跨功能点参考章节。
+
+    关键词路（词项重叠）始终可用；开启 settings.hybrid_cross_retrieval_enabled 时叠加
+    向量路（候选 content embedding + cosine），RRF 融合，补召回语义相近但用词不同的章节。
+    embedding 不可用时自动降级为纯关键词，绝不阻断生成。
+    """
 
     def __init__(self, parsed_context) -> None:
         self._candidates: list[_Candidate] = []
         for source in parsed_context.sources:
-            if source.trust_level > 2:  # 仅 PRD / 技术文档作为规格来源
+            if source.trust_level > 2:
                 continue
             for section in source.sections:
                 kind = getattr(section, "section_kind", "spec")
-                if kind not in ("spec", "summary"):  # 只检索可作 oracle 依据的章节
+                if kind not in ("spec", "summary"):
                     continue
                 key = (section.source_ref or "", section.heading or "")
                 terms = _salient_terms((section.heading or "") + "\n" + (section.content or ""))
@@ -121,16 +143,35 @@ class CrossFeatureIndex:
                         terms=frozenset(terms),
                     )
                 )
+        self._cand_vectors: list[list[float]] | None = None
 
-    def query(
-        self,
-        query_text: str,
-        exclude_keys: set[tuple[str, str]],
-        *,
-        top_k: int = 3,
-        min_score: int = _CROSS_MIN_SCORE,
-    ) -> list[GlobalSection]:
-        """返回与 query_text 词项重叠最高、且不在 exclude_keys 中的 top_k 跨功能点章节。"""
+    @classmethod
+    async def build(cls, parsed_context) -> "CrossFeatureIndex":
+        """工厂：建关键词候选；开启 hybrid 时再异步算候选向量（失败自动降级）。"""
+        self = cls(parsed_context)
+        if settings.hybrid_cross_retrieval_enabled and self._candidates:
+            await self._ensure_embeddings()
+        return self
+
+    async def _ensure_embeddings(self) -> None:
+        try:
+            texts = [(c.heading or "") + "\n" + (c.content or "") for c in self._candidates]
+            vectors = await EmbeddingClient().embed_batch(texts)
+            if len(vectors) == len(self._candidates):
+                self._cand_vectors = vectors
+            else:
+                logger.warning(
+                    "hybrid cross-retrieval: 候选向量数(%d)≠候选数(%d)，降级纯关键词",
+                    len(vectors), len(self._candidates),
+                )
+                self._cand_vectors = None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hybrid cross-retrieval: 候选 embedding 失败，降级纯关键词: %s", exc)
+            self._cand_vectors = None
+
+    def _keyword_ranked(
+        self, query_text: str, exclude_keys: set[tuple[str, str]], min_score: int
+    ) -> list[_Candidate]:
         q = _salient_terms(query_text)
         if not q:
             return []
@@ -142,19 +183,69 @@ class CrossFeatureIndex:
             if score >= min_score:
                 scored.append((score, cand))
         scored.sort(key=lambda t: (-t[0], t[1].source_ref))
-        out: list[GlobalSection] = []
-        for _score, cand in scored[:top_k]:
-            out.append(
-                GlobalSection(
-                    source_title=cand.source_title,
-                    trust_level=cand.trust_level,
-                    section_kind=cand.section_kind,
-                    source_ref=cand.source_ref,
-                    heading=cand.heading,
-                    content=cand.content,
-                )
+        return [cand for _score, cand in scored]
+
+    def _vector_ranked(
+        self, q_vec: list[float], exclude_keys: set[tuple[str, str]], pool: int
+    ) -> list[_Candidate]:
+        scored: list[tuple[float, _Candidate]] = []
+        for cand, vec in zip(self._candidates, self._cand_vectors or []):
+            if cand.key in exclude_keys:
+                continue
+            scored.append((_cosine(q_vec, vec), cand))
+        scored.sort(key=lambda t: (-t[0], t[1].source_ref))
+        return [cand for _s, cand in scored[:pool]]
+
+    def _to_sections(self, cands: list[_Candidate]) -> list[GlobalSection]:
+        return [
+            GlobalSection(
+                source_title=c.source_title,
+                trust_level=c.trust_level,
+                section_kind=c.section_kind,
+                source_ref=c.source_ref,
+                heading=c.heading,
+                content=c.content,
             )
-        return out
+            for c in cands
+        ]
+
+    async def query(
+        self,
+        query_text: str,
+        exclude_keys: set[tuple[str, str]],
+        *,
+        top_k: int = 3,
+        min_score: int = _CROSS_MIN_SCORE,
+    ) -> list[GlobalSection]:
+        """关键词召回；hybrid 开启且向量就绪时叠加向量召回 + RRF 融合，返回 top_k。"""
+        kw_ranked = self._keyword_ranked(query_text, exclude_keys, min_score)
+
+        if not (settings.hybrid_cross_retrieval_enabled and self._cand_vectors):
+            return self._to_sections(kw_ranked[:top_k])
+
+        try:
+            q_vec = await EmbeddingClient().embed_single(query_text)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("hybrid cross-retrieval: query embedding 失败，降级纯关键词: %s", exc)
+            return self._to_sections(kw_ranked[:top_k])
+
+        if not q_vec:
+            return self._to_sections(kw_ranked[:top_k])
+
+        vec_ranked = self._vector_ranked(q_vec, exclude_keys, pool=max(top_k * 4, 12))
+
+        k = settings.hybrid_cross_rrf_k
+        scores: dict[tuple[str, str], float] = {}
+        cand_by_key: dict[tuple[str, str], _Candidate] = {}
+        for rank, cand in enumerate(kw_ranked):
+            scores[cand.key] = scores.get(cand.key, 0.0) + 1.0 / (k + rank + 1)
+            cand_by_key[cand.key] = cand
+        for rank, cand in enumerate(vec_ranked):
+            scores[cand.key] = scores.get(cand.key, 0.0) + 1.0 / (k + rank + 1)
+            cand_by_key[cand.key] = cand
+
+        fused = sorted(scores, key=lambda key: (-scores[key], cand_by_key[key].source_ref))
+        return self._to_sections([cand_by_key[key] for key in fused[:top_k]])
 
 
 def collect_global_sections(parsed_context) -> list[GlobalSection]:
