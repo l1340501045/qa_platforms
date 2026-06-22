@@ -76,7 +76,7 @@ class DocumentEmbedding(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_heading: Mapped[str | None] = mapped_column(String(200), nullable=True)
     chunk_content: Mapped[str] = mapped_column(Text, nullable=False)
-    embedding = mapped_column(Vector(1536), nullable=False)
+    embedding = mapped_column(Vector(1024), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
