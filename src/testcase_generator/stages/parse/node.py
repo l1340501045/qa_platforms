@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections import Counter
 import logging
 import re
+from collections import Counter
 from uuid import UUID
 
 from src.knowledge_base.schemas.common import RetrievalContext, SearchResult
+from src.platform_api.core.settings import settings
 from src.platform_api.models.enums import DocType
 from src.testcase_generator.schemas.parsed_context import (
     FeatureItem,
@@ -16,18 +17,18 @@ from src.testcase_generator.schemas.parsed_context import (
     SectionExtract,
 )
 from src.testcase_generator.schemas.pipeline_state import PipelineState
-from src.platform_api.core.settings import settings
+from src.testcase_generator.stages.context_utils import _salient_terms
 from src.testcase_generator.stages.parse.kb_retriever import (
     retrieve_entity_graph_hints,
     retrieve_knowledge_context,
 )
-from src.testcase_generator.stages.parse.section_classifier import classify_sections
+from src.testcase_generator.stages.parse.mastergo_fetch import enrich_sections_with_mastergo
 from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
     fetch_prototype_observations,
 )
+from src.testcase_generator.stages.parse.section_classifier import classify_sections
 from src.testcase_generator.stages.parse.source_registry import SourceRegistry
-from src.testcase_generator.stages.context_utils import _salient_terms
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +118,10 @@ async def parse_node(state: PipelineState) -> dict:
         features=features,
         prototype_observations=prototype_observations,
     )
+
+    # 落点⑦：MasterGo 原型规格接入（仅开关开且有 token；无链接/失败安全跳过）
+    if settings.mastergo_enabled and settings.mastergo_api_token:
+        await enrich_sections_with_mastergo(parsed_context.sources, settings.mastergo_api_token)
 
     # 5.5 章节性质分类（标 section_kind，供下游 oracle 策略 + verify 关卡使用）
     await classify_sections(parsed_context.sources)
