@@ -44,6 +44,7 @@
 - **Modify** `src/testcase_generator/stages/context_utils.py`：`CrossFeatureIndex` 增加异步 `build()` 工厂、向量缓存、`query()` 改 async + Hybrid + RRF + 降级。
 - **Modify** `src/testcase_generator/stages/write_cases/node.py`：调用点改 `await CrossFeatureIndex.build(...)` + `await cross_index.query(...)`。
 - **Modify** `src/testcase_generator/stages/verify/node.py`：`_build_feature_sections` 改 async 并 await 调用链，`verify_node` 改为 `await _build_feature_sections(...)`。
+- **Modify** `tests/testcase_generator/test_grounded_pipeline.py`：2 个旧同步 `CrossFeatureIndex` 测试改 `async def` + `await build/query`。
 - **Create** `tests/testcase_generator/test_cross_feature_hybrid.py`：Hybrid 召回 / 开关关闭回退 / embedding 降级 三类测试。
 
 > **重要约束**：`CrossFeatureIndex.query` 的返回类型、`GlobalSection` 字段、两个调用点对返回值的消费方式**保持不变**，下游 `feature_context` / `PrdSection` 注入逻辑零改动。本次只改「怎么召回」，不改「召回后怎么用」。
@@ -370,13 +371,13 @@ class CrossFeatureIndex:
 
 > 说明：关键词路保留 `min_score` 噪声下限；向量路不受 `min_score` 限制（这正是它补召回「词面分低但语义相近」章节的价值），但只取 `pool` 候选再交给 RRF，避免噪声灌入。
 
-- [ ] **Step 4: 运行测试，确认通过**
+- [ ] **Step 4: 运行测试，确认通过（含旧测试兼容）**
 
 Run:
 ```bash
-uv run pytest tests/testcase_generator/test_cross_feature_hybrid.py -v
+uv run pytest tests/testcase_generator/ -q
 ```
-Expected: 3 passed（disabled 纯关键词 / hybrid 补召回 / 异常降级）。
+Expected: 全绿。`query` 改 async 后，`test_grounded_pipeline.py` 中 2 个旧同步调用会 `TypeError: 'coroutine' object is not iterable`——需同步修改为 `async def` + `await build/query`（见 File Structure），一并在本步验证通过。
 
 - [ ] **Step 5: Commit**
 
@@ -559,7 +560,7 @@ Expected: **无** "降级纯关键词" 警告（若有，说明 embedding 调用
 - [ ] 开关开：`test_cross_feature_hybrid.py` 3 项通过（纯关键词盲区 / 向量补召回 / 异常降级）。
 - [ ] `GlobalSection` 字段、`query` 返回结构、两个调用点对返回值的消费方式均未变（下游零改动）。
 - [ ] `rg -n "_build_feature_sections\(" src/` 无遗漏的同步调用。
-- [ ] 相关文件 `uv run ruff check <files>` 通过。
+- [ ] `uv run ruff check src/platform_api/core/settings.py src/testcase_generator/stages/context_utils.py src/testcase_generator/stages/verify/node.py` 通过；`write_cases/node.py` 确认未新增 lint（历史 E501 不计入）。
 - [ ] A/B 对照已记录（B_on 空壳率 ≤ B_off，或已记录待调参）。
 
 ## 风险与回退
