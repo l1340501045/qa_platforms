@@ -14,6 +14,7 @@ from src.testcase_generator.schemas.parsed_context import (
     SectionExtract,
     SourceItem,
 )
+from src.testcase_generator.stages import context_utils
 from src.testcase_generator.stages.context_utils import CrossFeatureIndex
 from src.testcase_generator.stages.dedup.clustering import DedupCase, find_duplicates
 from src.testcase_generator.stages.verify.verifier import _VERDICT_BUCKET, _normalize_verdict
@@ -181,7 +182,9 @@ def _ctx_with_sections(*sections):
 
 
 @pytest.mark.asyncio
-async def test_cross_feature_index_retrieves_spec_defined_elsewhere():
+async def test_cross_feature_index_retrieves_spec_defined_elsewhere(monkeypatch):
+    # 固定走关键词路（不受 hybrid 灰度开关状态影响），测确定性词项检索
+    monkeypatch.setattr(context_utils.settings, "hybrid_cross_retrieval_enabled", False)
     # F-024 段定义了"任务状态机：草稿/提交/审核/驳回"；F-023 的测试点引用它 → 应被检索到
     ctx = _ctx_with_sections(
         ("F-023 批量提交", "用户在批量提交页发起提交动作", "PRD §5.8"),
@@ -195,7 +198,9 @@ async def test_cross_feature_index_retrieves_spec_defined_elsewhere():
 
 
 @pytest.mark.asyncio
-async def test_cross_feature_index_excludes_own_and_low_score():
+async def test_cross_feature_index_excludes_own_and_low_score(monkeypatch):
+    # 固定走关键词路：本测试断言"低分无关章节不召回"，仅在 hybrid 关时成立
+    monkeypatch.setattr(context_utils.settings, "hybrid_cross_retrieval_enabled", False)
     ctx = _ctx_with_sections(
         ("F-001 登录", "登录页输入账号密码点击登录", "PRD §1"),
         ("F-002 完全无关", "本章描述结算账单导出报表的字段格式", "PRD §2"),
