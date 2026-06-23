@@ -7,7 +7,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 SectionKind = Literal["spec", "summary", "flow", "mock", "future", "tbd"]
 """章节性质分类，决定下游可生成何种 oracle：
 - spec   可验证规范（有明确字段/数值/状态/文案）→ 允许完整行为断言
@@ -28,6 +27,11 @@ class SectionExtract(BaseModel):
     section_kind: SectionKind = Field(
         default="spec",
         description="章节性质分类，决定下游 oracle 策略（spec/summary/flow/mock/future/tbd）",
+    )
+    is_global: bool = Field(
+        default=False,
+        description="是否为适用于所有/多个功能点的全局·横切规则章节（由 section_classifier 语义判定，"
+                    "落点⑧；global_section_llm_enabled 开时替代关键词识别全局章节）",
     )
 
 

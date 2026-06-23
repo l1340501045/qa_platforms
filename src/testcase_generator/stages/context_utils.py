@@ -248,18 +248,37 @@ class CrossFeatureIndex:
         return self._to_sections([cand_by_key[key] for key in fused[:top_k]])
 
 
+def _section_is_global(section, *, use_llm: bool) -> bool:
+    """全局章节判定：开关开用 LLM 语义标记 is_global（去领域绑定，落点⑧），关用关键词。"""
+    if use_llm:
+        return bool(getattr(section, "is_global", False))
+    return is_global_section(section.heading, section.source_ref)
+
+
 def collect_global_sections(parsed_context) -> list[GlobalSection]:
     """从 parsed_context 收集所有全局/常驻章节（仅取 PRD/技术文档，trust_level<=2）。
 
     去重键 = (source_ref, heading)，避免同一章节重复注入。
+    全局判定（落点⑧）：settings.global_section_llm_enabled 开时用 LLM 语义标记（不依赖领域词表）；
+    关时用关键词 GLOBAL_HEADING_KEYWORDS。安全兜底：开关开但全文无任何 LLM 标记
+    （分类未跑/全失败）时回退关键词，避免全局章节全丢。
     """
+    use_llm = settings.global_section_llm_enabled
+    if use_llm and not any(
+        getattr(sec, "is_global", False)
+        for src in parsed_context.sources
+        for sec in src.sections
+    ):
+        logger.warning("global_section_llm_enabled 开但全文无 is_global 标记，回退关键词识别")
+        use_llm = False
+
     seen: set[tuple[str, str]] = set()
     out: list[GlobalSection] = []
     for source in parsed_context.sources:
         if source.trust_level > 2:  # 仅 PRD / 技术文档作为全局规则来源
             continue
         for section in source.sections:
-            if not is_global_section(section.heading, section.source_ref):
+            if not _section_is_global(section, use_llm=use_llm):
                 continue
             key = (section.source_ref or "", section.heading or "")
             if key in seen:

@@ -104,6 +104,12 @@ class Settings(BaseSettings):
     # RRF 融合常数；候选集较小（数十~一两百）时可调到 20 锐化排名差异，默认 60 为业界稳健值。
     hybrid_cross_rrf_k: int = 60
 
+    # ── 全局章节判定去领域绑定（落点⑧）──────────────────────────────────────────
+    # 关：用写死关键词 GLOBAL_HEADING_KEYWORDS 识别全局/横切章节（含领域专属词，换领域会失效）。
+    # 开：用 LLM section_classifier 的语义判定（is_global），不依赖任何领域词表 → 通用。
+    # 兜底：开关开但全文无 LLM 标记（分类未跑/全失败）时回退关键词。默认关，行为与改造前一致。
+    global_section_llm_enabled: bool = False
+
     # Embedding（默认复用 LLM 网关，可单独覆盖）
     openai_api_key: str = ""  # 兼容旧字段，作为各处 key 的最终回退
     embedding_base_url: str = ""  # 留空回退 llm_base_url
