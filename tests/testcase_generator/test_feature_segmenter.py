@@ -68,6 +68,17 @@ def test_sibling_container_does_not_steal_children():
             assert "弹窗逻辑" not in book_sec.content
 
 
+def test_min_level_meta_demoted_to_container():
+    """最浅层级标 meta 不能杀死整棵子树，应降级为 container。"""
+    doc = "# 文档标题\n\n## 功能A\n功能A规格\n\n## 功能B\n功能B规格\n"
+    # LLM 错误地把 level-1 标题标为 meta
+    roles = {0: "meta", 1: "feature_root", 2: "feature_root"}
+    secs = _extract_sections(_R(doc), "prd", roles=roles)
+    headings = [s.heading for s in secs]
+    assert "功能A" in headings
+    assert "功能B" in headings
+
+
 def test_roles_none_is_legacy():
     """roles=None 走旧路，输出结构与现状一致（feature_level=1 → 全折叠进一级标题）。"""
     secs = _extract_sections(_R(_NESTED), "prd", roles=None)

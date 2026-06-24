@@ -355,6 +355,7 @@ def _extract_sections(
                     current["content"] += f"\n\n{heading}\n{body}"
     else:
         # ── 新路：LLM 角色驱动 ──
+        min_level = min(lv for lv, _, _ in triples)
         for i, (level, heading, body) in enumerate(triples):
             if skip_below_level is not None:
                 if level > skip_below_level:
@@ -362,6 +363,10 @@ def _extract_sections(
                 skip_below_level = None
 
             role = roles.get(i, "")
+
+            # 防御：最浅层级标 meta/background 会杀死整棵子树，降级为 container
+            if role in ("meta", "background") and level <= min_level:
+                role = "container"
 
             if role in ("meta", "background"):
                 _flush()
