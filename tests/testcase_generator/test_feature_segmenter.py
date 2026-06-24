@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from src.testcase_generator.stages.parse.node import _extract_sections, _parse_triples
 
@@ -19,7 +20,6 @@ def test_triples_parsed():
 
 
 def test_roles_drive_boundaries():
-    t = _parse_triples(_NESTED)
     roles = {0: "container", 1: "container", 2: "feature_root", 3: "feature_root", 4: "background"}
     secs = _extract_sections(_R(_NESTED), "prd", roles=roles)
     headings = [s.heading for s in secs]

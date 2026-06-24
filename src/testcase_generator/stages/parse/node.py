@@ -18,6 +18,7 @@ from src.testcase_generator.schemas.parsed_context import (
 )
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.stages.context_utils import _salient_terms
+from src.testcase_generator.stages.parse.feature_segmenter import decide_feature_roles
 from src.testcase_generator.stages.parse.kb_retriever import (
     retrieve_entity_graph_hints,
     retrieve_knowledge_context,
@@ -27,7 +28,6 @@ from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
     fetch_prototype_observations,
 )
-from src.testcase_generator.stages.parse.feature_segmenter import decide_feature_roles
 from src.testcase_generator.stages.parse.section_classifier import classify_sections
 from src.testcase_generator.stages.parse.source_registry import SourceRegistry
 

@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 _PREVIEW = 120
 _VALID_ROLES = {"feature_root", "container", "meta", "background"}
 
-SEG_SYSTEM_PROMPT = """角色：你是需求文档结构分析员。给你一份 PRD 的「标题大纲」（每个标题含层级、文本、正文字数、正文前若干字预览）。
+SEG_SYSTEM_PROMPT = """\
+角色：你是需求文档结构分析员。
+给你一份 PRD 的「标题大纲」（每个标题含层级、文本、正文字数、正文前若干字预览）。
 任务：为每个标题判定角色，用于把文档切成「功能点」。角色四选一：
 - feature_root：一个【可独立测试的业务功能】的根。其完整规格（含更深子标题内容）应折叠成一个功能点。
 - container：仅是包裹/分组标题（如"功能详细说明 / 功能方案 / 需求详述"），本身不是功能点——真正的功能点在它的子标题里。
@@ -23,7 +25,8 @@ SEG_SYSTEM_PROMPT = """角色：你是需求文档结构分析员。给你一份
 - background：流程图 / 交互原型图 / 示意图 等，不含可测规格。
 
 判定要点（与领域无关，只看结构与语义）：
-- 「一个可独立测试的业务功能」= 一个 feature_root，粒度自适应：规整文档功能常在二级标题；嵌套文档功能常在三/四级标题（某个 container 下）。
+- 「一个可独立测试的业务功能」= 一个 feature_root，粒度自适应：规整文档功能常在二级标题；
+  嵌套文档功能常在三/四级标题（某个 container 下）。
 - container 下若有多个各讲不同功能的子标题，则每个子标题判 feature_root（不要糊成一个）。
 - 拿不准时判 feature_root（宁可多切，不可把真功能误判成 meta 丢掉）。
 - 纯包裹标题判 container；纯图/原型判 background；纯元信息判 meta。
