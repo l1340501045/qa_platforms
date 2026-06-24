@@ -1,3 +1,6 @@
+import pytest
+from unittest.mock import patch
+
 from src.testcase_generator.stages.parse.node import _extract_sections, _parse_triples
 
 
@@ -28,3 +31,45 @@ def test_roles_drive_boundaries():
 def test_roles_none_is_legacy():
     secs = _extract_sections(_R(_NESTED), "prd", roles=None)
     assert len(secs) >= 1
+
+
+# ── segmenter 单测（mock LLM + 兜底）──
+
+
+@pytest.mark.asyncio
+async def test_segmenter_returns_roles():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    triples = [(1, "六", ""), (2, "6.3 功能方案", ""), (3, "书籍状态", "x"), (2, "6.1 流程图", "图")]
+
+    class _Out:
+        classifications = [
+            type("C", (), {"idx": 1, "role": "container"})(),
+            type("C", (), {"idx": 2, "role": "feature_root"})(),
+            type("C", (), {"idx": 3, "role": "background"})(),
+        ]
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(return_value=_Out())
+
+    with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
+        roles = await fseg.decide_feature_roles("DOC", triples)
+    assert roles.get(2) == "feature_root"
+
+
+@pytest.mark.asyncio
+async def test_segmenter_fallback_on_error():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    triples = [(2, "A", "x")]
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(side_effect=RuntimeError("llm down"))
+
+    with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
+        roles = await fseg.decide_feature_roles("DOC", triples)
+    assert roles == {}
