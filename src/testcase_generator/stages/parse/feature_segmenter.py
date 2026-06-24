@@ -69,4 +69,7 @@ async def decide_feature_roles(doc_title: str, triples: list[tuple[int, str, str
     if not any(r == "feature_root" for r in roles.values()):
         logger.warning("功能点切分 LLM 未识别出任何 feature_root，回退死规则")
         return {}
+    missing = [i for i in range(len(triples)) if i not in roles]
+    if missing:
+        logger.debug("功能点切分 LLM 漏标 idx: %s (labeled %d/%d)", missing, len(roles), len(triples))
     return roles

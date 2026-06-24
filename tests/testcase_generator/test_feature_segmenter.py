@@ -50,9 +50,31 @@ def test_deep_children_unlabeled_fold():
     assert "续费逻辑" in secs[0].content
 
 
+def test_sibling_container_does_not_steal_children():
+    """同级 container 后的漏标子标题不应折叠进上一个 feature_root。"""
+    doc = (
+        "# 文档\n\n"
+        "### 书籍搜索\n搜索规格\n\n"
+        "### 交互说明\n交互概述\n\n"
+        "#### 弹窗规则\n弹窗逻辑\n"
+    )
+    # 书籍搜索=feature_root, 交互说明=container(同级), 弹窗规则=漏标
+    roles = {0: "container", 1: "feature_root", 2: "container", 3: ""}
+    secs = _extract_sections(_R(doc), "prd", roles=roles)
+    # 弹窗逻辑不应出现在「书籍搜索」的 content 里
+    if secs:
+        book_sec = next((s for s in secs if s.heading == "书籍搜索"), None)
+        if book_sec:
+            assert "弹窗逻辑" not in book_sec.content
+
+
 def test_roles_none_is_legacy():
+    """roles=None 走旧路，输出结构与现状一致（feature_level=1 → 全折叠进一级标题）。"""
     secs = _extract_sections(_R(_NESTED), "prd", roles=None)
-    assert len(secs) >= 1
+    assert len(secs) == 1
+    assert secs[0].heading == "六"
+    assert "状态机A" in secs[0].content
+    assert "管理B" in secs[0].content
 
 
 # ── segmenter 单测（mock LLM + 兜底）──
@@ -95,3 +117,60 @@ async def test_segmenter_fallback_on_error():
     with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
         roles = await fseg.decide_feature_roles("DOC", triples)
     assert roles == {}
+
+
+@pytest.mark.asyncio
+async def test_segmenter_empty_triples():
+    """空 triples 直接返回 {}，不调用 LLM。"""
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    roles = await fseg.decide_feature_roles("DOC", [])
+    assert roles == {}
+
+
+@pytest.mark.asyncio
+async def test_segmenter_no_feature_root_returns_empty():
+    """LLM 返回但无 feature_root → 回退空 dict。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    triples = [(1, "文档", ""), (2, "背景", "x")]
+
+    class _Out:
+        classifications = [
+            type("C", (), {"idx": 0, "role": "container"})(),
+            type("C", (), {"idx": 1, "role": "meta"})(),
+        ]
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(return_value=_Out())
+
+    with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
+        roles = await fseg.decide_feature_roles("DOC", triples)
+    assert roles == {}
+
+
+@pytest.mark.asyncio
+async def test_segmenter_invalid_role_and_idx_filtered():
+    """非法 role 和越界 idx 被过滤。"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    triples = [(2, "功能A", "x")]
+
+    class _Out:
+        classifications = [
+            type("C", (), {"idx": 0, "role": "feature_root"})(),
+            type("C", (), {"idx": 99, "role": "feature_root"})(),  # 越界
+            type("C", (), {"idx": 0, "role": "invalid_role"})(),  # 非法 role
+        ]
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(return_value=_Out())
+
+    with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
+        roles = await fseg.decide_feature_roles("DOC", triples)
+    assert roles == {0: "feature_root"}
+    assert 99 not in roles

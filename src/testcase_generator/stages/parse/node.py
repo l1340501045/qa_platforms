@@ -372,10 +372,12 @@ def _extract_sections(
                 _flush()
                 current = {"heading": heading, "content": body, "level": level}
             elif role == "container":
-                # 深层 container（在当前功能节内部）→ 折叠进 current 保内容
                 if current is not None and level > current.get("level", 0):
+                    # 深层 container（在当前功能节内部）→ 折叠进 current 保内容
                     current["content"] += f"\n\n{heading}\n{body}"
-                # 顶层 container（无 current 或同/高层级）→ 透明跳过
+                else:
+                    # 同/高层级 container → flush 当前功能，防止后续子标题误归
+                    _flush()
                 continue
             else:
                 if current is None:
