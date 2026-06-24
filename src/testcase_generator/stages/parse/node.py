@@ -27,6 +27,7 @@ from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
     fetch_prototype_observations,
 )
+from src.testcase_generator.stages.parse.feature_segmenter import decide_feature_roles
 from src.testcase_generator.stages.parse.section_classifier import classify_sections
 from src.testcase_generator.stages.parse.source_registry import SourceRegistry
 
@@ -80,7 +81,10 @@ async def parse_node(state: PipelineState) -> dict:
         if is_seed and doc_type == DocType.OTHER:
             doc_type = DocType.PRD
         trust_level = _DOC_TYPE_TRUST.get(doc_type, 3)
-        sections = _extract_sections(result, doc_type)
+        roles = None
+        if settings.feature_seg_llm_enabled:
+            roles = await decide_feature_roles(result.title, _parse_triples(result.content_snippet))
+        sections = _extract_sections(result, doc_type, roles=roles or None)
 
         registry.register_source(
             doc_id=result.document_id,
