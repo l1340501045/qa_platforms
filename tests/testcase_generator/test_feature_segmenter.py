@@ -28,6 +28,28 @@ def test_roles_drive_boundaries():
     assert "6.3 功能方案" not in headings and "六" not in headings
 
 
+def test_deep_children_fold_into_feature_root():
+    """feature_root 下的深层子标题（未标或标 container）正文必须折叠进该功能节，不能丢。"""
+    doc = "# 文档\n\n## 功能方案\n\n### 书籍搜索\n搜索规格\n\n#### 模糊匹配\n模糊逻辑\n\n#### 高级过滤\n过滤规则\n"
+    # 书籍搜索=feature_root，模糊匹配/高级过滤 未标（LLM 没返回或标 container）
+    roles = {0: "container", 1: "container", 2: "feature_root", 3: "container", 4: "container"}
+    secs = _extract_sections(_R(doc), "prd", roles=roles)
+    assert len(secs) == 1
+    assert secs[0].heading == "书籍搜索"
+    assert "模糊逻辑" in secs[0].content
+    assert "过滤规则" in secs[0].content
+
+
+def test_deep_children_unlabeled_fold():
+    """LLM 漏标（roles 无该 idx）的深层子标题也必须折叠进 current。"""
+    doc = "# 文档\n\n## 功能方案\n\n### 会员订阅\n订阅规格\n\n#### 自动续费\n续费逻辑\n"
+    # 只标前3个，idx=3 (自动续费) 未标
+    roles = {0: "container", 1: "container", 2: "feature_root"}
+    secs = _extract_sections(_R(doc), "prd", roles=roles)
+    assert len(secs) == 1
+    assert "续费逻辑" in secs[0].content
+
+
 def test_roles_none_is_legacy():
     secs = _extract_sections(_R(_NESTED), "prd", roles=None)
     assert len(secs) >= 1

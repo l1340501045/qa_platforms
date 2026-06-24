@@ -82,7 +82,8 @@ async def parse_node(state: PipelineState) -> dict:
             doc_type = DocType.PRD
         trust_level = _DOC_TYPE_TRUST.get(doc_type, 3)
         roles = None
-        if settings.feature_seg_llm_enabled:
+        if settings.feature_seg_llm_enabled and is_seed:
+            # roles 下标 == _parse_triples(同一 content_snippet) 的下标（不变量）
             roles = await decide_feature_roles(result.title, _parse_triples(result.content_snippet))
         sections = _extract_sections(result, doc_type, roles=roles or None)
 
@@ -369,12 +370,16 @@ def _extract_sections(
 
             if role == "feature_root":
                 _flush()
-                current = {"heading": heading, "content": body}
+                current = {"heading": heading, "content": body, "level": level}
             elif role == "container":
+                # 深层 container（在当前功能节内部）→ 折叠进 current 保内容
+                if current is not None and level > current.get("level", 0):
+                    current["content"] += f"\n\n{heading}\n{body}"
+                # 顶层 container（无 current 或同/高层级）→ 透明跳过
                 continue
             else:
                 if current is None:
-                    current = {"heading": heading, "content": body}
+                    current = {"heading": heading, "content": body, "level": level}
                 else:
                     current["content"] += f"\n\n{heading}\n{body}"
 
