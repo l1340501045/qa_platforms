@@ -264,31 +264,13 @@ def _choose_feature_level(triples: list[tuple[int, str, str]]) -> int:
     return 1
 
 
-def _extract_sections(result: SearchResult, doc_type: str) -> list[SectionExtract]:
-    """从 content_snippet 按"功能模块"粒度提取章节
-
-    策略（硬约束：理解准确性 + 用例质量优先）：
-    1. 以选定的 feature_level（通常二级标题）作为功能模块边界；
-    2. 更深层级标题（子细节）折叠进所属模块的正文，保证单个功能点上下文完整；
-    3. 命中非功能关键词（变更日志/背景/目标等）的标题及其整棵子树整体丢弃，
-       避免对非功能段落生成无意义用例。
-    """
-    content = result.content_snippet
+def _parse_triples(content: str) -> list[tuple[int, str, str]]:
+    """从 Markdown 内容解析出 (level, heading, body) 三元组列表。"""
     if not content:
         return []
-
     parts = re.split(r"(?m)^(#{1,6})\s+(.+)$", content)
     if len(parts) <= 1:
-        # 无 heading 结构，整体作为一个 section
-        return [
-            SectionExtract(
-                heading=result.title,
-                content=content.strip(),
-                source_ref=f"{doc_type}:{result.title}",
-            )
-        ]
-
-    # 解析成 (level, heading, body) 三元组
+        return []
     triples: list[tuple[int, str, str]] = []
     i = 1
     while i < len(parts) - 1:
@@ -297,12 +279,39 @@ def _extract_sections(result: SearchResult, doc_type: str) -> list[SectionExtrac
         body = (parts[i + 2] if i + 2 < len(parts) else "").strip()
         triples.append((level, heading, body))
         i += 3
+    return triples
 
-    feature_level = _choose_feature_level(triples)
+
+def _extract_sections(
+    result: SearchResult, doc_type: str, *, roles: dict[int, str] | None = None
+) -> list[SectionExtract]:
+    """从 content_snippet 按"功能模块"粒度提取章节
+
+    策略（硬约束：理解准确性 + 用例质量优先）：
+    1. 以选定的 feature_level（通常二级标题）作为功能模块边界；
+    2. 更深层级标题（子细节）折叠进所属模块的正文，保证单个功能点上下文完整；
+    3. 命中非功能关键词（变更日志/背景/目标等）的标题及其整棵子树整体丢弃，
+       避免对非功能段落生成无意义用例。
+
+    当 roles 给定时，按 LLM 角色标注驱动边界判定（切分通用化）。
+    """
+    content = result.content_snippet
+    if not content:
+        return []
+
+    triples = _parse_triples(content)
+    if not triples:
+        return [
+            SectionExtract(
+                heading=result.title,
+                content=content.strip(),
+                source_ref=f"{doc_type}:{result.title}",
+            )
+        ]
 
     sections: list[SectionExtract] = []
     current: dict | None = None
-    skip_below_level: int | None = None  # 处于被丢弃的 meta 子树中时，记录其标题层级
+    skip_below_level: int | None = None
 
     def _flush():
         nonlocal current
@@ -316,29 +325,54 @@ def _extract_sections(result: SearchResult, doc_type: str) -> list[SectionExtrac
             )
         current = None
 
-    for level, heading, body in triples:
-        # 1. meta 子树跳过：直到出现层级 <= meta 标题的标题才退出
-        if skip_below_level is not None:
-            if level > skip_below_level:
+    if roles is None:
+        # ── 旧路：死规则，行为逐字节等价 ──
+        feature_level = _choose_feature_level(triples)
+
+        for level, heading, body in triples:
+            if skip_below_level is not None:
+                if level > skip_below_level:
+                    continue
+                skip_below_level = None
+
+            if _is_meta_heading(heading):
+                _flush()
+                skip_below_level = level
                 continue
-            skip_below_level = None
 
-        # 2. 命中 meta 关键词：丢弃该标题及其整棵子树
-        if _is_meta_heading(heading):
-            _flush()
-            skip_below_level = level
-            continue
-
-        if level <= feature_level:
-            # 3. 新功能模块边界
-            _flush()
-            current = {"heading": heading, "content": body}
-        else:
-            # 4. 更深层级：折叠进当前模块，保留子标题作为结构标记
-            if current is None:
+            if level <= feature_level:
+                _flush()
                 current = {"heading": heading, "content": body}
             else:
-                current["content"] += f"\n\n{heading}\n{body}"
+                if current is None:
+                    current = {"heading": heading, "content": body}
+                else:
+                    current["content"] += f"\n\n{heading}\n{body}"
+    else:
+        # ── 新路：LLM 角色驱动 ──
+        for i, (level, heading, body) in enumerate(triples):
+            if skip_below_level is not None:
+                if level > skip_below_level:
+                    continue
+                skip_below_level = None
+
+            role = roles.get(i, "")
+
+            if role in ("meta", "background"):
+                _flush()
+                skip_below_level = level
+                continue
+
+            if role == "feature_root":
+                _flush()
+                current = {"heading": heading, "content": body}
+            elif role == "container":
+                continue
+            else:
+                if current is None:
+                    current = {"heading": heading, "content": body}
+                else:
+                    current["content"] += f"\n\n{heading}\n{body}"
 
     _flush()
     return sections

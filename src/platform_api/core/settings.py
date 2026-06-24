@@ -110,6 +110,11 @@ class Settings(BaseSettings):
     # 兜底：开关开但全文无 LLM 标记（分类未跑/全失败）时回退关键词。默认关，行为与改造前一致。
     global_section_llm_enabled: bool = False
 
+    # ── 功能点切分去死板（LLM 大纲分段，切分通用化）──────────────────────────────
+    # 关：用 _choose_feature_level 死规则(## = 功能点)。开：LLM 按大纲语义定功能点边界
+    # （自适应粒度，嵌套 PRD 也能正确切）。LLM 失败回退死规则。默认关，行为不变。
+    feature_seg_llm_enabled: bool = False
+
     # ── 原型多源接地（落点⑦）：MasterGo 原型 DSL 规格接入 ──────────────────────
     # 关：忽略 PRD 里的 MasterGo 链接（行为不变）。开：拉原型 DSL、抽规格并入章节内容。
     # 无链接/无 token/单链接失败均安全跳过，绝不阻断解析。
