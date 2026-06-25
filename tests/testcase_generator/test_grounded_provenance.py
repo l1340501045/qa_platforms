@@ -81,3 +81,21 @@ def test_derive_unresolved_flags_not_fabricates():
     p = derive_grounded_provenance(case, _ctx())
     assert p.grounding["unresolved"] >= 1
     assert "存疑" in p.verbatim_excerpt or p.grounding["relocated"] >= 1
+
+
+# ── Task 7: confidence 适配 ─────────────────────────────────────────────────────
+
+
+def test_confidence_note_flags_unresolved():
+    from src.testcase_generator.schemas.test_case import Provenance
+    from src.testcase_generator.stages.write_cases.confidence_scorer import ConfidenceScorer
+
+    p = Provenance(
+        derived_from=["x"],
+        source_section="x",
+        verbatim_excerpt="e",
+        trust_level=1,
+        grounding={"verified": 0, "fuzzy": 0, "relocated": 0, "unresolved": 2},
+    )
+    _lvl, note = ConfidenceScorer().score(p)
+    assert note and "未对齐" in note

@@ -475,7 +475,14 @@ async def generate_cases(
                         logger.warning("LLM generated case for unknown test_point_id: %s", llm_case.test_point_id)
                         continue
 
-                    provenance = provenance_tagger.tag_provenance(tp, parsed_context)
+                    if settings.grounded_provenance_enabled:
+                        from src.testcase_generator.stages.write_cases.provenance_tagger import (
+                            derive_grounded_provenance,
+                        )
+
+                        provenance = derive_grounded_provenance(llm_case, parsed_context)
+                    else:
+                        provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
 
                     steps = [

@@ -8,7 +8,6 @@ import yaml
 
 from src.testcase_generator.schemas.test_case import Provenance
 
-
 _TRUST_ORDER_PATH = Path(__file__).resolve().parents[2] / "config" / "trust_order.yaml"
 
 
@@ -41,10 +40,17 @@ class ConfidenceScorer:
         level = provenance.trust_level
 
         if level <= 2:
-            return level, None
+            base_note = None
         elif level == 3:
-            return level, None
+            base_note = None
         elif level == 4:
-            return level, "来源为 UI 设计稿，建议人工确认交互细节"
+            base_note = "来源为 UI 设计稿，建议人工确认交互细节"
         else:  # level == 5
-            return level, "来源含原型探索，原型可能有交互 bug"
+            base_note = "来源含原型探索，原型可能有交互 bug"
+
+        g = getattr(provenance, "grounding", None)
+        if g and g.get("unresolved", 0) > 0:
+            warn = f"{g['unresolved']} 处断言引文未对齐原文，建议人工核对"
+            base_note = f"{base_note}；{warn}" if base_note else warn
+
+        return level, base_note
