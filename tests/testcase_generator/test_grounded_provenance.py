@@ -99,10 +99,12 @@ def test_derive_relocated_success_path():
     # 长章节多句话，quote 是其中一句的改写（非子串、bigram 覆盖 <0.8），但 SequenceMatcher 对单句 >0.6
     section = "系统支持文章发布功能。文章状态包括草稿、待审核、已发布。审核驳回须填写原因。结果通知到作者邮箱。"
     ctx = _Ctx([_Src(1, [_Sec("PRD §4.1 发布", section)])])
-    case = _Case([_Step("审核驳回时需要填写驳回原因", "PRD §4.1 发布")])
+    case = _Case([_Step("审核驳回须填写原因和备注", "PRD §4.1 发布")])
     p = derive_grounded_provenance(case, ctx)
     assert p.grounding["relocated"] >= 1
     assert "驳回" in p.verbatim_excerpt
+    assert "PRD §4.1 发布" in p.derived_from
+    assert p.trust_level == 1
 
 
 # ── Task 7: confidence 适配 ─────────────────────────────────────────────────────
