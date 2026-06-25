@@ -170,6 +170,17 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 
 输出要求：严格按指定 JSON Schema 输出。"""
 
+COT_REASONING_SECTION = """
+
+【显式分步推理纪律（CoT —— 写每个测试点的用例前，先在心里按此顺序走一遍，再下笔）】
+对每个测试点，严格按三步推理，但**只输出最终用例 JSON，不要输出推理过程本身**：
+1. 定位：在 requirement_context 中找到支撑该行为的具体章节与原文（优先 scope=own，其次 cross_ref，再 global_default）。
+   · 找到 → 把**逐字摘录的原文**填入该步 source_quote、所在章节填入 source_ref；
+   · 找不到任何明文支撑 → 按上文「需求待确认」唯一用例处理，不要进入第 2/3 步编造。
+2. 推行为：仅从第 1 步定位到的原文推导应覆盖的行为面（正常/边界/异常逆向/状态机/联动，以原文为准），不外推未授予的范围。
+3. 写断言：每个行为面写成可观测、可验证的 expected_result，并确保 source_quote 是 requirement_context 里**真实存在、可逐字找到**的片段（不要改写/凝练，否则系统校验会判为存疑）。
+顺序铁律：先有「定位到的原文」才允许写确定断言。此纪律只组织推理、不改变上文产出规则与输出 Schema。"""
+
 CHEAT_SHEET_SYSTEM_PROMPT = """
 
 【如何应用 cheat sheet（审核通过的避坑手册，优先级高于一般联想）】
@@ -395,8 +406,9 @@ async def generate_cases(
                             "允许推翻原有断言、过滤规则或方向，不要保留与意见相悖的原结论）】\n"
                             + feedback_lines
                         )
+                cot_section = COT_REASONING_SECTION if settings.grounded_provenance_enabled else ""
                 full_system_prompt = (
-                    WRITE_CASES_SYSTEM_PROMPT + cheat_sheet_section + feedback_section + few_shot_section
+                    WRITE_CASES_SYSTEM_PROMPT + cot_section + cheat_sheet_section + feedback_section + few_shot_section
                 )
                 prompt_payload = {"test_points": test_points_data, "requirement_context": relevant_context}
                 if settings.cheat_sheet_injection_enabled:

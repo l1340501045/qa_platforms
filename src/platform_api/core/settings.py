@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     # （自适应粒度，嵌套 PRD 也能正确切）。LLM 失败回退死规则。默认关，行为不变。
     feature_seg_llm_enabled: bool = False
 
+    # ── CoT 显式化 + 溯源接地（落点⑥·大改动）─────────────────────────────────
+    # 关：write_cases 行为不变（用旧 provenance tagger）。开：加 CoT 分步纪律 +
+    # 生成期 source_quote/source_ref 派生&校验取代「前200字」启发式 + confidence 适配。
+    # 仅改 write_cases 溯源链，不动 verify 判定/输出主结构。默认关。
+    grounded_provenance_enabled: bool = False
+
     # ── 原型多源接地（落点⑦）：MasterGo 原型 DSL 规格接入 ──────────────────────
     # 关：忽略 PRD 里的 MasterGo 链接（行为不变）。开：拉原型 DSL、抽规格并入章节内容。
     # 无链接/无 token/单链接失败均安全跳过，绝不阻断解析。
