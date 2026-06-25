@@ -43,6 +43,8 @@ from src.testcase_generator.stages.write_cases.confidence_scorer import (
 )
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
+    build_section_index,
+    derive_grounded_provenance,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,7 +180,8 @@ COT_REASONING_SECTION = """
    · 找到 → 把**逐字摘录的原文**填入该步 source_quote、所在章节填入 source_ref；
    · 找不到任何明文支撑 → 按上文「需求待确认」唯一用例处理，不要进入第 2/3 步编造。
 2. 推行为：仅从第 1 步定位到的原文推导应覆盖的行为面（正常/边界/异常逆向/状态机/联动，以原文为准），不外推未授予的范围。
-3. 写断言：每个行为面写成可观测、可验证的 expected_result，并确保 source_quote 是 requirement_context 里**真实存在、可逐字找到**的片段（不要改写/凝练，否则系统校验会判为存疑）。
+3. 写断言：每个行为面写成可观测、可验证的 expected_result，并确保 source_quote 是
+   requirement_context 里**真实存在、可逐字找到**的片段（不要改写/凝练，否则系统校验会判为存疑）。
 顺序铁律：先有「定位到的原文」才允许写确定断言。此纪律只组织推理、不改变上文产出规则与输出 Schema。"""
 
 CHEAT_SHEET_SYSTEM_PROMPT = """
@@ -353,6 +356,7 @@ async def generate_cases(
 
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
+    _grounded_index = build_section_index(parsed_context) if settings.grounded_provenance_enabled else None
     all_test_cases: list[GeneratedTestCase] = []
     failed_features: list[dict] = []
     case_counter = start_counter
@@ -476,13 +480,6 @@ async def generate_cases(
                         continue
 
                     if settings.grounded_provenance_enabled:
-                        from src.testcase_generator.stages.write_cases.provenance_tagger import (
-                            build_section_index,
-                            derive_grounded_provenance,
-                        )
-
-                        if "_grounded_index" not in locals():
-                            _grounded_index = build_section_index(parsed_context)
                         provenance = derive_grounded_provenance(llm_case, parsed_context, index=_grounded_index)
                     else:
                         provenance = provenance_tagger.tag_provenance(tp, parsed_context)

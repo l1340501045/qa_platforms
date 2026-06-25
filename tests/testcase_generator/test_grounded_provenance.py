@@ -1,7 +1,11 @@
 """落点⑥ CoT 显式化 + 溯源接地 grounded provenance 单元测试"""
 
 from src.testcase_generator.stages.write_cases import node as wc
-from src.testcase_generator.stages.write_cases.provenance_tagger import _align, _normalize
+from src.testcase_generator.stages.write_cases.provenance_tagger import (
+    _align,
+    _normalize,
+    derive_grounded_provenance,
+)
 
 
 def test_cot_section_constant_nonempty():
@@ -34,8 +38,6 @@ def test_align_unresolved_on_paraphrase_or_fabrication():
 
 
 # ── Task 5: 修复定位 + 派生 provenance ──────────────────────────────────────────
-
-from src.testcase_generator.stages.write_cases.provenance_tagger import derive_grounded_provenance
 
 
 class _Step:
@@ -90,6 +92,17 @@ def test_derive_no_quote_gives_pending_excerpt():
     p = derive_grounded_provenance(case, _ctx())
     assert "需求待确认" in p.verbatim_excerpt
     assert "存疑" not in p.verbatim_excerpt
+
+
+def test_derive_relocated_success_path():
+    """引文被 _align 判 unresolved 但章节内有相似句 → relocated 成功。"""
+    # 长章节多句话，quote 是其中一句的改写（非子串、bigram 覆盖 <0.8），但 SequenceMatcher 对单句 >0.6
+    section = "系统支持文章发布功能。文章状态包括草稿、待审核、已发布。审核驳回须填写原因。结果通知到作者邮箱。"
+    ctx = _Ctx([_Src(1, [_Sec("PRD §4.1 发布", section)])])
+    case = _Case([_Step("审核驳回时需要填写驳回原因", "PRD §4.1 发布")])
+    p = derive_grounded_provenance(case, ctx)
+    assert p.grounding["relocated"] >= 1
+    assert "驳回" in p.verbatim_excerpt
 
 
 # ── Task 7: confidence 适配 ─────────────────────────────────────────────────────
