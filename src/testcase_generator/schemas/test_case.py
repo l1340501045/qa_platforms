@@ -53,6 +53,10 @@ class Provenance(BaseModel):
     source_section: str = Field(description="来源章节")
     verbatim_excerpt: str = Field(description="原文摘录")
     trust_level: int = Field(ge=1, le=5, description="信任等级")
+    grounding: dict | None = Field(
+        default=None,
+        description="溯源校验统计 {verified,fuzzy,relocated,unresolved}；None=未启用 grounded 模式",
+    )
 
 
 class GeneratedTestCase(BaseModel):
