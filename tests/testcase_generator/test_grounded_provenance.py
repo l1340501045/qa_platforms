@@ -83,6 +83,15 @@ def test_derive_unresolved_flags_not_fabricates():
     assert "存疑" in p.verbatim_excerpt or p.grounding["relocated"] >= 1
 
 
+def test_derive_no_quote_gives_pending_excerpt():
+    """待确认用例（steps 无 source_quote）应标记为"需求待确认"而非"存疑"。"""
+    step = _Step("", "PRD §3.2 审核")  # source_quote 为空
+    case = _Case([step])
+    p = derive_grounded_provenance(case, _ctx())
+    assert "需求待确认" in p.verbatim_excerpt
+    assert "存疑" not in p.verbatim_excerpt
+
+
 # ── Task 7: confidence 适配 ─────────────────────────────────────────────────────
 
 

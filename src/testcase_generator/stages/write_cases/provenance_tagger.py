@@ -11,6 +11,10 @@ from src.testcase_generator.schemas.test_point import TestPointSchema
 # ── 溯源接地：归一化 + span 对齐（落点⑥）────────────────────────────────────────
 
 _KEEP = re.compile(r"[^0-9a-z一-鿿]+")
+_FUZZY_COVERAGE = 0.8
+_RELOCATE_RATIO = 0.6
+
+SectionIndex = dict[str, tuple[str, int]]
 
 
 def _normalize(s: str) -> str:
@@ -25,7 +29,7 @@ def _bigrams(norm: str) -> set[str]:
     return {norm[i : i + 2] for i in range(len(norm) - 1)} if len(norm) >= 2 else ({norm} if norm else set())
 
 
-def _align(quote: str, section_content: str, *, threshold: float = 0.8) -> str:
+def _align(quote: str, section_content: str, *, threshold: float = _FUZZY_COVERAGE) -> str:
     """'verified'（归一化子串）/ 'fuzzy'（quote bigram 被章节覆盖≥阈值）/ 'unresolved'。"""
     nq, nc = _normalize(quote), _normalize(section_content)
     if not nq:
@@ -56,15 +60,22 @@ def _relocate(quote: str, expected: str, section_content: str | None) -> str | N
         r = SequenceMatcher(None, target, _normalize(s)).ratio()
         if r > best:
             best, best_sent = r, s
-    return best_sent if best >= 0.6 else None
+    return best_sent if best >= _RELOCATE_RATIO else None
 
 
-def derive_grounded_provenance(llm_case, parsed_context) -> Provenance:
-    """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。"""
-    index: dict[str, tuple[str, int]] = {}
+def build_section_index(parsed_context) -> SectionIndex:
+    """预建章节索引（每个 parsed_context 只需构建一次）。"""
+    index: SectionIndex = {}
     for src in parsed_context.sources:
         for sec in src.sections:
             index[_normalize(sec.source_ref)] = (sec.content, src.trust_level)
+    return index
+
+
+def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex | None = None) -> Provenance:
+    """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。"""
+    if index is None:
+        index = build_section_index(parsed_context)
 
     counts = {"verified": 0, "fuzzy": 0, "relocated": 0, "unresolved": 0}
     quotes: list[str] = []
@@ -98,8 +109,11 @@ def derive_grounded_provenance(llm_case, parsed_context) -> Provenance:
                 counts["unresolved"] += 1
 
     derived_from = list(dict.fromkeys(refs))
+    total_quoted = counts["verified"] + counts["fuzzy"] + counts["relocated"] + counts["unresolved"]
     if quotes:
         excerpt = " / ".join(quotes)[:300]
+    elif total_quoted == 0:
+        excerpt = "[需求待确认：无确定断言，未引用原文]"
     else:
         excerpt = f"[未能对齐原文：{counts['unresolved']} 处引文存疑，待人工核对]"
     trust_level = min(trusts) if trusts else (

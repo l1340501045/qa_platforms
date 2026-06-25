@@ -477,10 +477,13 @@ async def generate_cases(
 
                     if settings.grounded_provenance_enabled:
                         from src.testcase_generator.stages.write_cases.provenance_tagger import (
+                            build_section_index,
                             derive_grounded_provenance,
                         )
 
-                        provenance = derive_grounded_provenance(llm_case, parsed_context)
+                        if "_grounded_index" not in locals():
+                            _grounded_index = build_section_index(parsed_context)
+                        provenance = derive_grounded_provenance(llm_case, parsed_context, index=_grounded_index)
                     else:
                         provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
