@@ -126,9 +126,9 @@ async def comprehend_node(state: PipelineState) -> dict:
 
     gate_result = evaluate_gate(preliminary_report)
 
-    # 5. 构建 open_questions（NO_GO 或 CONDITIONAL 时）
+    # 5. 构建 open_questions（仅 NO_GO 时——CONDITIONAL 直通 test_points 不挂起）
     open_questions: list[OpenQuestion] = []
-    if gate_result in ("NO_GO", "CONDITIONAL"):
+    if gate_result == "NO_GO":
         open_questions = _build_open_questions(
             blind_spots=blind_spots,
             conflicts=conflicts,
