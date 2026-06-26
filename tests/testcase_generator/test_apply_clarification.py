@@ -91,5 +91,6 @@ async def test_apply_low_coverage_still_releases_when_no_conflict():
 
 def test_apply_module_does_not_import_llm():
     import inspect
+
     from src.testcase_generator.stages.comprehend import apply_clarification as mod
     assert "get_llm_client" not in inspect.getsource(mod)
