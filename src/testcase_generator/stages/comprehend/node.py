@@ -353,6 +353,7 @@ def _build_open_questions(
                     question_type="conflict",
                     severity="high",
                     conflict_detail=conflict.conflict_detail,
+                    conflict_id=conflict.conflict_id,
                 )
             )
             if len(questions) >= max_questions:
