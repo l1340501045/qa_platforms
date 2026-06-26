@@ -3,6 +3,7 @@
 from src.testcase_generator.stages.write_cases import node as wc
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     _align,
+    _find_section_by_quote,
     _normalize,
     derive_grounded_provenance,
 )
@@ -105,6 +106,42 @@ def test_derive_relocated_success_path():
     assert "驳回" in p.verbatim_excerpt
     assert "PRD §4.1 发布" in p.derived_from
     assert p.trust_level == 1
+
+
+# ── Task 3(跨章节兜底): ref 失配救回 ───────────────────────────────────────────
+
+
+def test_derive_ref_misfit_rescued():
+    """ref 细于索引（如 §5.8.7 vs §5.8）→ 跨章节 quote 兜底救回 + 回填真实 ref。"""
+    ctx = _Ctx([_Src(1, [_Sec("PRD §5.8 批量创建广告", "商品池由后台从巨量同步，本页不能新增商品。")])])
+    case = _Case([_Step("商品池由后台从巨量同步", "PRD §5.8.7")])  # ref 细于索引→对不上
+    p = derive_grounded_provenance(case, ctx)
+    assert p.grounding["unresolved"] == 0
+    assert p.grounding.get("ref_corrected", 0) == 1
+    assert "商品池由后台从巨量同步" in p.verbatim_excerpt
+    assert p.derived_from == ["PRD §5.8 批量创建广告"]  # 回填真实 ref
+
+
+# ── Task 2(跨章节兜底): _find_section_by_quote ─────────────────────────────────
+
+
+def _idx():
+    return {
+        "x": ("无关内容随便写点东西", 1, "PRD §1 概述"),
+        "y": ("商品池由后台从巨量同步，本页不能新增编辑商品；如需新商品请到商品库配置。", 1, "PRD §5.8 批量创建广告"),
+    }
+
+
+def test_find_by_quote_hit():
+    hit = _find_section_by_quote("商品池由后台从巨量同步", _idx())
+    assert hit is not None
+    raw_ref, content, trust = hit
+    assert raw_ref == "PRD §5.8 批量创建广告"
+    assert trust == 1
+
+
+def test_find_by_quote_miss_on_fabricated():
+    assert _find_section_by_quote("系统支持区块链上链存证", _idx()) is None
 
 
 # ── Task 7: confidence 适配 ─────────────────────────────────────────────────────

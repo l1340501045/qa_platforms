@@ -14,7 +14,7 @@ _KEEP = re.compile(r"[^0-9a-z一-鿿]+")
 _FUZZY_COVERAGE = 0.8
 _RELOCATE_RATIO = 0.6
 
-SectionIndex = dict[str, tuple[str, int]]
+SectionIndex = dict[str, tuple[str, int, str]]  # norm_ref -> (content, trust_level, raw_ref)
 
 
 def _normalize(s: str) -> str:
@@ -63,12 +63,24 @@ def _relocate(quote: str, expected: str, section_content: str | None) -> str | N
     return best_sent if best >= _RELOCATE_RATIO else None
 
 
+def _find_section_by_quote(quote: str, index: SectionIndex) -> tuple[str, str, int] | None:
+    """绑定失败兜底：跨全章节找能对齐该 quote 的章节，返回 (raw_ref, content, trust_level)。"""
+    fuzzy_hit = None
+    for content, trust, raw_ref in index.values():
+        status = _align(quote, content)
+        if status == "verified":
+            return raw_ref, content, trust
+        if status == "fuzzy" and fuzzy_hit is None:
+            fuzzy_hit = (raw_ref, content, trust)
+    return fuzzy_hit
+
+
 def build_section_index(parsed_context) -> SectionIndex:
     """预建章节索引（每个 parsed_context 只需构建一次）。"""
     index: SectionIndex = {}
     for src in parsed_context.sources:
         for sec in src.sections:
-            index[_normalize(sec.source_ref)] = (sec.content, src.trust_level)
+            index[_normalize(sec.source_ref)] = (sec.content, src.trust_level, sec.source_ref)
     return index
 
 
@@ -77,7 +89,7 @@ def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex 
     if index is None:
         index = build_section_index(parsed_context)
 
-    counts = {"verified": 0, "fuzzy": 0, "relocated": 0, "unresolved": 0}
+    counts = {"verified": 0, "fuzzy": 0, "relocated": 0, "unresolved": 0, "ref_corrected": 0}
     quotes: list[str] = []
     refs: list[str] = []
     trusts: list[int] = []
@@ -94,19 +106,29 @@ def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex 
             quotes.append(q)
             if r:
                 refs.append(r)
+            trusts.append(sec[1])
+            continue
+        # ── 跨章节兜底（治 ref 失配，诊断 B≈44.7%）──
+        hit = _find_section_by_quote(q, index)
+        if hit:
+            raw_ref, content, trust = hit
+            counts[_align(q, content)] += 1
+            counts["ref_corrected"] += 1
+            quotes.append(q)
+            refs.append(raw_ref)
+            trusts.append(trust)
+            continue
+        # ── 仍找不到 → relocate / unresolved（现状逻辑）──
+        fixed = _relocate(q, getattr(step, "expected_result", ""), sec[0] if sec else None)
+        if fixed:
+            counts["relocated"] += 1
+            quotes.append(fixed)
+            if r:
+                refs.append(r)
             if sec:
                 trusts.append(sec[1])
         else:
-            fixed = _relocate(q, getattr(step, "expected_result", ""), sec[0] if sec else None)
-            if fixed:
-                counts["relocated"] += 1
-                quotes.append(fixed)
-                if r:
-                    refs.append(r)
-                if sec:
-                    trusts.append(sec[1])
-            else:
-                counts["unresolved"] += 1
+            counts["unresolved"] += 1
 
     derived_from = list(dict.fromkeys(refs))
     total_quoted = counts["verified"] + counts["fuzzy"] + counts["relocated"] + counts["unresolved"]
