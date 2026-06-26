@@ -1,8 +1,6 @@
 """质量门冲突澄清改造 — comprehend 冲突结构化 / 兜底 / 字段链路。"""
 from __future__ import annotations
 
-import pytest
-
 from src.testcase_generator.schemas.comprehension_report import (
     ConflictDetail,
     ConflictSide,
@@ -40,7 +38,9 @@ def test_merge_structured_conflict_maps_and_unresolved():
 
 
 def test_merge_placeholder_location_degrades_detail():
-    out = cnode._merge_conflicts([_detail(loc_a="未列", loc_b="")], features=[], sources=[], detector=BlindSpotDetector())
+    out = cnode._merge_conflicts(
+        [_detail(loc_a="未列", loc_b="")], features=[], sources=[], detector=BlindSpotDetector()
+    )
     assert out[0].conflict_detail is None
     assert out[0].resolution == "unresolved"
 

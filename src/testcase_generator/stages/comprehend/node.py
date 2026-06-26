@@ -18,9 +18,9 @@ from src.testcase_generator.schemas.comprehension_report import (
 )
 from src.testcase_generator.schemas.parsed_context import FeatureItem, ParsedContext, SourceItem
 from src.testcase_generator.schemas.pipeline_state import PipelineState
-from src.testcase_generator.stages.comprehend.blind_spot_detector import BlindSpotDetector
-from src.testcase_generator.stages.comprehend.gate import evaluate_gate, MAX_OPEN_QUESTIONS
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.comprehend.blind_spot_detector import BlindSpotDetector
+from src.testcase_generator.stages.comprehend.gate import MAX_OPEN_QUESTIONS, evaluate_gate
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,11 @@ COMPREHEND_SYSTEM_PROMPT = """角色：你是资深测试工程师，当前任�
 
 冲突结构化输出要求（identified_conflicts 每个元素）：
 - topic：冲突点简短标题。
-- side_a / side_b：各含 location（章节号/表名，如 "§5.6.1"、"§9.2 表"）、statement（该处说法原文要点）、trust_level（同文档跨章节冲突时两方相同）。
+- side_a / side_b：各含 location（章节号/表名，如 "§5.6.1"、"§9.2 表"）、
+  statement（该处说法原文要点）、trust_level（同文档跨章节冲突时两方相同）。
 - 同一文档不同章节自相矛盾，也必须上报，两方 trust_level 相同。
-- location 尽量填真实章节号/表名；【禁止】编造 "未列"/"N/A"/"未知" 等占位词；确实定位不到时把 location 留空（""），仍要上报该冲突（由系统降级处理），不要因定位不清而漏报。
+- location 尽量填真实章节号/表名；【禁止】编造 "未列"/"N/A"/"未知" 等占位词；
+  确实定位不到时把 location 留空（""），仍要上报该冲突（由系统降级处理）。
 - recommendation：side_a / side_b / neither；recommendation_reason：一句话理由（依据信任顺序/更具体/常识）。
 
 输出要求：严格按指定 JSON Schema 输出。"""
