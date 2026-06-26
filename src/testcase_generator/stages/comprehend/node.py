@@ -158,7 +158,7 @@ async def comprehend_node(state: PipelineState) -> dict:
     return {
         "comprehension_report": comprehension_report,
         "gate_result": gate_result,
-        "open_questions": [q.model_dump() for q in open_questions] if open_questions else [],
+        "open_questions": [_open_question_to_payload(q) for q in open_questions],
         "current_stage": "comprehend",
     }
 
@@ -302,6 +302,20 @@ def _merge_conflicts(
         )
 
     return rule_conflicts
+
+
+def _open_question_to_payload(q: OpenQuestion) -> dict:
+    """唯一前端序列化点：把 OpenQuestion 拼成前端契约 dict。"""
+    return {
+        "id": q.question_id,
+        "question_id": q.question_id,
+        "question": q.question,
+        "context": q.context,
+        "priority": q.severity,
+        "question_type": q.question_type,
+        "conflict_detail": q.conflict_detail.model_dump() if q.conflict_detail else None,
+        "blocking": q.blocking,
+    }
 
 
 def _build_open_questions(

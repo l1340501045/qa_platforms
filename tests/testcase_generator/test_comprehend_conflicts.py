@@ -68,3 +68,16 @@ def test_build_questions_placeholder_source_safe_context():
     qs = cnode._build_open_questions(blind_spots=[], conflicts=conflicts, features=[], max_questions=10)
     assert qs[0].question_type == "conflict"
     assert "未列" not in qs[0].context and "Level 3" not in qs[0].context
+
+
+def test_to_frontend_dict_aligns_fields():
+    from src.testcase_generator.schemas.comprehension_report import OpenQuestion
+    q = OpenQuestion(
+        question_id="Q-001", question="q", context="c", blocking=True,
+        question_type="conflict", severity="high", conflict_detail=_detail(),
+    )
+    d = cnode._open_question_to_payload(q)
+    assert d["id"] == "Q-001" and d["question_id"] == "Q-001"
+    assert d["priority"] == "high"
+    assert d["question_type"] == "conflict"
+    assert d["conflict_detail"]["topic"] == "角色名称字数上限"
