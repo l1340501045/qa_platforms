@@ -41,6 +41,7 @@ gate_config:
                            # 薄输入照常生成、由 verify 标「需求待确认」兜底，而非死胡同暂停）
   # CONDITIONAL: 20% <= coverage < 80%
   max_open_questions: 10   # 单次 NO_GO 最多返回的澄清问题数
+  max_clarification_rounds: 3   # 澄清轮数上限；超过强制放行（verify 兜底）
 
 confidence_rules:
   # 用例置信度由信源信任等级派生，不靠 AI 自评

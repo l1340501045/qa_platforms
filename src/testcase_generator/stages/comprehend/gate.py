@@ -17,6 +17,7 @@ with open(_config_path) as _f:
 GO_THRESHOLD: float = _gate_config["go_threshold"]  # 0.8
 NO_GO_THRESHOLD: float = _gate_config["no_go_threshold"]  # 0.6
 MAX_OPEN_QUESTIONS: int = _gate_config.get("max_open_questions", 10)
+MAX_CLARIFICATION_ROUNDS: int = _gate_config.get("max_clarification_rounds", 3)
 
 
 def evaluate_gate(

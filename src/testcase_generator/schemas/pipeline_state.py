@@ -31,6 +31,7 @@ class PipelineState(TypedDict, total=False):
     gate_result: str  # "GO" | "CONDITIONAL" | "NO_GO"
     open_questions: list[dict]  # Gate NO_GO 时的待澄清问题
     clarification_answers: list[dict] | None  # 用户回答（interrupt 恢复后填入）
+    clarification_rounds: int  # 已执行澄清轮数（防死循环安全阀）
 
     # Stage 2.5: rule_extract 产物（规则台账；rule_extract_enabled 关时为空）
     rules: list[dict]  # [{rule_code, module, rule, source_quote, category}]

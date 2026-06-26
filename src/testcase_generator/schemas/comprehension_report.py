@@ -69,6 +69,7 @@ class OpenQuestion(BaseModel):
     question_type: Literal["conflict", "blind_spot"] = Field(default="blind_spot", description="问题类型判别")
     conflict_detail: "ConflictDetail | None" = Field(default=None, description="冲突且结构化时才有")
     severity: Literal["high", "medium", "low"] = Field(default="medium", description="透传前端 priority")
+    conflict_id: str | None = Field(default=None, description="冲突类问题关联的 SourceConflict.conflict_id")
 
 
 class ComprehensionReport(BaseModel):
