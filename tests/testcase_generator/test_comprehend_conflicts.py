@@ -43,3 +43,28 @@ def test_merge_placeholder_location_degrades_detail():
     out = cnode._merge_conflicts([_detail(loc_a="未列", loc_b="")], features=[], sources=[], detector=BlindSpotDetector())
     assert out[0].conflict_detail is None
     assert out[0].resolution == "unresolved"
+
+
+def test_build_questions_conflict_carries_detail_and_type():
+    conflicts = [SourceConflict(
+        conflict_id="C-001", description="角色名称字数上限：'≤50字' vs '不限字数'",
+        source_a="§5.6.1", source_a_trust_level=1, source_b="§9.2 表", source_b_trust_level=1,
+        resolution="unresolved", resolution_basis="x", conflict_detail=_detail(),
+    )]
+    qs = cnode._build_open_questions(blind_spots=[], conflicts=conflicts, features=[], max_questions=10)
+    q = qs[0]
+    assert q.question_type == "conflict" and q.severity == "high"
+    assert q.conflict_detail is not None
+    assert "§5.6.1" in q.context and "Level 1" in q.context
+    assert "未列" not in q.context and "Level 3" not in q.context
+
+
+def test_build_questions_placeholder_source_safe_context():
+    conflicts = [SourceConflict(
+        conflict_id="C-001", description="某冲突", source_a="未列", source_a_trust_level=3,
+        source_b="未列", source_b_trust_level=3, resolution="unresolved", resolution_basis="x",
+        conflict_detail=None,
+    )]
+    qs = cnode._build_open_questions(blind_spots=[], conflicts=conflicts, features=[], max_questions=10)
+    assert qs[0].question_type == "conflict"
+    assert "未列" not in qs[0].context and "Level 3" not in qs[0].context

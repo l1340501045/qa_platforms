@@ -318,14 +318,25 @@ def _build_open_questions(
     for conflict in conflicts:
         if conflict.resolution == "unresolved":
             q_counter += 1
+            a_ok = not _is_placeholder(conflict.source_a)
+            b_ok = not _is_placeholder(conflict.source_b)
+            if a_ok and b_ok:
+                ctx = (
+                    f"'{conflict.source_a}'(Level {conflict.source_a_trust_level}) 与 "
+                    f"'{conflict.source_b}'(Level {conflict.source_b_trust_level}) 描述不一致"
+                )
+            else:
+                ctx = "同一文档内存在描述不一致，需人工确认以哪处为准"
             questions.append(
                 OpenQuestion(
                     question_id=f"Q-{q_counter:03d}",
                     question=f"信源冲突需要人工裁决：{conflict.description}",
-                    context=f"'{conflict.source_a}'(Level {conflict.source_a_trust_level}) 与 "
-                    f"'{conflict.source_b}'(Level {conflict.source_b_trust_level}) 描述不一致",
+                    context=ctx,
                     related_features=[],
                     blocking=True,
+                    question_type="conflict",
+                    severity="high",
+                    conflict_detail=conflict.conflict_detail,
                 )
             )
             if len(questions) >= max_questions:
@@ -342,6 +353,8 @@ def _build_open_questions(
                     context=blind_spot.reason,
                     related_features=[],
                     blocking=True,
+                    question_type="blind_spot",
+                    severity=blind_spot.severity,
                 )
             )
             if len(questions) >= max_questions:
@@ -358,6 +371,8 @@ def _build_open_questions(
                     context=blind_spot.reason,
                     related_features=[],
                     blocking=False,
+                    question_type="blind_spot",
+                    severity=blind_spot.severity,
                 )
             )
             if len(questions) >= max_questions:
