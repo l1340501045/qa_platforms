@@ -16,6 +16,7 @@ from src.testcase_generator.stages.review.backfill_node import backfill_node
 from src.testcase_generator.stages.verify.node import verify_node
 from src.testcase_generator.stages.dedup.node import dedup_node
 from src.testcase_generator.stages.export.node import export_node
+from src.testcase_generator.stages.comprehend.apply_clarification import apply_clarification_node
 from src.testcase_generator.pipeline.edges import gate_router, review_router
 
 
@@ -55,6 +56,7 @@ def build_pipeline() -> StateGraph:
     graph.add_node("parse", parse_node)
     graph.add_node("comprehend", comprehend_node)
     graph.add_node("interrupt", interrupt_node)
+    graph.add_node("apply_clarification", apply_clarification_node)
     graph.add_node("rule_extract", rule_extract_node)
     graph.add_node("test_points", test_points_node)
     graph.add_node("write_cases", write_cases_node)
@@ -80,8 +82,12 @@ def build_pipeline() -> StateGraph:
         },
     )
 
-    # interrupt 恢复后回到 comprehend 重新评估
-    graph.add_edge("interrupt", "comprehend")
+    # interrupt 恢复后走 apply_clarification 消解冲突（不回 comprehend，断死循环）
+    graph.add_edge("interrupt", "apply_clarification")
+    graph.add_conditional_edges(
+        "apply_clarification", gate_router,
+        {"test_points": "rule_extract", "interrupt": "interrupt"},
+    )
 
     # 规则抽取 → 测试点
     graph.add_edge("rule_extract", "test_points")
