@@ -248,6 +248,17 @@ async def _build_feature_matrix_llm(
     return matrix, understanding_coverage, llm_output.identified_conflicts
 
 
+_PLACEHOLDER_TOKENS = {"未列", "未知", "n/a", "na", "无", "null", "none", "待定", "-", "—"}
+
+
+def _is_placeholder(s: str | None) -> bool:
+    """判定来源/章节定位是否为空或占位串（用于冲突卡片降级）。"""
+    if s is None:
+        return True
+    t = s.strip().lower()
+    return t == "" or t in _PLACEHOLDER_TOKENS
+
+
 def _merge_conflicts(
     llm_conflicts: list[dict],
     features: list[FeatureItem],
