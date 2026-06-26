@@ -15,7 +15,7 @@ _FUZZY_COVERAGE = 0.8
 _RELOCATE_RATIO = 0.6
 _MIN_QUOTE_LEN_FOR_CROSS_SECTION = 10
 
-SectionIndex = dict[str, tuple[str, int, str]]  # norm_ref -> (content, trust_level, raw_ref)
+SectionIndex = dict[str, tuple[str, int, str, str]]  # norm_ref -> (content, trust_level, raw_ref, norm_content)
 
 
 def _normalize(s: str) -> str:
@@ -66,15 +66,19 @@ def _relocate(quote: str, expected: str, section_content: str | None) -> str | N
 
 def _find_section_by_quote(quote: str, index: SectionIndex) -> tuple[str, str, int] | None:
     """绑定失败兜底：跨全章节找能对齐该 quote 的章节，返回 (raw_ref, content, trust_level)。"""
-    if len(_normalize(quote)) < _MIN_QUOTE_LEN_FOR_CROSS_SECTION:
+    nq = _normalize(quote)
+    if len(nq) < _MIN_QUOTE_LEN_FOR_CROSS_SECTION:
         return None
+    bq = _bigrams(nq)
     fuzzy_hit = None
-    for content, trust, raw_ref in index.values():
-        status = _align(quote, content)
-        if status == "verified":
+    for content, trust, raw_ref, nc in index.values():
+        if nq in nc:
             return raw_ref, content, trust
-        if status == "fuzzy" and fuzzy_hit is None:
-            fuzzy_hit = (raw_ref, content, trust)
+        if bq:
+            bc = _bigrams(nc)
+            coverage = len(bq & bc) / len(bq)
+            if coverage >= _FUZZY_COVERAGE and fuzzy_hit is None:
+                fuzzy_hit = (raw_ref, content, trust)
     return fuzzy_hit
 
 
@@ -83,7 +87,9 @@ def build_section_index(parsed_context) -> SectionIndex:
     index: SectionIndex = {}
     for src in parsed_context.sources:
         for sec in src.sections:
-            index[_normalize(sec.source_ref)] = (sec.content, src.trust_level, sec.source_ref)
+            index[_normalize(sec.source_ref)] = (
+                sec.content, src.trust_level, sec.source_ref, _normalize(sec.content)
+            )
     return index
 
 
