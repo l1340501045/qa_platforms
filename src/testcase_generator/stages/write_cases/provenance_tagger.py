@@ -13,6 +13,7 @@ from src.testcase_generator.schemas.test_point import TestPointSchema
 _KEEP = re.compile(r"[^0-9a-z一-鿿]+")
 _FUZZY_COVERAGE = 0.8
 _RELOCATE_RATIO = 0.6
+_MIN_QUOTE_LEN_FOR_CROSS_SECTION = 10
 
 SectionIndex = dict[str, tuple[str, int, str]]  # norm_ref -> (content, trust_level, raw_ref)
 
@@ -65,6 +66,8 @@ def _relocate(quote: str, expected: str, section_content: str | None) -> str | N
 
 def _find_section_by_quote(quote: str, index: SectionIndex) -> tuple[str, str, int] | None:
     """绑定失败兜底：跨全章节找能对齐该 quote 的章节，返回 (raw_ref, content, trust_level)。"""
+    if len(_normalize(quote)) < _MIN_QUOTE_LEN_FOR_CROSS_SECTION:
+        return None
     fuzzy_hit = None
     for content, trust, raw_ref in index.values():
         status = _align(quote, content)

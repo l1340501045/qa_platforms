@@ -144,6 +144,12 @@ def test_find_by_quote_miss_on_fabricated():
     assert _find_section_by_quote("系统支持区块链上链存证", _idx()) is None
 
 
+def test_find_by_quote_short_quote_guarded():
+    """短引文（归一化 <10 字符）不走跨章节兜底，防误归。"""
+    assert _find_section_by_quote("搜索", _idx()) is None
+    assert _find_section_by_quote("确定", _idx()) is None
+
+
 # ── Task 7: confidence 适配 ─────────────────────────────────────────────────────
 
 
