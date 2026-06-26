@@ -442,7 +442,7 @@ const Workbench: React.FC = () => {
           <div key={q.id} style={{ marginBottom: 24 }}>
             <div style={{ marginBottom: 4 }}>
               <Tag color={q.priority === 'high' ? 'red' : q.priority === 'medium' ? 'orange' : 'blue'}>
-                {q.priority}
+                {q.priority === 'high' ? '高' : q.priority === 'medium' ? '中' : '低'}
               </Tag>
               <strong>{q.question}</strong>
             </div>
