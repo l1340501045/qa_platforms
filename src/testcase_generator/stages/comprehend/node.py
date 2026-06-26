@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from src.testcase_generator.schemas.comprehension_report import (
     BlindSpot,
     ComprehensionReport,
+    ConflictDetail,
     FeatureUnderstanding,
     OpenQuestion,
     SourceConflict,
@@ -45,7 +46,7 @@ class ComprehensionLLMOutput(BaseModel):
 
     feature_coverages: List[FeatureCoverage] = Field(description="每个功能点的覆盖分析")
     overall_coverage: float = Field(ge=0.0, le=1.0, description="整体理解覆盖度")
-    identified_conflicts: List[dict] = Field(default_factory=list, description="识别到的信源冲突列表")
+    identified_conflicts: List[ConflictDetail] = Field(default_factory=list, description="结构化信源冲突列表")
     blind_spot_areas: List[str] = Field(default_factory=list, description="理解盲区名称列表")
 
 
@@ -64,6 +65,13 @@ COMPREHEND_SYSTEM_PROMPT = """角色：你是资深测试工程师，当前任�
 5. 信任顺序仲裁冲突：PRD(Level 1) > 技术文档(Level 2) > 口述(Level 3) > UI设计(Level 4) > 原型(Level 5)
    - 不同级：高级胜出
    - 同级冲突：标记 has_conflict=True 并描述冲突（需人工裁决）
+
+冲突结构化输出要求（identified_conflicts 每个元素）：
+- topic：冲突点简短标题。
+- side_a / side_b：各含 location（章节号/表名，如 "§5.6.1"、"§9.2 表"）、statement（该处说法原文要点）、trust_level（同文档跨章节冲突时两方相同）。
+- 同一文档不同章节自相矛盾，也必须上报，两方 trust_level 相同。
+- location 尽量填真实章节号/表名；【禁止】编造 "未列"/"N/A"/"未知" 等占位词；确实定位不到时把 location 留空（""），仍要上报该冲突（由系统降级处理），不要因定位不清而漏报。
+- recommendation：side_a / side_b / neither；recommendation_reason：一句话理由（依据信任顺序/更具体/常识）。
 
 输出要求：严格按指定 JSON Schema 输出。"""
 
@@ -159,7 +167,7 @@ async def _build_feature_matrix_llm(
     features: list[FeatureItem],
     sources: list[SourceItem],
     clarification_answers: list[dict] | None = None,
-) -> tuple[list[FeatureUnderstanding], float, list[dict]]:
+) -> tuple[list[FeatureUnderstanding], float, list[ConflictDetail]]:
     """调用 LLM 进行语义级覆盖分析，构建理解矩阵
 
     如果有 clarification_answers（Gate NO_GO 恢复后用户的回答），
