@@ -170,12 +170,7 @@ async def _build_feature_matrix_llm(
     sources: list[SourceItem],
     clarification_answers: list[dict] | None = None,
 ) -> tuple[list[FeatureUnderstanding], float, list[ConflictDetail]]:
-    """调用 LLM 进行语义级覆盖分析，构建理解矩阵
-
-    如果有 clarification_answers（Gate NO_GO 恢复后用户的回答），
-    将其作为信任等级 3（用户口述）的补充信源注入 LLM prompt，
-    使覆盖度与盲区据此重算。
-    """
+    """调用 LLM 进行语义级覆盖分析，构建理解矩阵（方案 A 后澄清不再回 comprehend；此函数仅首次理解使用）。"""
 
     # 组装用户内容：功能点列表 + 信源摘要
     features_desc = []
@@ -207,14 +202,6 @@ async def _build_feature_matrix_llm(
         "features": features_desc,
         "sources": sources_desc,
     }
-
-    # 注入澄清回答作为补充信源（信任等级 3 = 用户口述）
-    if clarification_answers:
-        user_content_dict["clarification_answers"] = {
-            "trust_level": 3,
-            "note": "以下是用户对之前盲区/冲突的澄清回答，作为补充信源重新评估覆盖度",
-            "answers": clarification_answers,
-        }
 
     user_content = json.dumps(user_content_dict, ensure_ascii=False, indent=2)
 
