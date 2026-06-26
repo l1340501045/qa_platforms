@@ -103,7 +103,7 @@ async def comprehend_node(state: PipelineState) -> dict:
     # 初始化检测器（用于仲裁规则）
     detector = BlindSpotDetector()
 
-    # 1. 调用 LLM 构建语义理解矩阵（注入澄清回答作为补充信源）
+    # 1. 调用 LLM 构建语义理解矩阵
     feature_matrix, understanding_coverage, llm_conflicts = await _build_feature_matrix_llm(
         features, sources, clarification_answers=clarification_answers
     )
