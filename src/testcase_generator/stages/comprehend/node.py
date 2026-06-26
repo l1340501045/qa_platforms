@@ -268,7 +268,7 @@ def _is_placeholder(s: str | None) -> bool:
 
 
 def _merge_conflicts(
-    llm_conflicts: list[dict],
+    llm_conflicts: list[ConflictDetail],
     features: list[FeatureItem],
     sources: list[SourceItem],
     detector: BlindSpotDetector,
@@ -281,22 +281,25 @@ def _merge_conflicts(
     existing_ids = {c.conflict_id for c in rule_conflicts}
     counter = len(rule_conflicts)
 
-    for lc in llm_conflicts:
+    for detail in llm_conflicts:
         counter += 1
         cid = f"C-{counter:03d}"
-        if cid not in existing_ids:
-            rule_conflicts.append(
-                SourceConflict(
-                    conflict_id=cid,
-                    description=lc.get("description", "LLM 识别的语义冲突"),
-                    source_a=lc.get("source_a", "未知"),
-                    source_a_trust_level=lc.get("source_a_trust_level", 3),
-                    source_b=lc.get("source_b", "未知"),
-                    source_b_trust_level=lc.get("source_b_trust_level", 3),
-                    resolution=lc.get("resolution", "unresolved"),
-                    resolution_basis=lc.get("resolution_basis", "llm_semantic_detection"),
-                )
+        if cid in existing_ids:
+            continue
+        placeholder = _is_placeholder(detail.side_a.location) or _is_placeholder(detail.side_b.location)
+        rule_conflicts.append(
+            SourceConflict(
+                conflict_id=cid,
+                description=f"{detail.topic}：'{detail.side_a.statement}' vs '{detail.side_b.statement}'",
+                source_a=detail.side_a.location or "",
+                source_a_trust_level=detail.side_a.trust_level,
+                source_b=detail.side_b.location or "",
+                source_b_trust_level=detail.side_b.trust_level,
+                resolution="unresolved",
+                resolution_basis="llm_structured_detection",
+                conflict_detail=None if placeholder else detail,
             )
+        )
 
     return rule_conflicts
 
