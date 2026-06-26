@@ -8,8 +8,10 @@ import {
   Alert,
   Badge,
   Button,
+  Card,
   Input,
   Modal,
+  Radio,
   Select,
   Spin,
   Steps,
@@ -34,6 +36,13 @@ import type {
 } from '../../types';
 
 const { TextArea } = Input;
+
+export function answerFromChoice(q: OpenQuestion, choice: string, custom: string): string {
+  const d = q.conflict_detail;
+  if (choice === 'side_a' && d) return `以 ${d.side_a.location} 为准：${d.side_a.statement}`;
+  if (choice === 'side_b' && d) return `以 ${d.side_b.location} 为准：${d.side_b.statement}`;
+  return custom.trim();
+}
 
 // ─── 阶段配置 ───
 const STAGE_ORDER = [
@@ -93,6 +102,7 @@ const Workbench: React.FC = () => {
   // Local state
   const [gateModalOpen, setGateModalOpen] = useState(false);
   const [clarifyAnswers, setClarifyAnswers] = useState<Record<string, string>>({});
+  const [choices, setChoices] = useState<Record<string, string>>({});
   const [clarifySubmitting, setClarifySubmitting] = useState(false);
   const [retrySubmitting, setRetrySubmitting] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -173,7 +183,10 @@ const Workbench: React.FC = () => {
 
     const answers: ClarifyAnswer[] = openQuestions.map((q) => ({
       question_id: q.id,
-      answer: clarifyAnswers[q.id] || '',
+      answer:
+        q.question_type === 'conflict' && q.conflict_detail
+          ? answerFromChoice(q, choices[q.id] ?? '', clarifyAnswers[q.id] ?? '')
+          : (clarifyAnswers[q.id] ?? ''),
     }));
 
     const unanswered = answers.filter((a) => !a.answer.trim());
@@ -188,12 +201,13 @@ const Workbench: React.FC = () => {
       message.success('澄清已提交，流水线恢复运行');
       setGateModalOpen(false);
       setClarifyAnswers({});
+      setChoices({});
     } catch {
       // 错误 toast 已由全局拦截器处理
     } finally {
       setClarifySubmitting(false);
     }
-  }, [batchId, openQuestions, clarifyAnswers, submitClarification]);
+  }, [batchId, openQuestions, clarifyAnswers, choices, submitClarification]);
 
   // ─── 重试/重新入队 ───
   const handleRetry = useCallback(async () => {
@@ -416,16 +430,16 @@ const Workbench: React.FC = () => {
       <Modal
         title="质量门澄清"
         open={gateModalOpen}
-        onCancel={() => setGateModalOpen(false)}
+        onCancel={() => { setGateModalOpen(false); setChoices({}); }}
         onOk={handleClarifySubmit}
         confirmLoading={clarifySubmitting}
         okText="提交澄清"
         cancelText="取消"
-        width={640}
+        width={720}
         maskClosable={false}
       >
         {openQuestions?.map((q: OpenQuestion) => (
-          <div key={q.id} style={{ marginBottom: 20 }}>
+          <div key={q.id} style={{ marginBottom: 24 }}>
             <div style={{ marginBottom: 4 }}>
               <Tag color={q.priority === 'high' ? 'red' : q.priority === 'medium' ? 'orange' : 'blue'}>
                 {q.priority}
@@ -435,14 +449,59 @@ const Workbench: React.FC = () => {
             {q.context && (
               <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{q.context}</div>
             )}
-            <TextArea
-              rows={2}
-              placeholder="请输入回答"
-              value={clarifyAnswers[q.id] || ''}
-              onChange={(e) =>
-                setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
-              }
-            />
+
+            {/* 冲突类 + 有结构化 detail → 卡片 + 选项 */}
+            {q.question_type === 'conflict' && q.conflict_detail ? (
+              <>
+                <div style={{ fontWeight: 500, marginBottom: 8 }}>{q.conflict_detail.topic}</div>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                  <Card size="small" style={{ flex: 1 }} title={q.conflict_detail.side_a.location || '方 A'}>
+                    <div>{q.conflict_detail.side_a.statement}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>信任等级: {q.conflict_detail.side_a.trust_level}</div>
+                  </Card>
+                  <Card size="small" style={{ flex: 1 }} title={q.conflict_detail.side_b.location || '方 B'}>
+                    <div>{q.conflict_detail.side_b.statement}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>信任等级: {q.conflict_detail.side_b.trust_level}</div>
+                  </Card>
+                </div>
+                <div style={{ fontSize: 12, color: '#1677ff', marginBottom: 8 }}>
+                  {q.conflict_detail.recommendation === 'neither'
+                    ? `💡 AI 倾向：两者均需修正，建议自定`
+                    : `💡 AI 推荐：以 ${q.conflict_detail.recommendation === 'side_a' ? q.conflict_detail.side_a.location : q.conflict_detail.side_b.location} 为准 — ${q.conflict_detail.recommendation_reason}`}
+                </div>
+                <Radio.Group
+                  value={choices[q.id] || undefined}
+                  onChange={(e) => setChoices((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                >
+                  <Radio value="side_a">以 {q.conflict_detail.side_a.location || '方 A'} 为准</Radio>
+                  <Radio value="side_b">以 {q.conflict_detail.side_b.location || '方 B'} 为准</Radio>
+                  <Radio value="custom">都不对，我来定</Radio>
+                </Radio.Group>
+                {choices[q.id] === 'custom' && (
+                  <TextArea
+                    rows={2}
+                    style={{ marginTop: 8 }}
+                    placeholder="请给出明确结论"
+                    value={clarifyAnswers[q.id] || ''}
+                    onChange={(e) =>
+                      setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              /* 盲区类 / 冲突但无 detail（降级）→ 纯文字 + 输入框 */
+              <TextArea
+                rows={2}
+                placeholder={q.question_type === 'conflict'
+                  ? '请给出明确结论，例：以 ≤50 字为准'
+                  : '请输入回答'}
+                value={clarifyAnswers[q.id] || ''}
+                onChange={(e) =>
+                  setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                }
+              />
+            )}
           </div>
         ))}
       </Modal>
