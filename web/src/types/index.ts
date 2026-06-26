@@ -266,11 +266,27 @@ export interface BatchInfo {
   created_at: string;
 }
 
+export interface ConflictSide {
+  location: string;
+  statement: string;
+  trust_level: number;
+}
+
+export interface ConflictDetail {
+  topic: string;
+  side_a: ConflictSide;
+  side_b: ConflictSide;
+  recommendation: 'side_a' | 'side_b' | 'neither';
+  recommendation_reason: string;
+}
+
 export interface OpenQuestion {
   id: string;
   question: string;
   context: string;
   priority: 'high' | 'medium' | 'low';
+  question_type?: 'conflict' | 'blind_spot';
+  conflict_detail?: ConflictDetail | null;
 }
 
 /** 批次详情合并响应（实际 API 返回结构）
