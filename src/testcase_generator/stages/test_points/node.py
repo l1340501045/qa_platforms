@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import List, Literal, cast
+from typing import List
 
 import yaml
 from pydantic import BaseModel, Field
@@ -39,7 +39,10 @@ class GeneratedTestPoint(BaseModel):
     feature_id: str = Field(description="关联功能 ID")
     dimension: str = Field(description="维度名称")
     description: str = Field(description="具体、可验证的测试点描述")
-    priority: str = Field(description="优先级 P0/P1/P2/P3")
+    priority: str = Field(default="P2", description="（已弃用，改由 likelihood×impact 派生）")
+    likelihood: int = Field(default=2, ge=1, le=3, description="易错可能性 1-3")
+    impact: int = Field(default=2, ge=1, le=3, description="业务影响 1-3")
+    risk_rationale: str = Field(default="", description="likelihood/impact 判定一句话理由")
     derived_from: List[str] = Field(default_factory=list, description="来源引用")
 
 
@@ -123,8 +126,24 @@ def _infer_feature_types(feature) -> list[str]:
     return list(types)
 
 
+P0_MIN_RISK = 6
+P1_MIN_RISK = 3
+
+
+def risk_to_priority(likelihood: int, impact: int) -> str:
+    """risk=likelihood×impact 映射 P0/P1/P2（取代维度硬映射，治 P0 泛滥）。"""
+    def _clamp(x: int) -> int:
+        return max(1, min(3, int(x)))
+    risk = _clamp(likelihood) * _clamp(impact)
+    if risk >= P0_MIN_RISK:
+        return "P0"
+    if risk >= P1_MIN_RISK:
+        return "P1"
+    return "P2"
+
+
 def _derive_priority(dim: dict) -> str:
-    """根据维度分类派生默认优先级"""
+    """根据维度分类派生默认优先级（已弃用，保留兼容）"""
     category = dim.get("category", "")
     priority_map = {
         "functional": "P0",
@@ -511,13 +530,7 @@ async def test_points_node(state: PipelineState) -> dict:
             )
             continue
 
-        _PRIORITY_MAP: dict[str, Literal["P0", "P1", "P2", "P3"]] = {
-            "P0": "P0",
-            "P1": "P1",
-            "P2": "P2",
-            "P3": "P3",
-        }
-        priority = _PRIORITY_MAP.get(gtp.priority, "P2")
+        priority = risk_to_priority(gtp.likelihood, gtp.impact)
 
         tp = TestPointSchema(
             id=f"TP-{idx:03d}",
