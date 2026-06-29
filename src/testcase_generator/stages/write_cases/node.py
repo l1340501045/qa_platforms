@@ -200,7 +200,6 @@ CHEAT_SHEET_SYSTEM_PROMPT = """
 
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
-_PRIORITY_MAP: dict[str, str] = {"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3"}
 
 # 单批最多生成的用例条数（控制 LLM 单次输出长度以规避网关 504）。
 # 注意：这是"分几次调用"的切分，不减少测试点/用例总数——各批结果会被聚合。
@@ -505,7 +504,7 @@ async def generate_cases(
                             preconditions=llm_case.preconditions,
                             steps=steps,
                             expected_results=llm_case.expected_results,
-                            priority=_PRIORITY_MAP.get(llm_case.priority, "P2"),
+                            priority=tp.priority if tp else "P2",
                             dimensions=llm_case.dimensions,
                             provenance=provenance,
                             trust_level=trust_level,
