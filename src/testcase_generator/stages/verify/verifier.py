@@ -60,12 +60,21 @@ class PrdSection:
 # ─── LLM 输出 schema ─────────────────────────────────────────────────────────
 
 
+class _ConflictRef(BaseModel):
+    ref_a: str = ""
+    quote_a: str = ""
+    ref_b: str = ""
+    quote_b: str = ""
+
+
 class _CaseVerdict(BaseModel):
     case_id: str = Field(description="回填输入中的 case_id")
     verdict: str = Field(description="grounded / conflict / undefined / ungrounded")
     rationale: str = Field(default="", description="判定理由，一句话")
     prd_evidence: str | None = Field(default=None, description="PRD 原文摘录（直接引用）")
     unsupported_assertions: List[str] = Field(default_factory=list, description="无支撑/冲突的具体断言")
+    cross_section_conflict: bool = Field(default=False, description="PRD 条款间实质互斥")
+    conflicting_refs: List[_ConflictRef] = Field(default_factory=list, description="互斥条款对")
 
 
 class _VerifyLLMOutput(BaseModel):
