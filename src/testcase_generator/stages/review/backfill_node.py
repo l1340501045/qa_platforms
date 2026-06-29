@@ -14,7 +14,10 @@ from src.testcase_generator.schemas.audit_report import AuditReport
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.stages.review.rule_gate import compute_rule_coverage
+from src.testcase_generator.stages.review.rule_gate import (
+    compute_rule_coverage,
+    compute_structural_coverage,
+)
 from src.testcase_generator.stages.write_cases.node import generate_cases
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,14 @@ async def backfill_node(state: PipelineState) -> dict:
     # 假覆盖：先移除其现有（被判无效验证的）用例，稍后用接地生成替换
     kept_cases = [c for c in final_cases if c.test_point_id not in weak_ids] if weak_ids else final_cases
     removed = len(final_cases) - len(kept_cases)
+
+    # 结构化未覆盖点纳入定向回填（与 rule 链解耦，structural_coverage_enabled 开即生效）
+    if settings.structural_coverage_enabled and audit_report and audit_report.uncovered_structural_keys:
+        struct_uncovered_ids = {
+            tp.id for tp in test_points
+            if getattr(tp, "structural_key", None) in set(audit_report.uncovered_structural_keys)
+        }
+        uncovered_ids |= struct_uncovered_ids
 
     target_ids = uncovered_ids | weak_ids
     target_tps = [tp for tp in test_points if tp.id in target_ids]
@@ -109,6 +120,15 @@ async def backfill_node(state: PipelineState) -> dict:
                 "backfill 第 %d 轮：规则覆盖刷新 %d/%d，剩余未覆盖 %d 条",
                 iters, rule_fields["covered_rules"], rule_fields["total_rules"],
                 len(rule_fields["uncovered_rule_codes"]),
+            )
+        # 同步刷新结构化覆盖
+        if settings.structural_coverage_enabled:
+            struct_fields = compute_structural_coverage(test_points, covered_tp_ids)
+            update_fields.update(struct_fields)
+            logger.info(
+                "backfill 第 %d 轮：结构化覆盖刷新 %d/%d，剩余未覆盖 %d 个 key",
+                iters, struct_fields["structural_covered"], struct_fields["structural_total"],
+                len(struct_fields["uncovered_structural_keys"]),
             )
         out["audit_report"] = audit_report.model_copy(update=update_fields)
     return out
