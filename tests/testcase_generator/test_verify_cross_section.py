@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 from src.testcase_generator.services.llm_client import LLMClient
 
 
@@ -30,7 +28,10 @@ def test_case_verification_has_cross_section_fields():
 async def test_verify_cases_attaches_and_summarizes_conflict(monkeypatch):
     from src.testcase_generator.stages.verify import verifier as vmod
     from src.testcase_generator.stages.verify.verifier import (
-        PrdSection, VerifyCase, summarize, verify_cases,
+        PrdSection,
+        VerifyCase,
+        summarize,
+        verify_cases,
     )
 
     class _FakeOut:
@@ -64,7 +65,10 @@ async def test_known_prd_conflicts_recalled_end_to_end(monkeypatch):
     """审查已知的 3 对 PRD 矛盾：开关开 → 指令注入 → verify_cases 召回 cross_section_conflict。"""
     from src.testcase_generator.stages.verify import verifier as vmod
     from src.testcase_generator.stages.verify.verifier import (
-        PrdSection, VerifyCase, summarize, verify_cases,
+        PrdSection,
+        VerifyCase,
+        summarize,
+        verify_cases,
     )
 
     known = [
