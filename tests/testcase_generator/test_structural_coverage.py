@@ -131,6 +131,80 @@ async def test_state_extractor_degrades_on_error(monkeypatch):
     assert sms == []
 
 
+def test_expand_permission_bounded():
+    from src.testcase_generator.stages.test_points.structural.expander import (
+        expand_permission,
+    )
+    from src.testcase_generator.stages.test_points.structural.schemas import (
+        Grant,
+        PermissionMatrix,
+    )
+
+    pm = PermissionMatrix(
+        roles=["管理员", "投手"],
+        resources=["账户"],
+        grants=[
+            Grant(
+                role="投手",
+                resource="账户",
+                operation="改他人",
+                effect="deny",
+                source_quote="q",
+            )
+        ],
+    )
+    tps = expand_permission(pm, start_idx=0)
+    assert all(t.structural_type == "permission" for t in tps)
+    assert len({t.structural_key for t in tps}) == len(tps)
+
+
+def test_expand_state_machine_bounded():
+    from src.testcase_generator.stages.test_points.structural.expander import (
+        expand_state_machine,
+    )
+    from src.testcase_generator.stages.test_points.structural.schemas import (
+        StateMachine,
+        Transition,
+    )
+
+    sm = StateMachine(
+        name="任务",
+        states=["待执行", "执行中", "完成"],
+        transitions=[
+            Transition(src="待执行", dst="执行中", event="开始", source_quote="q"),
+            Transition(src="执行中", dst="完成", event="结束", source_quote="q"),
+        ],
+    )
+    tps = expand_state_machine(sm, start_idx=0)
+    assert sum(1 for t in tps if "->" in (t.structural_key or "")) >= 2
+
+
+def test_expand_permission_feature_mapping():
+    """结构化点应映射到含相关资源名的 feature，而非 STRUCTURAL。"""
+    from src.testcase_generator.stages.test_points.structural.expander import (
+        expand_permission,
+    )
+    from src.testcase_generator.stages.test_points.structural.schemas import (
+        Grant,
+        PermissionMatrix,
+    )
+    from src.testcase_generator.schemas.parsed_context import FeatureItem
+
+    pm = PermissionMatrix(
+        roles=["投手"],
+        resources=["账户"],
+        grants=[
+            Grant(role="投手", resource="账户", operation="改他人", effect="deny", source_quote="q")
+        ],
+    )
+    features = [
+        FeatureItem(id="F-001", name="账户管理", description="管理账户信息"),
+        FeatureItem(id="F-002", name="商品列表", description="展示商品"),
+    ]
+    tps = expand_permission(pm, start_idx=0, features=features)
+    assert all(t.feature_id == "F-001" for t in tps)
+
+
 def test_test_point_has_structural_fields():
     from src.testcase_generator.schemas.test_point import TestPointSchema
 
