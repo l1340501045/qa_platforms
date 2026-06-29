@@ -141,21 +141,6 @@ def risk_to_priority(likelihood: int, impact: int) -> str:
     return "P2"
 
 
-def _derive_priority(dim: dict) -> str:
-    """根据维度分类派生默认优先级（已弃用，保留兼容）"""
-    category = dim.get("category", "")
-    priority_map = {
-        "functional": "P0",
-        "boundary": "P1",
-        "error": "P1",
-        "security": "P0",
-        "performance": "P2",
-        "usability": "P2",
-        "data": "P1",
-        "state": "P1",
-        "integration": "P2",
-    }
-    return priority_map.get(category, "P2")
 
 
 # ─── 质量属性维度信号门控（根因3：维度机械全展开）────────────────────────────────
@@ -477,7 +462,6 @@ async def test_points_node(state: PipelineState) -> dict:
                     "description": dim.get("description", ""),
                     "category": dim.get("category", ""),
                     "check_points": dim.get("check_points", []),
-                    "default_priority": _derive_priority(dim),
                 }
             )
 
