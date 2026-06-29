@@ -66,3 +66,9 @@ aliases:
   健壮性: recovery
   部分成功: recovery
   文件内重复: invalid_input
+  # 离线 normalize 验证（2026-06-29）发现的漏网英文同义/变体补充
+  security: access_control
+  empty_state: functional_completeness
+  abnormal_reverse: invalid_input
+  逆向验证: reversibility
+  幂等与重试副作用: idempotency
