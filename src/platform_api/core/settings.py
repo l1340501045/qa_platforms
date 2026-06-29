@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     # 容错解析」保障。保留此开关：将来换成真正支持 json_object 的网关时置 True 即可启用。
     llm_json_mode: bool = False
 
+    # verify 关卡专用模型：留空则回退 llm_primary_model（行为不变）。
+    # 设为非 Claude 族（如 deepseek-v4-pro-office）以消除 generator/judge 同族的 self-enhancement bias。
+    llm_verify_model: str = ""
+
     # LLM 视觉模型（图解析用，OpenAI 兼容视觉接口；留空则传 images 时报错）
     llm_vision_model: str = ""
 
@@ -97,6 +101,11 @@ class Settings(BaseSettings):
     safe_dedup_enabled: bool = False
     # rule_extract 阶段抽规则的并发（输出短，可略高于生成阶段的 llm_concurrency）
     rule_extract_concurrency: int = 4
+
+    # ── verify 跨条款矛盾扫描（cherry-pick）灰度开关 ──────────────────────────
+    # 开：verify 在判 verdict 之外，检查 PRD 条款间是否实质互斥（PRD 内部矛盾），
+    # 标 cross_section_conflict + 两处出处，汇成 PRD 矛盾清单。关：行为与改造前一致。
+    verify_cross_section_conflict_enabled: bool = True
 
     # ── Hybrid 跨功能点规格检索（关键词 + 向量 + RRF）─────────────────────────────
     # 关闭时 CrossFeatureIndex 行为与改造前完全一致（纯关键词，不调 embedding，零额外开销）。

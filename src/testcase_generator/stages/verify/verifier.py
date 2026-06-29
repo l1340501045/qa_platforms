@@ -147,6 +147,7 @@ async def verify_cases(
                     user_content=user_content,
                     output_schema=_VerifyLLMOutput,
                     temperature=0.1,
+                    model=settings.llm_verify_model or None,
                 )
             except Exception as e:  # noqa: BLE001 — 单批失败隔离
                 logger.error("verify 失败 (feature=%s, n=%d): %s", feature_id, len(batch), e)
