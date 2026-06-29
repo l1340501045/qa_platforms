@@ -19,6 +19,8 @@ from src.platform_api.models.testcase import TestCase  # noqa: E402
 
 
 async def main() -> None:
+    if len(sys.argv) < 2:
+        sys.exit("用法: uv run python scripts/metadata_regression.py <batch_id>")
     batch_id = UUID(sys.argv[1])
     async with get_session_factory()() as s:
         rows = (await s.execute(select(TestCase).where(TestCase.batch_id == batch_id))).scalars().all()

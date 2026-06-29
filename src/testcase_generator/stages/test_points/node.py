@@ -40,8 +40,8 @@ class GeneratedTestPoint(BaseModel):
     dimension: str = Field(description="维度名称")
     description: str = Field(description="具体、可验证的测试点描述")
     priority: str = Field(default="P2", description="（已弃用，改由 likelihood×impact 派生）")
-    likelihood: int = Field(default=2, ge=1, le=3, description="易错可能性 1-3")
-    impact: int = Field(default=2, ge=1, le=3, description="业务影响 1-3")
+    likelihood: int = Field(default=2, description="易错可能性 1-3（越界自动夹紧）")
+    impact: int = Field(default=2, description="业务影响 1-3（越界自动夹紧）")
     risk_rationale: str = Field(default="", description="likelihood/impact 判定一句话理由")
     derived_from: List[str] = Field(default_factory=list, description="来源引用")
 

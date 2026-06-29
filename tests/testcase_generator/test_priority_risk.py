@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.testcase_generator.stages.test_points.node import risk_to_priority
+from src.testcase_generator.stages.test_points.node import GeneratedTestPoint, risk_to_priority
 
 
 @pytest.mark.parametrize("likelihood,impact,expected", [
@@ -15,5 +15,24 @@ def test_risk_to_priority(likelihood, impact, expected):
     assert risk_to_priority(likelihood, impact) == expected
 
 
-def test_risk_to_priority_clamps_out_of_range():
-    assert risk_to_priority(0, 9) in {"P0", "P1", "P2"}
+@pytest.mark.parametrize("likelihood,impact,expected", [
+    (0, 9, "P1"),   # clamp(0)=1, clamp(9)=3 → risk=3
+    (5, 5, "P0"),   # clamp(5)=3, clamp(5)=3 → risk=9
+    (-1, 2, "P2"),  # clamp(-1)=1 → risk=2
+])
+def test_risk_to_priority_clamps_out_of_range(likelihood, impact, expected):
+    assert risk_to_priority(likelihood, impact) == expected
+
+
+def test_generated_test_point_accepts_out_of_range():
+    """LLM 越界值不应触发 ValidationError，由 _clamp 兜底。"""
+    gtp = GeneratedTestPoint(
+        feature_id="F-001",
+        dimension="boundary_value",
+        description="测试越界",
+        likelihood=5,
+        impact=0,
+    )
+    assert gtp.likelihood == 5
+    assert gtp.impact == 0
+    assert risk_to_priority(gtp.likelihood, gtp.impact) == "P1"  # clamp(5)=3, clamp(0)=1 → 3

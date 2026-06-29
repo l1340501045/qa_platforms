@@ -17,3 +17,17 @@ def test_unknown_goes_other_and_dedup():
     assert out[0] == "functional_correctness"
     assert "other" in out
     assert out.count("functional_correctness") == 1  # 去重保序
+
+
+def test_empty_list():
+    assert normalize_dimensions([]) == []
+
+
+def test_all_unknown():
+    assert normalize_dimensions(["火星维度", "木星维度"]) == ["other"]
+
+
+def test_case_sensitive_not_matched():
+    """LLM 偶发大写不命中 enum → other。"""
+    out = normalize_dimensions(["Functional_Correctness"])
+    assert out == ["other"]
