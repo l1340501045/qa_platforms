@@ -580,6 +580,47 @@ async def test_points_node(state: PipelineState) -> dict:
             "test-points: 追加 %d 个规则锚点（规则台账 %d 条）", len(anchors), len(rules)
         )
 
+    # 8. 结构化覆盖：权限矩阵 + 状态机有界展开（开关控制，关时零影响）。
+    if settings.structural_coverage_enabled:
+        from src.testcase_generator.stages.test_points.structural.expander import (
+            expand_permission,
+            expand_state_machine,
+        )
+        from src.testcase_generator.stages.test_points.structural.permission_extractor import (
+            extract_permission_matrix,
+        )
+        from src.testcase_generator.stages.test_points.structural.state_extractor import (
+            extract_state_machines,
+        )
+
+        prd_text = "\n".join(
+            f"{sec.heading}\n{sec.content}"
+            for src_ in parsed_context.sources
+            for sec in src_.sections
+        )
+        pm = await extract_permission_matrix(prd_text)
+        sms = await extract_state_machines(prd_text)
+        struct_tps = expand_permission(
+            pm, start_idx=len(test_points), features=parsed_context.features
+        )
+        for sm in sms:
+            struct_tps.extend(
+                expand_state_machine(
+                    sm,
+                    start_idx=len(test_points) + len(struct_tps),
+                    features=parsed_context.features,
+                )
+            )
+        test_points.extend(struct_tps)
+        for idx, tp in enumerate(test_points, start=1):
+            tp.id = f"TP-{idx:03d}"
+        logger.info(
+            "test-points: 追加 %d 个结构化覆盖点（权限 %d 格 / 状态机 %d）",
+            len(struct_tps),
+            len(pm.grants),
+            len(sms),
+        )
+
     return {
         "test_points": test_points,
         "current_stage": "test_points",
