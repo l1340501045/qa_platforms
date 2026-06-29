@@ -16,7 +16,12 @@ from typing import List
 from pydantic import BaseModel, Field
 
 from src.platform_api.core.settings import settings
-from src.testcase_generator.schemas.test_case import Bucket, CaseVerification, Verdict
+from src.testcase_generator.schemas.test_case import (
+    Bucket,
+    CaseVerification,
+    CrossSectionConflictRef,
+    Verdict,
+)
 from src.testcase_generator.services.llm_client import get_llm_client
 from src.testcase_generator.stages.verify.rubric import (
     CROSS_SECTION_CONFLICT_INSTRUCTION,
@@ -186,6 +191,11 @@ async def verify_cases(
                 rationale=v.rationale,
                 prd_evidence=v.prd_evidence,
                 unsupported_assertions=v.unsupported_assertions,
+                cross_section_conflict=v.cross_section_conflict,
+                conflicting_refs=[
+                    CrossSectionConflictRef(ref_a=r.ref_a, quote_a=r.quote_a, ref_b=r.ref_b, quote_b=r.quote_b)
+                    for r in v.conflicting_refs
+                ],
             )
         return batch_result
 
@@ -202,14 +212,25 @@ async def verify_cases(
 
 
 def summarize(verifications: dict[str, CaseVerification]) -> dict:
-    """聚合核验结果分布，便于报表/校验。"""
+    """聚合核验结果分布 + PRD 矛盾清单。"""
     by_verdict: dict[str, int] = defaultdict(int)
     by_bucket: dict[str, int] = defaultdict(int)
+    conflict_pairs: dict[tuple, dict] = {}
     for v in verifications.values():
         by_verdict[v.verdict] += 1
         by_bucket[v.bucket] += 1
+        if v.cross_section_conflict:
+            for r in v.conflicting_refs:
+                key = tuple(sorted([(r.ref_a, r.quote_a), (r.ref_b, r.quote_b)]))
+                slot = conflict_pairs.setdefault(key, {
+                    "ref_a": r.ref_a, "quote_a": r.quote_a,
+                    "ref_b": r.ref_b, "quote_b": r.quote_b, "case_count": 0,
+                })
+                slot["case_count"] += 1
     return {
         "total": len(verifications),
         "by_verdict": dict(by_verdict),
         "by_bucket": dict(by_bucket),
+        "cross_section_conflicts": sum(1 for v in verifications.values() if v.cross_section_conflict),
+        "prd_conflict_list": list(conflict_pairs.values()),
     }
