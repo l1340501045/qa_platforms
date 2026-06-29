@@ -20,6 +20,36 @@ DEFAULT_RULE_COVERAGE = {
 }
 
 
+# structural 覆盖 gate 关或无结构化点时的默认值
+DEFAULT_STRUCTURAL_COVERAGE = {
+    "structural_total": 0,
+    "structural_covered": 0,
+    "structural_coverage": 1.0,
+    "uncovered_structural_keys": [],
+}
+
+
+def compute_structural_coverage(
+    test_points: list[TestPointSchema],
+    covered_tp_ids: Iterable[str],
+) -> dict:
+    """按 structural_key 计算结构化覆盖。"""
+    covered_set = set(covered_tp_ids)
+    struct = [tp for tp in test_points if getattr(tp, "structural_type", None)]
+    total = len(struct)
+    covered_keys = {tp.structural_key for tp in struct if tp.id in covered_set}
+    uncovered = sorted(
+        {tp.structural_key for tp in struct if tp.id not in covered_set}
+        - {None}
+    )
+    return {
+        "structural_total": total,
+        "structural_covered": len(covered_keys - {None}),
+        "structural_coverage": (len(covered_keys - {None}) / total) if total else 1.0,
+        "uncovered_structural_keys": uncovered,
+    }
+
+
 def compute_rule_coverage(
     rules: list[dict],
     test_points: list[TestPointSchema],

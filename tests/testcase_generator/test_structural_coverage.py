@@ -205,6 +205,44 @@ def test_expand_permission_feature_mapping():
     assert all(t.feature_id == "F-001" for t in tps)
 
 
+def test_compute_structural_coverage():
+    from src.testcase_generator.schemas.test_point import TestPointSchema
+    from src.testcase_generator.stages.review.rule_gate import (
+        compute_structural_coverage,
+    )
+
+    tps = [
+        TestPointSchema(
+            id="TP-001",
+            feature_id="S",
+            dimension="access_control",
+            description="x",
+            priority="P0",
+            structural_type="permission",
+            structural_key="perm:投手:账户:改他人",
+        )
+    ]
+    cov = compute_structural_coverage(tps, covered_tp_ids={"TP-001"})
+    assert cov["structural_total"] == 1 and cov["structural_covered"] == 1
+    cov2 = compute_structural_coverage(tps, covered_tp_ids=set())
+    assert cov2["structural_covered"] == 0
+    assert "perm:投手:账户:改他人" in cov2["uncovered_structural_keys"]
+
+
+def test_audit_report_has_structural_fields():
+    from src.testcase_generator.schemas.audit_report import AuditReport
+
+    ar = AuditReport(
+        total_test_points=1,
+        per_test_point_covered=1,
+        dimension_cell_total=1,
+        dimension_cell_covered=1,
+        dimension_cell_coverage=1.0,
+    )
+    assert ar.structural_total == 0
+    assert ar.structural_coverage == 1.0
+
+
 def test_test_point_has_structural_fields():
     from src.testcase_generator.schemas.test_point import TestPointSchema
 

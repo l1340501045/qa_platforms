@@ -48,6 +48,15 @@ class AuditReport(BaseModel):
         description="未覆盖规则码列表（锚点测试点无用例），交 backfill 定向补齐",
     )
 
+    # 结构化覆盖（structural_coverage_enabled 开时填充；关时为默认 0/空，行为同历史）。
+    structural_total: int = Field(default=0, description="结构化测试点总数（gate 关时为 0）")
+    structural_covered: int = Field(default=0, description="有 >=1 用例覆盖的结构化点数")
+    structural_coverage: float = Field(default=1.0, ge=0.0, le=1.0, description="结构化覆盖率")
+    uncovered_structural_keys: list[str] = Field(
+        default_factory=list,
+        description="未覆盖结构化点 key 列表，交 backfill 定向补齐",
+    )
+
     # 兼容旧字段名（逐步废弃）
     @property
     def covered_test_points(self) -> int:

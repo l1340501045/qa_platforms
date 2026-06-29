@@ -19,7 +19,9 @@ from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.schemas.audit_report import AuditReport, CoverageGap
 from src.testcase_generator.stages.review.rule_gate import (
     DEFAULT_RULE_COVERAGE,
+    DEFAULT_STRUCTURAL_COVERAGE,
     compute_rule_coverage,
+    compute_structural_coverage,
 )
 from src.testcase_generator.services.llm_client import get_llm_client
 
@@ -271,6 +273,17 @@ async def review_node(state: PipelineState) -> dict:
             rule_cov_fields["rule_coverage"] * 100, len(rule_cov_fields["uncovered_rule_codes"]),
         )
 
+    # 7d. 结构化覆盖闸（开关控制）：结构化点「被覆盖」= 其 structural_key 对应测试点有用例。
+    struct_cov_fields = dict(DEFAULT_STRUCTURAL_COVERAGE)
+    if settings.structural_coverage_enabled:
+        struct_cov_fields = compute_structural_coverage(test_points, covered_tp_ids)
+        logger.info(
+            "review_node: 结构化覆盖 %d/%d (%.0f%%)，未覆盖 %d 个 key",
+            struct_cov_fields["structural_covered"], struct_cov_fields["structural_total"],
+            struct_cov_fields["structural_coverage"] * 100,
+            len(struct_cov_fields["uncovered_structural_keys"]),
+        )
+
     audit_report = AuditReport(
         total_test_points=len(all_tp_ids),
         per_test_point_covered=len(covered_tp_ids & all_tp_ids),
@@ -282,6 +295,7 @@ async def review_node(state: PipelineState) -> dict:
         gaps=gaps,
         additions=additions,
         **rule_cov_fields,
+        **struct_cov_fields,
     )
     if weak_tp_ids:
         logger.info("review_node: 标记 %d 个假覆盖测试点，交 backfill 接地重做", len(weak_tp_ids))
