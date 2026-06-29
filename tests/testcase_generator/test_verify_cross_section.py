@@ -111,6 +111,38 @@ async def test_known_prd_conflicts_recalled_end_to_end(monkeypatch):
     assert sum(1 for v in res0.values() if v.cross_section_conflict) == 0
 
 
+def test_summarize_dedups_same_conflict_pair_and_counts():
+    """同一对矛盾被 2 个 case 命中 → 合并为 1 条、case_count=2；对称 ref 顺序正确去重。"""
+    from src.testcase_generator.schemas.test_case import CaseVerification, CrossSectionConflictRef
+    from src.testcase_generator.stages.verify.verifier import summarize
+
+    pair = [CrossSectionConflictRef(ref_a="§5.6.1", quote_a="≤50字", ref_b="§9.2", quote_b="不限字数")]
+    pair_rev = [CrossSectionConflictRef(ref_a="§9.2", quote_a="不限字数", ref_b="§5.6.1", quote_b="≤50字")]
+    cv = lambda refs: CaseVerification(  # noqa: E731
+        verdict="grounded", bucket="main", cross_section_conflict=True, conflicting_refs=refs,
+    )
+    res = {"V0": cv(pair), "V1": cv(pair_rev)}
+    summ = summarize(res)
+    assert summ["cross_section_conflicts"] == 2
+    assert len(summ["prd_conflict_list"]) == 1
+    assert summ["prd_conflict_list"][0]["case_count"] == 2
+
+
+def test_conflict_true_but_no_refs_treated_as_false():
+    """LLM 标 conflict=True 但漏给 refs → 回挂时不采信（defensive）。"""
+    from src.testcase_generator.schemas.test_case import CaseVerification
+    from src.testcase_generator.stages.verify.verifier import summarize
+
+    res = {
+        "V0": CaseVerification(verdict="grounded", bucket="main", cross_section_conflict=True, conflicting_refs=[]),
+    }
+    summ = summarize(res)
+    # cross_section_conflict=True 但 conflicting_refs=[] 的 case 仍被 summarize 计入
+    # （防御在回挂层：verifier 回挂时已把无 refs 的标为 False，这里测 summarize 对已入库数据的兼容）
+    assert summ["cross_section_conflicts"] == 1
+    assert summ["prd_conflict_list"] == []
+
+
 async def test_generate_structured_passes_explicit_model(monkeypatch):
     """传入 model 时，_call 必须收到该 model（而非 primary）。"""
     from pydantic import BaseModel

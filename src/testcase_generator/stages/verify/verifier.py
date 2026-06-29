@@ -185,17 +185,19 @@ async def verify_cases(
                 )
                 continue
             verdict = _normalize_verdict(v.verdict)
+            _refs = [
+                CrossSectionConflictRef(ref_a=r.ref_a, quote_a=r.quote_a, ref_b=r.ref_b, quote_b=r.quote_b)
+                for r in v.conflicting_refs
+            ]
+            _conflict = bool(v.cross_section_conflict and _refs)
             batch_result[c.case_id] = CaseVerification(
                 verdict=verdict,
                 bucket=_VERDICT_BUCKET.get(verdict, "needs_spec"),
                 rationale=v.rationale,
                 prd_evidence=v.prd_evidence,
                 unsupported_assertions=v.unsupported_assertions,
-                cross_section_conflict=v.cross_section_conflict,
-                conflicting_refs=[
-                    CrossSectionConflictRef(ref_a=r.ref_a, quote_a=r.quote_a, ref_b=r.ref_b, quote_b=r.quote_b)
-                    for r in v.conflicting_refs
-                ],
+                cross_section_conflict=_conflict,
+                conflicting_refs=_refs,
             )
         return batch_result
 
@@ -216,12 +218,18 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
     by_verdict: dict[str, int] = defaultdict(int)
     by_bucket: dict[str, int] = defaultdict(int)
     conflict_pairs: dict[tuple, dict] = {}
-    for v in verifications.values():
+    n_conflict_cases = 0
+    for case_id, v in verifications.items():
         by_verdict[v.verdict] += 1
         by_bucket[v.bucket] += 1
         if v.cross_section_conflict:
+            n_conflict_cases += 1
+            seen_keys_this_case: set[tuple] = set()
             for r in v.conflicting_refs:
                 key = tuple(sorted([(r.ref_a, r.quote_a), (r.ref_b, r.quote_b)]))
+                if key in seen_keys_this_case:
+                    continue
+                seen_keys_this_case.add(key)
                 slot = conflict_pairs.setdefault(key, {
                     "ref_a": r.ref_a, "quote_a": r.quote_a,
                     "ref_b": r.ref_b, "quote_b": r.quote_b, "case_count": 0,
@@ -231,6 +239,6 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
         "total": len(verifications),
         "by_verdict": dict(by_verdict),
         "by_bucket": dict(by_bucket),
-        "cross_section_conflicts": sum(1 for v in verifications.values() if v.cross_section_conflict),
+        "cross_section_conflicts": n_conflict_cases,
         "prd_conflict_list": list(conflict_pairs.values()),
     }
