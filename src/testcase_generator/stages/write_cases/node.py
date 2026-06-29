@@ -41,6 +41,9 @@ from src.testcase_generator.stages.write_cases.cheat_sheet_inject import (
 from src.testcase_generator.stages.write_cases.confidence_scorer import (
     ConfidenceScorer,
 )
+from src.testcase_generator.stages.write_cases.dimension_normalizer import (
+    normalize_dimensions,
+)
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
     build_section_index,
@@ -98,13 +101,18 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 步骤中的输入数据要用具体值举例，不能用占位符
 
 【覆盖维度全面性（资深与初级的分水岭——每个 spec 测试点都要系统性过一遍以下清单，凡 PRD 有明文支撑的维度都要成条覆盖，不要只写正向 happy path）】
-- 正常流：典型有效输入下的主流程。
-- 边界值：上限/下限、刚好等于阈值/超出 1、空、0、1、最大长度/超长、最大条数/超量、列表恰好等于每页条数。
-- 异常与逆向：非法/超长/特殊字符输入、必填缺失、格式错误、重复提交、网络失败/超时、部分失败与回滚、操作取消。
-- 状态机：非法/逆向状态转移（不只正向），终态后再操作，并发态。
-- 并发与一致性：多端同时操作、A 改动后 B 是否同步、聚合/计数刷新、缓存/同步延迟。
-- 权限与可见性：水平越权/垂直越权、未登录、Token 过期、数据隔离边界（仅在 PRD 有定义时）。
-- 幂等与重试副作用（仅在 PRD 有定义时）。
+- functional_correctness（正常流/正确性）：典型有效输入下的主流程。
+- boundary_value（边界值）：上限/下限、刚好等于阈值/超出 1、空、0、1、最大长度/超长、最大条数/超量。
+- invalid_input（异常/非法输入）：非法/超长/特殊字符输入、必填缺失、格式错误、重复提交、网络失败/超时。
+- state_transition（状态机）：非法/逆向状态转移（不只正向），终态后再操作，并发态。
+- concurrency_state（并发一致性）：多端同时操作、A 改动后 B 是否同步、聚合/计数刷新。
+- access_control（权限可见性）：水平越权/垂直越权、未登录、Token 过期、数据隔离边界（仅在 PRD 有定义时）。
+- idempotency（幂等重试）：重复提交、重试副作用（仅在 PRD 有定义时）。
+- ui_interaction（UI交互）、api_contract（接口契约）、cross_system（跨模块联动）、recovery（健壮性/恢复）、
+  data_integrity（数据完整性）、functional_completeness（完整性）…（完整以系统 dimensions.yaml 为准）
+
+【dimensions 字段取值约束】dimensions 只能从上述英文 enum name 中选填（可多选）。严禁自创中文标签或上述之外的词；不确定就选 functional_correctness。
+
 说明：以上维度只在 requirement_context 对该行为有明文支撑时才写确定断言；无支撑的维度按下面"需求待确认"规则处理，不要为凑维度编造。
 
 【逆向与联动必出项（资深短板高发区——只要 PRD 对该交互有定义，以下用例就必须成条出现，不能只写正向）】
@@ -505,7 +513,7 @@ async def generate_cases(
                             steps=steps,
                             expected_results=llm_case.expected_results,
                             priority=tp.priority if tp else "P2",
-                            dimensions=llm_case.dimensions,
+                            dimensions=normalize_dimensions(llm_case.dimensions),
                             provenance=provenance,
                             trust_level=trust_level,
                             confidence_note=confidence_note,
