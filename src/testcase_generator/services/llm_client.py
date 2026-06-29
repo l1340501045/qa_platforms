@@ -108,6 +108,59 @@ def _loads_tolerant(content: str) -> dict:
         raise
 
 
+def _salvage_json(text: str) -> dict | None:
+    """抢救被截断/损坏的 JSON：单遍扫描，截到最后一个「完整元素边界」再补齐闭合括号。
+
+    应对网关偶发吐出中途截断的 JSON（典型报错 `Expecting ',' delimiter`）。
+    安全边界 = 容器闭合（`}`/`]`）之后，或「数组内」的逗号之前——此处之前必是若干完整元素，
+    截断到此并补上未闭合的括号即得最长合法前缀。仅作重试耗尽后的兜底，可能丢失尾部不完整元素。
+    无法抢救返回 None。
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    s = text[start:]
+    stack: list[str] = []
+    in_str = esc = False
+    best_cut = -1
+    best_close = ""
+    for i, ch in enumerate(s):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if stack:
+                stack.pop()
+            best_cut, best_close = i + 1, "".join(reversed(stack))
+        elif ch == "," and stack and stack[-1] == "]":
+            # 仅「数组内」的逗号是安全截断点（其前是完整元素）；对象内字段逗号会救出残缺对象，不取
+            best_cut, best_close = i, "".join(reversed(stack))
+    if best_cut <= 0:
+        return None
+    try:
+        result = json.loads(s[:best_cut] + best_close)
+        return result if isinstance(result, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+class _GatewayJSONError(Exception):
+    """网关返回的 JSON 解析失败（携带原始内容，供重试耗尽后抢救最长合法前缀）。"""
+
+    def __init__(self, content: str) -> None:
+        super().__init__("网关返回 JSON 解析失败")
+        self.content = content
+
+
 class LLMClient:
     """统一 LLM 调用封装
 
@@ -137,6 +190,7 @@ class LLMClient:
         output_schema: Type[T],
         temperature: float = 0.3,
         images: list[bytes] | None = None,
+        model: str | None = None,
     ) -> T:
         """调用主模型并强制输出为指定 schema；失败重试主模型，不切备用模型。
 
@@ -145,7 +199,7 @@ class LLMClient:
         if images and not settings.llm_vision_model:
             raise ValueError("图解析需配置 LLM_VISION_MODEL 环境变量")
 
-        model = settings.llm_vision_model if images else self.primary_model
+        model = model or (settings.llm_vision_model if images else self.primary_model)
         schema_name = output_schema.__name__
         attempt_count = 0
         start_time = time.monotonic()
@@ -176,9 +230,49 @@ class LLMClient:
                 )
             )
             logger.info(
-                f"LLM 调用成功: schema={schema_name} model={model} attempts={attempt_count} duration={duration_ms / 1000:.1f}s"
+                "LLM 调用成功: schema=%s model=%s attempts=%d duration=%.1fs",
+                schema_name,
+                model,
+                attempt_count,
+                duration_ms / 1000,
             )
             return result
+        except _GatewayJSONError as e:
+            # 重试耗尽仍是损坏 JSON → 抢救最长合法前缀（可能丢尾部元素），避免整批丢失
+            salvaged = _salvage_json(e.content)
+            if salvaged is not None:
+                try:
+                    result = output_schema.model_validate(salvaged)
+                except Exception:  # noqa: BLE001 — 抢救结果不满足 schema，按失败处理
+                    result = None
+                if result is not None:
+                    duration_ms = (time.monotonic() - start_time) * 1000
+                    llm_stats.record(
+                        CallStats(
+                            schema_name=schema_name,
+                            attempts=attempt_count,
+                            success=True,
+                            duration_ms=duration_ms,
+                            error="salvaged_truncated_json",
+                        )
+                    )
+                    logger.warning(
+                        "JSON 多次损坏，已抢救最长合法前缀（可能丢尾部元素）: schema=%s attempts=%d",
+                        schema_name,
+                        attempt_count,
+                    )
+                    return result
+            duration_ms = (time.monotonic() - start_time) * 1000
+            llm_stats.record(
+                CallStats(
+                    schema_name=schema_name,
+                    attempts=attempt_count,
+                    success=False,
+                    duration_ms=duration_ms,
+                    error=str(e),
+                )
+            )
+            raise
         except Exception as e:
             duration_ms = (time.monotonic() - start_time) * 1000
             llm_stats.record(
@@ -268,7 +362,7 @@ class LLMClient:
             tool_calls = response.choices[0].message.tool_calls
             if tool_calls and tool_calls[0].function.arguments:
                 content = tool_calls[0].function.arguments
-                logger.info(f"从 tool_calls 提取内容 (finish_reason=tool_calls, content was empty)")
+                logger.info("从 tool_calls 提取内容 (finish_reason=tool_calls, content was empty)")
 
         logger.debug(f"raw_finish={finish_reason} usage={usage} content_head={content[:500]!r}")
 
@@ -278,7 +372,11 @@ class LLMClient:
         elif "```" in content:
             content = content.split("```")[1].split("```")[0]
 
-        parsed = _loads_tolerant(content)
+        try:
+            parsed = _loads_tolerant(content)
+        except json.JSONDecodeError as e:
+            # 网关偶发返回截断/损坏 JSON：携原始内容上抛，重试耗尽后由 generate_structured 抢救
+            raise _GatewayJSONError(content) from e
         return output_schema.model_validate(parsed)
 
 
