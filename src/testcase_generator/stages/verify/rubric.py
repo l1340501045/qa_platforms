@@ -33,3 +33,14 @@ VERIFY_SYSTEM_PROMPT = """角色：你是资深 QA 用例审计员。任务：�
 5. unsupported_assertions 列出该用例中无支撑或与 PRD 冲突的具体断言原文（来自用例的 expected_result / title）。
 
 【输出】严格按 JSON Schema 输出，对输入里的每一条用例给出一条 verdict（case_id 必须回填输入中的 case_id）。"""
+
+CROSS_SECTION_CONFLICT_INSTRUCTION = """
+
+【附加任务 · 跨条款矛盾扫描（PRD 内部自相矛盾）】
+除上面的 verdict 外，对每条用例额外检查：所给 prd_sections 中，是否存在两条 PRD 条款【针对同一字段/同一行为】给出【不可同时成立】的规定，且本用例断言命中其一。
+- 命中则置 cross_section_conflict=true，并在 conflicting_refs 给出互斥的两处：{ref_a,quote_a,ref_b,quote_b}，quote 必须是 PRD 原文直引。
+- 严格控误报：仅「实质互斥」才报。下列情况【不算】矛盾，cross_section_conflict 保持 false：
+  · 一处「未提及」、另一处有规定（缺失≠矛盾）；
+  · 两处只是详略不同、范围包含、措辞差异；
+  · 分属不同字段/不同页面/不同投放方式。
+- 与 verdict 解耦：发现矛盾【不改变】verdict 取值（矛盾是 PRD 的问题，不是用例错）。无矛盾时 cross_section_conflict=false、conflicting_refs=[]。"""

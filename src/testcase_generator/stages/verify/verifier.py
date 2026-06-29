@@ -18,7 +18,10 @@ from pydantic import BaseModel, Field
 from src.platform_api.core.settings import settings
 from src.testcase_generator.schemas.test_case import Bucket, CaseVerification, Verdict
 from src.testcase_generator.services.llm_client import get_llm_client
-from src.testcase_generator.stages.verify.rubric import VERIFY_SYSTEM_PROMPT
+from src.testcase_generator.stages.verify.rubric import (
+    CROSS_SECTION_CONFLICT_INSTRUCTION,
+    VERIFY_SYSTEM_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,10 @@ async def verify_cases(
     for c in cases:
         by_feature[c.feature_id].append(c)
 
+    system_prompt = VERIFY_SYSTEM_PROMPT
+    if settings.verify_cross_section_conflict_enabled:
+        system_prompt += CROSS_SECTION_CONFLICT_INSTRUCTION
+
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
     results: dict[str, CaseVerification] = {}
 
@@ -152,7 +159,7 @@ async def verify_cases(
         async with semaphore:
             try:
                 out = await get_llm_client().generate_structured(
-                    system_prompt=VERIFY_SYSTEM_PROMPT,
+                    system_prompt=system_prompt,
                     user_content=user_content,
                     output_schema=_VerifyLLMOutput,
                     temperature=0.1,
