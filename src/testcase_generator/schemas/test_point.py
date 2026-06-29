@@ -20,3 +20,5 @@ class TestPointSchema(BaseModel):
     # 规则锚点：规则驱动测试点携带其规则码（如 "R-001"，运行期为字符串，落库时解析为 rules.id）；
     # 维度增强测试点为 None。用于规则级覆盖闸与规则锚定安全去重。
     rule_id: str | None = Field(default=None, description="关联规则码（规则驱动测试点），维度增强测试点为 None")
+    structural_type: str | None = Field(default=None, description="结构化覆盖类型 permission/state_machine；普通点为 None")
+    structural_key: str | None = Field(default=None, description="结构化点唯一标识（格子/转移），用于覆盖闸")

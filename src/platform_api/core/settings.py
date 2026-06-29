@@ -102,6 +102,10 @@ class Settings(BaseSettings):
     # rule_extract 阶段抽规则的并发（输出短，可略高于生成阶段的 llm_concurrency）
     rule_extract_concurrency: int = 4
 
+    # ── 结构化覆盖（落点⑫·线B）：权限矩阵 + 状态机有界展开 + 覆盖闸 ──────────
+    structural_coverage_enabled: bool = False
+    structural_extract_concurrency: int = 2
+
     # ── verify 跨条款矛盾扫描（cherry-pick）灰度开关 ──────────────────────────
     # 开：verify 在判 verdict 之外，检查 PRD 条款间是否实质互斥（PRD 内部矛盾），
     # 标 cross_section_conflict + 两处出处，汇成 PRD 矛盾清单。关：行为与改造前一致。
