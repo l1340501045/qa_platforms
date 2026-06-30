@@ -93,6 +93,31 @@ def test_snapshot_unresolved():
 # ── Chunk 2 Task 3: quote_cache 同源一致性（TDD——先写失败，实现后变绿）──────────
 
 
+def test_cache_hit_skips_recompute(monkeypatch):
+    """同 quote 两条 case 共享 cache → _resolve_quote 仅被调用 1 次（命中分支不重算）。"""
+    import src.testcase_generator.stages.write_cases.provenance_tagger as pt
+
+    calls = {"n": 0}
+    orig = pt._resolve_quote
+
+    def _counting(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(pt, "_resolve_quote", _counting)
+
+    ctx = _Ctx([_Src(1, [_Sec("PRD §1 审核", "责编可通过或驳回，驳回须填写原因。")])])
+    quote = "驳回须填写原因"
+    case1 = _Case([_Step(quote, "PRD §1 审核")])
+    case2 = _Case([_Step(quote, "PRD §9.9 不存在")])
+
+    cache: dict = {}
+    derive_grounded_provenance(case1, ctx, quote_cache=cache)
+    derive_grounded_provenance(case2, ctx, quote_cache=cache)
+
+    assert calls["n"] == 1
+
+
 def test_cache_same_quote_different_ref_consistent():
     """同一 quote 配不同 source_ref，传共享 quote_cache → 两条结果一致 + 只算一次。"""
     ctx = _Ctx([_Src(1, [_Sec("PRD §1 审核", "责编可通过或驳回，驳回须填写原因。")])])
