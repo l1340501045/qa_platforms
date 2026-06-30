@@ -44,6 +44,9 @@ from src.testcase_generator.stages.write_cases.confidence_scorer import (
 from src.testcase_generator.stages.write_cases.dimension_normalizer import (
     normalize_dimensions,
 )
+from src.testcase_generator.stages.write_cases.length_check import (
+    check_step_lengths,
+)
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
     build_section_index,
@@ -492,10 +495,15 @@ async def generate_cases(
                         provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
 
-                    from src.testcase_generator.stages.write_cases.length_check import check_step_lengths
-                    _len_warn = check_step_lengths([{"action": s.action, "input_data": s.input_data, "expected_result": s.expected_result} for s in llm_case.steps])
-                    if _len_warn:
-                        confidence_note = ((confidence_note or "") + " | " + "；".join(_len_warn)).strip(" |")
+                    length_warnings = check_step_lengths(
+                        [
+                            {"action": s.action, "input_data": s.input_data, "expected_result": s.expected_result}
+                            for s in llm_case.steps
+                        ]
+                    )
+                    if length_warnings:
+                        warn_text = "；".join(length_warnings)
+                        confidence_note = f"{confidence_note} | {warn_text}" if confidence_note else warn_text
 
                     steps = [
                         TestStep(
