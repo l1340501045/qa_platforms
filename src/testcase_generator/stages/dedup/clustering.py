@@ -20,6 +20,8 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 
+import numpy as np
+
 # 归一化：保留中日韩与字母，去数字/标点/空白（数字差异交由 _numset 单独保护）
 _KEEP = re.compile(r"[\u4e00-\u9fffa-zA-Z]+")
 _NUM = re.compile(r"\d+(?:\.\d+)?")
@@ -65,6 +67,9 @@ def find_duplicates(
     cross_dim_threshold: float = 0.84,
     min_shared_bigrams: int = 4,
     safe_dedup_enabled: bool = False,
+    embeddings: dict[str, list[float]] | None = None,
+    semantic_threshold: float = 0.86,
+    semantic_cross_tp_threshold: float = 0.90,
 ) -> dict[str, str]:
     """返回 {duplicate_case_id: canonical_case_id}。
 
@@ -73,6 +78,12 @@ def find_duplicates(
     safe_dedup_enabled：开规则锚定护栏 —— 折叠会让某条规则失去其最后一条非重复
     用例时，跳过该折叠。关时退回旧行为（无护栏）。维度增强用例（无 rule_codes）
     不进入护栏检查，按旧行为折叠。
+
+    embeddings：case_id → 向量。提供时在词面候选外**额外**生成语义候选（全局两两
+    cosine）：同 feature_id 用 semantic_threshold、跨 feature_id 用更严的
+    semantic_cross_tp_threshold，超阈值且非 _protected 的对过 _union（含 safe_dedup
+    护栏，自动复用）。不提供（None）/某 case 缺向量 → 该 case 不参与语义候选，行为
+    与改造前一致。向量外部算好传入，本函数保持纯同步可离线单测。
     """
     order = {c.case_id: i for i, c in enumerate(cases)}
     parent: dict[str, str] = {c.case_id: c.case_id for c in cases}
@@ -140,6 +151,7 @@ def find_duplicates(
     nums = {c.case_id: _numset(c.title + c.text) for c in cases}
     raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
     dim_of = {c.case_id: (c.dimension or "").strip() for c in cases}
+    feature_of = {c.case_id: c.feature_id or "" for c in cases}
 
     def _protected(a: str, b: str) -> bool:
         """边界值保护：数字集不同且任一方含边界语义关键词 → 不同边界值的有效用例，不合并。"""
@@ -193,6 +205,38 @@ def find_duplicates(
         threshold = cross_dim_threshold if (da and da == db) else sim_threshold
         if ratio >= threshold:
             _union(a, b)
+
+    # ── 3) 语义近重复（全局两两 cosine，抓词面抓不到的换措辞同义）──
+    # embeddings 为 None → 整段跳过，行为与改造前逐字节一致。向量外部算好传入，
+    # 本函数仍纯同步可离线单测。灌水大头是跨 test_point/跨模块的换措辞重复，故语义
+    # 候选须全局（非仅组内）。numpy 矩阵化算 cosine，禁止纯 python 双循环（n²×D 太慢）。
+    if embeddings:
+        # 按输入顺序收集有向量的 case（缺向量者跳过，不参与语义候选）
+        v_ids = [c.case_id for c in cases if c.case_id in embeddings]
+        if len(v_ids) >= 2:
+            mat = np.array([embeddings[cid] for cid in v_ids], dtype=np.float64)
+            # L2 归一化后矩阵内积 = cosine；零向量行归一化后为 0，不会误连
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            mat_n = mat / norms
+            sim = mat_n @ mat_n.T
+            n = len(v_ids)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    s = float(sim[i, j])
+                    if s < 1.0 - 1e-12 and s < semantic_threshold:
+                        # s≈1 留给 _protected 判（同向量但边界值不同的对需保护）
+                        continue
+                    a, b = v_ids[i], v_ids[j]
+                    if _find(a) == _find(b):
+                        continue
+                    if _protected(a, b):
+                        continue
+                    # 跨 feature_id 用更严阈值（仿词面"跨维严/同维松"控误折叠）
+                    same_tp = bool(c.feature_id) and feature_of[a] == feature_of[b]
+                    thr = semantic_threshold if same_tp else semantic_cross_tp_threshold
+                    if s >= thr:
+                        _union(a, b)
 
     # ── 输出 ──
     dup_map: dict[str, str] = {}
