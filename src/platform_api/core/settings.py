@@ -102,6 +102,16 @@ class Settings(BaseSettings):
     # rule_extract 阶段抽规则的并发（输出短，可略高于生成阶段的 llm_concurrency）
     rule_extract_concurrency: int = 4
 
+    # ── 语义去重升级（hybrid：embedding 语义 + 词法）灰度开关 ────────────────────
+    # 开：dedup_node 算各用例 embedding 传入 find_duplicates，额外抓"换措辞同义"近重复
+    #   （词面抓不到的灌水大头）；候选同样过 _protected + safe_dedup 护栏。关：行为与改造前
+    #   逐字节一致。建议在 safe_dedup_enabled 开时才启用（复用 rule 护栏，防误折叠最后一条）。
+    # semantic_threshold：同 test_point 内语义 cosine 阈值（仿词面"同维松"）。
+    # semantic_dedup_cross_tp_threshold：跨 test_point 更严阈值（仿"跨维严"，控误折叠）。
+    semantic_dedup_enabled: bool = False
+    semantic_dedup_threshold: float = 0.86
+    semantic_dedup_cross_tp_threshold: float = 0.90
+
     # ── 结构化覆盖（落点⑫·线B）：权限矩阵 + 状态机有界展开 + 覆盖闸 ──────────
     structural_coverage_enabled: bool = False
 
