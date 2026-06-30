@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import List
@@ -99,6 +100,37 @@ def _normalize_verdict(raw: str) -> Verdict:
     if v in ("grounded", "conflict", "undefined", "ungrounded"):
         return v  # type: ignore[return-value]
     return "ungrounded"  # 无法识别时从严（不放进主集）
+
+
+# ─── 同实体门控 · 词法兜底（字符集 Jaccard）─────────────────────────────────
+# 归一化：保留中日韩与字母（仿 dedup/clustering._normalize），去标点/数字/空白后取【字符集】。
+# 注意：字符集（set）而非 bigram/公共 token——"监测链接"与"投放链接"共享"链接"二字，
+# 但 Jaccard=|{链,接}|/|{监,测,链,接,投,放}|=2/6≈0.33<0.5 → 判不同实体（核心护栏，
+# 不可退化为"有无公共 token"，否则会把不同实体误判同实体、门控失效）。
+_ENTITY_KEEP = re.compile(r"[一-鿿a-zA-Z]+")
+
+
+def _normalize_entity(s: str) -> str:
+    return "".join(_ENTITY_KEEP.findall((s or "").lower()))
+
+
+def _same_entity(a: str, b: str, *, threshold: float | None = None) -> bool:
+    """字符集 Jaccard 判两 subject 是否同一实体。
+
+    - Jaccard = |A∩B| / |A∪B|；>= threshold → True（同实体，不撤）；< threshold → False（不同实体）。
+    - 任一归一化后为空串 → 返回 True（无法判定、保守不撤，防误伤真 conflict）。
+    - 阈值默认取 settings.conflict_entity_jaccard_threshold。
+    """
+    sa, sb = _normalize_entity(a), _normalize_entity(b)
+    if not sa or not sb:
+        return True
+    set_a, set_b = set(sa), set(sb)
+    union = set_a | set_b
+    if not union:
+        return True
+    jaccard = len(set_a & set_b) / len(union)
+    thr = settings.conflict_entity_jaccard_threshold if threshold is None else threshold
+    return jaccard >= thr
 
 
 def _case_payload(c: VerifyCase) -> dict:
@@ -195,14 +227,42 @@ async def verify_cases(
                 for r in v.conflicting_refs
             ]
             _conflict = bool(v.cross_section_conflict and _refs)
+
+            # ── 同实体门控：治概念混淆型假 conflict ────────────────────────────
+            # 对 verdict=conflict 的用例：若 LLM 判 same_entity=False，或词法兜底
+            # （字符集 Jaccard<阈值）判双方 subject 非同一实体（如"监测链接"≠"投放链接"），
+            # 则撤销 conflict、降级 ungrounded（needs_spec）+ conflict_entity_mismatch=True。
+            # 保守：真 conflict（同实体、subject 完全相同）same_entity=True 且 Jaccard>=阈值 → 不降级。
+            _subject_case = v.conflict_subject_case or ""
+            _subject_prd = v.conflict_subject_prd or ""
+            _entity_mismatch = False
+            if settings.conflict_entity_gate_enabled and verdict == "conflict":
+                lexical_diff = (
+                    bool(_subject_case) and bool(_subject_prd) and not _same_entity(_subject_case, _subject_prd)
+                )
+                if v.same_entity is False or lexical_diff:
+                    verdict = "ungrounded"
+                    _entity_mismatch = True
+
+            _rationale = v.rationale
+            if _entity_mismatch:
+                _rationale = (
+                    f"原 conflict 因用例对象「{_subject_case}」与 PRD 反驳条款对象「{_subject_prd}」"
+                    f"非同一实体（概念混淆假矛盾）撤销，降级待人工确认是否其实 grounded。"
+                    f"原判理由：{_rationale}"
+                )
+
             batch_result[c.case_id] = CaseVerification(
                 verdict=verdict,
                 bucket=_VERDICT_BUCKET.get(verdict, "needs_spec"),
-                rationale=v.rationale,
+                rationale=_rationale,
                 prd_evidence=v.prd_evidence,
                 unsupported_assertions=v.unsupported_assertions,
                 cross_section_conflict=_conflict,
                 conflicting_refs=_refs,
+                conflict_subject_case=_subject_case,
+                conflict_subject_prd=_subject_prd,
+                conflict_entity_mismatch=_entity_mismatch,
             )
         return batch_result
 
@@ -235,10 +295,16 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
                 if key in seen_keys_this_case:
                     continue
                 seen_keys_this_case.add(key)
-                slot = conflict_pairs.setdefault(key, {
-                    "ref_a": r.ref_a, "quote_a": r.quote_a,
-                    "ref_b": r.ref_b, "quote_b": r.quote_b, "case_count": 0,
-                })
+                slot = conflict_pairs.setdefault(
+                    key,
+                    {
+                        "ref_a": r.ref_a,
+                        "quote_a": r.quote_a,
+                        "ref_b": r.ref_b,
+                        "quote_b": r.quote_b,
+                        "case_count": 0,
+                    },
+                )
                 slot["case_count"] += 1
     return {
         "total": len(verifications),

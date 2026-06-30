@@ -120,6 +120,15 @@ class Settings(BaseSettings):
     # 标 cross_section_conflict + 两处出处，汇成 PRD 矛盾清单。关：行为与改造前一致。
     verify_cross_section_conflict_enabled: bool = True
 
+    # ── verify 同实体门控（治概念混淆型假 conflict）灰度开关 ─────────────────────
+    # 开：对 verdict=conflict 的用例做后处理——若 LLM 判 same_entity=false 或词法兜底
+    # （字符集 Jaccard<0.5）判双方非同一实体（如"监测链接"≠"投放链接"），则撤销 conflict、
+    # 降级 ungrounded（needs_spec）+ conflict_entity_mismatch=true，防把不同实体当同字段判矛盾。
+    # 关：conflict 逐字节不动（零回归）。保守：真 conflict（同实体）不误撤。
+    conflict_entity_gate_enabled: bool = False
+    # 词法兜底 Jaccard 阈值：>= 阈值判同实体（不撤），< 阈值判不同实体（撤销）。
+    conflict_entity_jaccard_threshold: float = 0.5
+
     # ── Hybrid 跨功能点规格检索（关键词 + 向量 + RRF）─────────────────────────────
     # 关闭时 CrossFeatureIndex 行为与改造前完全一致（纯关键词，不调 embedding，零额外开销）。
     hybrid_cross_retrieval_enabled: bool = False
