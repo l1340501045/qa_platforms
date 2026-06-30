@@ -1,0 +1,20 @@
+# 前端开发规范
+
+> 仓库前端真实模式索引。技术栈：React 18 + Ant Design 5 + Zustand + axios + Vite。
+> 原则：只记录代码里**真实存在**的写法，每条带 `文件:行号` 锚点。
+
+---
+
+## 规范索引
+
+| 文件 | 内容 | 状态 |
+|------|------|------|
+| [表单模式](./form-pattern.md) | 增/改/删表单、校验、反馈、四层数据流、axios 信封解包 | ✅ 已填（code-backed） |
+
+---
+
+## 待补（按需，非本次 bootstrap 范围）
+
+- 列表/分页页模式、路由与布局（`App.tsx` / `layouts/MainLayout.tsx`）
+- Zustand store 组织约定（`stores/*.ts`）
+- 类型定义约定（`types/index.ts`）
