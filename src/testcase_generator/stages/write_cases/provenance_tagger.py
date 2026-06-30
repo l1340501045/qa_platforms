@@ -93,6 +93,66 @@ def build_section_index(parsed_context) -> SectionIndex:
     return index
 
 
+class _ResolveResult:
+    """单 step quote 解析结果，供 derive_grounded_provenance 循环消费。
+
+    counts_keys 可含多个键（ref_corrected 路径同时计 verified/fuzzy + ref_corrected）。
+    quote_text / ref / trust 为 None 时不追加到对应列表。
+    """
+
+    __slots__ = ("counts_keys", "quote_text", "ref", "trust")
+
+    def __init__(
+        self,
+        counts_keys: list[str],
+        quote_text: str | None,
+        ref: str | None,
+        trust: int | None,
+    ) -> None:
+        self.counts_keys = counts_keys
+        self.quote_text = quote_text
+        self.ref = ref
+        self.trust = trust
+
+
+def _resolve_quote(q: str, r: str, expected: str, index: SectionIndex) -> _ResolveResult:
+    """对单条 step 的 (quote, ref) 执行绑定→对齐→跨章节兜底→relocate 完整解析链。"""
+    sec = index.get(_normalize(r)) if r else None
+    status = _align(q, sec[0]) if sec else "unresolved"
+    if status in ("verified", "fuzzy"):
+        return _ResolveResult(
+            counts_keys=[status],
+            quote_text=q,
+            ref=r if r else None,
+            trust=sec[1],  # type: ignore[index]
+        )
+    # ── 跨章节兜底（治 ref 失配，诊断 B≈44.7%）──
+    hit = _find_section_by_quote(q, index)
+    if hit:
+        raw_ref, content, trust = hit
+        return _ResolveResult(
+            counts_keys=[_align(q, content), "ref_corrected"],
+            quote_text=q,
+            ref=raw_ref,
+            trust=trust,
+        )
+    # ── 仍找不到 → relocate / unresolved（现状逻辑）──
+    fixed = _relocate(q, expected, sec[0] if sec else None)
+    if fixed:
+        return _ResolveResult(
+            counts_keys=["relocated"],
+            quote_text=fixed,
+            ref=r if r else None,
+            trust=sec[1] if sec else None,
+        )
+    return _ResolveResult(
+        counts_keys=["unresolved"],
+        quote_text=None,
+        ref=None,
+        trust=None,
+    )
+
+
 def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex | None = None) -> Provenance:
     """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。"""
     if index is None:
@@ -108,36 +168,15 @@ def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex 
         r = (getattr(step, "source_ref", None) or "").strip()
         if not q:
             continue
-        sec = index.get(_normalize(r)) if r else None
-        status = _align(q, sec[0]) if sec else "unresolved"
-        if status in ("verified", "fuzzy"):
-            counts[status] += 1
-            quotes.append(q)
-            if r:
-                refs.append(r)
-            trusts.append(sec[1])
-            continue
-        # ── 跨章节兜底（治 ref 失配，诊断 B≈44.7%）──
-        hit = _find_section_by_quote(q, index)
-        if hit:
-            raw_ref, content, trust = hit
-            counts[_align(q, content)] += 1
-            counts["ref_corrected"] += 1
-            quotes.append(q)
-            refs.append(raw_ref)
-            trusts.append(trust)
-            continue
-        # ── 仍找不到 → relocate / unresolved（现状逻辑）──
-        fixed = _relocate(q, getattr(step, "expected_result", ""), sec[0] if sec else None)
-        if fixed:
-            counts["relocated"] += 1
-            quotes.append(fixed)
-            if r:
-                refs.append(r)
-            if sec:
-                trusts.append(sec[1])
-        else:
-            counts["unresolved"] += 1
+        result = _resolve_quote(q, r, getattr(step, "expected_result", ""), index)
+        for k in result.counts_keys:
+            counts[k] += 1
+        if result.quote_text is not None:
+            quotes.append(result.quote_text)
+        if result.ref is not None:
+            refs.append(result.ref)
+        if result.trust is not None:
+            trusts.append(result.trust)
 
     derived_from = list(dict.fromkeys(refs))
     total_quoted = counts["verified"] + counts["fuzzy"] + counts["relocated"] + counts["unresolved"]
