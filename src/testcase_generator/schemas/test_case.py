@@ -59,6 +59,11 @@ class CaseVerification(BaseModel):
     conflicting_refs: list[CrossSectionConflictRef] = Field(
         default_factory=list, description="互斥条款对清单（cross_section_conflict=True 时给出）"
     )
+    conflict_subject_case: str = Field(default="", description="（verdict=conflict 时）用例断言所约束的对象/字段")
+    conflict_subject_prd: str = Field(default="", description="（verdict=conflict 时）PRD 反驳条款所约束的对象/字段")
+    conflict_entity_mismatch: bool = Field(
+        default=False, description="conflict 双方非同一实体（疑似概念混淆假矛盾，已被同实体门控降级）"
+    )
 
 
 class Provenance(BaseModel):

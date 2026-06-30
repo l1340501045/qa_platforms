@@ -83,6 +83,11 @@ class _CaseVerdict(BaseModel):
     unsupported_assertions: List[str] = Field(default_factory=list, description="无支撑/冲突的具体断言")
     cross_section_conflict: bool = Field(default=False, description="PRD 条款间实质互斥")
     conflicting_refs: List[_ConflictRef] = Field(default_factory=list, description="互斥条款对")
+    # 同实体门控（conflict_entity_gate）：判 conflict 时须结构化输出双方对象 + 是否同一实体。
+    # same_entity 默认 True：未输出 / 不开门控时不误撤真 conflict（保守）。
+    conflict_subject_case: str = Field(default="", description="用例断言所约束的对象/字段")
+    conflict_subject_prd: str = Field(default="", description="PRD 反驳条款所约束的对象/字段")
+    same_entity: bool = Field(default=True, description="二者是否同一实体（True=同实体，不撤）")
 
 
 class _VerifyLLMOutput(BaseModel):
