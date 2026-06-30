@@ -60,7 +60,8 @@ async def backfill_node(state: PipelineState) -> dict:
     kept_cases = [c for c in final_cases if c.test_point_id not in weak_ids] if weak_ids else final_cases
     removed = len(final_cases) - len(kept_cases)
 
-    # 结构化未覆盖点纳入定向回填（与 rule 链解耦，structural_coverage_enabled 开即生效）
+    # 防御性兜底：显式纳入结构化未覆盖点（当前 review_node 已将其计入 uncovered_test_point_ids，
+    # 此处 |= 幂等；保留以防 review 未来只统计非结构化点时不漏）。
     if settings.structural_coverage_enabled and audit_report and audit_report.uncovered_structural_keys:
         struct_uncovered_ids = {
             tp.id for tp in test_points

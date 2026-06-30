@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.platform_api.core.settings import settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_point import TestPointSchema
+from src.testcase_generator.services.llm_client import get_llm_client
 from src.testcase_generator.stages.test_points.applicability_filter import (
     ApplicabilityFilter,
 )
@@ -23,7 +24,6 @@ from src.testcase_generator.stages.test_points.mandatory_dimensions import (
 from src.testcase_generator.stages.test_points.rule_anchor import (
     build_rule_anchored_test_points,
 )
-from src.testcase_generator.services.llm_client import get_llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -598,8 +598,10 @@ async def test_points_node(state: PipelineState) -> dict:
             for src_ in parsed_context.sources
             for sec in src_.sections
         )
-        pm = await extract_permission_matrix(prd_text)
-        sms = await extract_state_machines(prd_text)
+        pm, sms = await asyncio.gather(
+            extract_permission_matrix(prd_text),
+            extract_state_machines(prd_text),
+        )
         struct_tps = expand_permission(
             pm, start_idx=len(test_points), features=parsed_context.features
         )

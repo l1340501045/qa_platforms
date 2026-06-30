@@ -35,9 +35,6 @@ def test_structural_schemas_parse():
     assert sm.transitions[0].dst == "执行中"
 
 
-import pytest
-
-
 async def test_permission_extractor_parses(monkeypatch):
     from src.testcase_generator.stages.test_points.structural import (
         permission_extractor as pe,
@@ -181,6 +178,7 @@ def test_expand_state_machine_bounded():
 
 def test_expand_permission_feature_mapping():
     """结构化点应映射到含相关资源名的 feature，而非 STRUCTURAL。"""
+    from src.testcase_generator.schemas.parsed_context import FeatureItem
     from src.testcase_generator.stages.test_points.structural.expander import (
         expand_permission,
     )
@@ -188,7 +186,6 @@ def test_expand_permission_feature_mapping():
         Grant,
         PermissionMatrix,
     )
-    from src.testcase_generator.schemas.parsed_context import FeatureItem
 
     pm = PermissionMatrix(
         roles=["投手"],
