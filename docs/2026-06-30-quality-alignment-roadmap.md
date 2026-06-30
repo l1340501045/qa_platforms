@@ -59,5 +59,9 @@
   - 离线评估（3185 条，`scripts/dedup_offline_eval.py`）：纯词面 duplicate 228 / unique 2957（7.2%）→ hybrid duplicate 1494 / **unique 1691**（46.9%），优于 ~2000 目标。
   - 抽样 10 个仅语义折叠对：7 真同义、3 误折叠（含 1 边界值对 #2「10条不拆 vs 12条拆3包」）——误折叠靠软标记可恢复 + 生产 safe_dedup 护栏兜底；阈值 0.86 对"数字集不同但语义极近"偏松，量大时可上调。
   - GPT Review 修复 🔴-1（`same_tp` 引用循环外残留变量 `c`，破坏确定性）+ 补 3 回归测试（末条 feature_id 空的同 tp 折叠、降级时词面仍折叠、离线 228 golden 对拍）。重跑离线评估：结果与修复前逐字节一致（末条恰好非空、bug 未触发），修复消除"依赖末条状态"的偶然性。
-- [x] ④ spec + plan + 自审（`2026-06-30-conflict-entity-gate-*`）← 待交 Claude Code
-- [ ] ⑤ 同构同判 / ⑥ 生成侧收敛 —— 逐项 spec+plan
+- [x] ④ spec + plan + 自审（`2026-06-30-conflict-entity-gate-*`）→（Claude Code）**已落地代码，待观测** ✅
+  - 同实体门控（rubric `CONFLICT_ENTITY_GATE_INSTRUCTION` 抽离受开关控制 + 后处理 `same_entity=False` 降级，词法 Jaccard 作佐证不覆盖 LLM 同实体判断）。14 单测绿、全量回归 273 passed。
+  - GPT Review 修复 🔴-1（rubric 未受开关控制→抽独立常量仅开时注入，关时 rubric 层也零回归）+ 🟡-3（词法兜底不再覆盖 LLM `same_entity=True`，防误伤同实体但措辞分歧大的真 conflict）。
+  - 待观测：Task 5 对 `278c211f` resume 重跑 verify（开关开），确认 §7.2 to_fix 显著下降、未误伤真 conflict——按用户决定暂缓，留待手动执行。
+- [x] ⑥ spec + plan + 自审（`2026-06-30-generation-convergence-*`）← 待交 Claude Code
+- [ ] ⑤ 同构同判（**依赖 ④**，待 ④ 做完再出，基于 ④ 后的 verifier 代码）

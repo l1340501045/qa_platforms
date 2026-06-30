@@ -25,6 +25,7 @@ from src.testcase_generator.schemas.test_case import (
 )
 from src.testcase_generator.services.llm_client import get_llm_client
 from src.testcase_generator.stages.verify.rubric import (
+    CONFLICT_ENTITY_GATE_INSTRUCTION,
     CROSS_SECTION_CONFLICT_INSTRUCTION,
     VERIFY_SYSTEM_PROMPT,
 )
@@ -182,6 +183,8 @@ async def verify_cases(
         by_feature[c.feature_id].append(c)
 
     system_prompt = VERIFY_SYSTEM_PROMPT
+    if settings.conflict_entity_gate_enabled:
+        system_prompt += CONFLICT_ENTITY_GATE_INSTRUCTION
     if settings.verify_cross_section_conflict_enabled:
         system_prompt += CROSS_SECTION_CONFLICT_INSTRUCTION
 
@@ -229,27 +232,32 @@ async def verify_cases(
             _conflict = bool(v.cross_section_conflict and _refs)
 
             # ── 同实体门控：治概念混淆型假 conflict ────────────────────────────
-            # 对 verdict=conflict 的用例：若 LLM 判 same_entity=False，或词法兜底
-            # （字符集 Jaccard<阈值）判双方 subject 非同一实体（如"监测链接"≠"投放链接"），
-            # 则撤销 conflict、降级 ungrounded（needs_spec）+ conflict_entity_mismatch=True。
-            # 保守：真 conflict（同实体、subject 完全相同）same_entity=True 且 Jaccard>=阈值 → 不降级。
+            # 对 verdict=conflict 的用例：仅当 LLM 明确判 same_entity=False 时撤销 conflict、
+            # 降级 ungrounded（needs_spec）+ conflict_entity_mismatch=True。
+            # 词法 _same_entity 作为 same_entity=False 的佐证（写入 rationale），但【不单独
+            # 触发降级】——尊重 LLM 的明确同实体判断（same_entity=True），防词法把"同实体但
+            # 措辞分歧大"的真 conflict 误降级（如"标题字数上限" vs "字数" Jaccard 低却同实体）。
+            # 这样真 conflict（同实体）same_entity=True → 不降级；假 conflict（不同实体）
+            # same_entity=False → 降级，词法兜底仅作辅助标注。
             _subject_case = v.conflict_subject_case or ""
             _subject_prd = v.conflict_subject_prd or ""
             _entity_mismatch = False
+            _lexical_note = ""
             if settings.conflict_entity_gate_enabled and verdict == "conflict":
-                lexical_diff = (
-                    bool(_subject_case) and bool(_subject_prd) and not _same_entity(_subject_case, _subject_prd)
-                )
-                if v.same_entity is False or lexical_diff:
+                if v.same_entity is False:
                     verdict = "ungrounded"
                     _entity_mismatch = True
+                    # 词法佐证：subject 非空时算 Jaccard，写入 rationale 供人工复核
+                    if _subject_case and _subject_prd:
+                        _lexical_same = _same_entity(_subject_case, _subject_prd)
+                        _lexical_note = f"词法 Jaccard 判定{'同' if _lexical_same else '不同'}实体（佐证 LLM 判定）；"
 
             _rationale = v.rationale
             if _entity_mismatch:
                 _rationale = (
                     f"原 conflict 因用例对象「{_subject_case}」与 PRD 反驳条款对象「{_subject_prd}」"
                     f"非同一实体（概念混淆假矛盾）撤销，降级待人工确认是否其实 grounded。"
-                    f"原判理由：{_rationale}"
+                    f"{_lexical_note}原判理由：{_rationale}"
                 )
 
             batch_result[c.case_id] = CaseVerification(

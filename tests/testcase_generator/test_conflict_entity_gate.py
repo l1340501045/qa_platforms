@@ -2,8 +2,9 @@
 
 承接 docs/spec/2026-06-30-conflict-entity-gate-design.md：用例对象 ≠ PRD 反驳条款对象
 （如"监测链接" vs "投放链接"）→ 撤销 conflict、降级 ungrounded + conflict_entity_mismatch。
-门控主力在 rubric（让 LLM 判 conflict 前过"同实体"关），后处理用 same_entity + 词法
-兜底（字符集 Jaccard）防 LLM 仍误判。灰度 conflict_entity_gate_enabled，关时零回归。
+rubric 同实体前置指令 + 后处理降级均受 conflict_entity_gate_enabled 灰度控制，关时零回归
+（rubric 段落不注入、后处理不动）。后处理仅当 LLM 明确 same_entity=False 时降级，词法
+Jaccard 作佐证但不覆盖 LLM 的同实体判断（防误伤真 conflict）。
 """
 
 from __future__ import annotations
@@ -121,9 +122,10 @@ async def test_gate_downgrades_cross_entity_conflict(monkeypatch):
     assert "同实体" in res["V0"].rationale or "实体" in res["V0"].rationale
 
 
-async def test_gate_lexical_fallback_overrides_llm_same_entity_true(monkeypatch):
-    """词法兜底：LLM 误填 same_entity=True，但 subject="监测链接"/"投放链接"
-    字符集 Jaccard<0.5 → 仍降级（防 LLM 错判同实体）。"""
+async def test_gate_lexical_does_not_override_llm_same_entity_true(monkeypatch):
+    """词法不覆盖 LLM 明确的同实体判断：LLM 判 same_entity=True，即便 subject="监测链接"/"投放链接"
+    字符集 Jaccard<0.5（词法判不同实体），也【不降级】——尊重 LLM 的 same_entity=True，
+    防词法把 LLM 已判同实体的真 conflict 误撤。词法仅作 rationale 佐证。"""
     from src.testcase_generator.stages.verify import verifier as vmod
 
     verdicts = [
@@ -138,9 +140,56 @@ async def test_gate_lexical_fallback_overrides_llm_same_entity_true(monkeypatch)
     ]
     res = await _run_verify(monkeypatch, verdicts, gate_on=True)
 
+    # same_entity=True → 不降级（词法不覆盖）
+    assert res["V0"].verdict == "conflict"
+    assert res["V0"].bucket == "to_fix"
+    assert res["V0"].conflict_entity_mismatch is False
+
+
+async def test_gate_same_entity_false_downgrades_even_if_lexical_same(monkeypatch):
+    """LLM 明确 same_entity=False → 降级，即便词法判同实体（subject 高重叠）也尊重 LLM。
+    词法仅作 rationale 佐证，不改变降级决定。"""
+    from src.testcase_generator.stages.verify import verifier as vmod
+
+    verdicts = [
+        vmod._CaseVerdict(
+            case_id="V0",
+            verdict="conflict",
+            rationale="原判：冲突",
+            # subject 高重叠（词法判同实体），但 LLM 明确判不同实体
+            conflict_subject_case="标题包名称字数",
+            conflict_subject_prd="标题包名称长度",
+            same_entity=False,
+        )
+    ]
+    res = await _run_verify(monkeypatch, verdicts, gate_on=True)
+
     assert res["V0"].verdict == "ungrounded"
     assert res["V0"].bucket == "needs_spec"
     assert res["V0"].conflict_entity_mismatch is True
+
+
+async def test_gate_real_conflict_with_lexical_divergence_not_downgraded(monkeypatch):
+    """不误伤（GPT-3 边界）：同实体但措辞分歧大的真 conflict——LLM 正确判 same_entity=True，
+    subject="标题字数上限"/"字数" 字符集 Jaccard≈0.33<0.5（词法判不同实体），但 same_entity=True
+    → 不降级。这正是"词法会误伤"的边界，新逻辑（词法不覆盖）守住不误撤。"""
+    from src.testcase_generator.stages.verify import verifier as vmod
+
+    verdicts = [
+        vmod._CaseVerdict(
+            case_id="V0",
+            verdict="conflict",
+            rationale="标题字数上限 50 vs 30",
+            conflict_subject_case="标题字数上限",
+            conflict_subject_prd="字数",
+            same_entity=True,
+        )
+    ]
+    res = await _run_verify(monkeypatch, verdicts, gate_on=True)
+
+    assert res["V0"].verdict == "conflict"
+    assert res["V0"].bucket == "to_fix"
+    assert res["V0"].conflict_entity_mismatch is False
 
 
 async def test_gate_does_not_downgrade_real_conflict(monkeypatch):
@@ -208,6 +257,43 @@ async def test_gate_not_triggered_for_non_conflict_verdict(monkeypatch):
     assert res["V0"].conflict_entity_mismatch is False
     # subject 仍透传（落库观测）
     assert res["V0"].conflict_subject_case == "监测链接"
+
+
+async def test_gate_off_does_not_inject_rubric_instruction(monkeypatch):
+    """GPT-1 验证盲区补强：关门控时 CONFLICT_ENTITY_GATE_INSTRUCTION 不注入 system_prompt
+    （rubric 层真·零回归），开时才注入。守"关时逐字节现状"在 LLM 提示层也成立。"""
+    from src.testcase_generator.stages.verify import verifier as vmod
+    from src.testcase_generator.stages.verify.verifier import (
+        PrdSection,
+        VerifyCase,
+        verify_cases,
+    )
+
+    seen_prompts: list[str] = []
+
+    class _FakeClient:
+        async def generate_structured(self, *, system_prompt, **kw):
+            seen_prompts.append(system_prompt)
+            return vmod._VerifyLLMOutput(
+                verdicts=[
+                    vmod._CaseVerdict(case_id="V0", verdict="grounded", rationale="r"),
+                ]
+            )
+
+    monkeypatch.setattr(vmod, "get_llm_client", lambda: _FakeClient())
+    cases = [VerifyCase(case_id="V0", feature_id="F1", title="t")]
+    sections = {"F1": [PrdSection("§5.8.3", "投放链接单选", "§5.8.3")]}
+
+    # 关：同实体前置指令不注入
+    monkeypatch.setattr(vmod.settings, "conflict_entity_gate_enabled", False)
+    monkeypatch.setattr(vmod.settings, "verify_cross_section_conflict_enabled", False)
+    await verify_cases(cases, sections)
+    assert "同实体前置" not in seen_prompts[-1]
+
+    # 开：同实体前置指令注入
+    monkeypatch.setattr(vmod.settings, "conflict_entity_gate_enabled", True)
+    await verify_cases(cases, sections)
+    assert "同实体前置" in seen_prompts[-1]
 
 
 # ─── Chunk 4: 已知 §7.2 fixture 端到端（开关因果链）──────────────────────────
