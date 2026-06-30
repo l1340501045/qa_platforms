@@ -18,8 +18,8 @@ def test_semantic_relocation_when_number_mismatch():
     out = inject_captions(content, [cap])
     assert "附：未定位图描述" not in out
     lines = out.split("\n")
-    drama_idx = next(i for i, l in enumerate(lines) if "5.2 漫剧库" in l)
-    assert any("漫剧库列表页面" in l for l in lines[drama_idx : drama_idx + 4])
+    drama_idx = next(i for i, line in enumerate(lines) if "5.2 漫剧库" in line)
+    assert any("漫剧库列表页面" in line for line in lines[drama_idx : drama_idx + 4])
 
 
 def test_number_match_still_works():
@@ -34,8 +34,8 @@ def test_number_match_still_works():
     out = inject_captions(content, [cap])
     assert "附：未定位图描述" not in out
     lines = out.split("\n")
-    drama_idx = next(i for i, l in enumerate(lines) if "5.2 漫剧库" in l)
-    assert any("某截图" in l for l in lines[drama_idx : drama_idx + 4])
+    drama_idx = next(i for i, line in enumerate(lines) if "5.2 漫剧库" in line)
+    assert any("某截图" in line for line in lines[drama_idx : drama_idx + 4])
 
 
 def test_no_match_goes_to_appendix():
@@ -49,3 +49,19 @@ def test_no_match_goes_to_appendix():
     )
     out = inject_captions(content, [cap])
     assert "附：未定位图描述" in out
+
+
+def test_semantic_relocation_preserves_internal_digits():
+    """标题正文含数字（双11）时不应被去编号正则误删为"双" → 仍能语义命中归位。"""
+    content = "# 文档\n\n## 5.3 双11活动页\n\n正文。\n"
+    cap = ImageCaption(
+        filename="x.png",
+        kind="screen",
+        caption_text="双11活动页的横幅展示",
+        section_hint="88",  # 编号对不上，强制走语义匹配
+    )
+    out = inject_captions(content, [cap])
+    assert "附：未定位图描述" not in out
+    lines = out.split("\n")
+    idx = next(i for i, line in enumerate(lines) if "5.3 双11活动页" in line)
+    assert any("双11活动页的横幅展示" in line for line in lines[idx + 1 : idx + 4])

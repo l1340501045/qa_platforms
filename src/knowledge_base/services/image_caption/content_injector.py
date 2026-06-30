@@ -56,7 +56,8 @@ def inject_captions(content: str, captions: list[ImageCaption]) -> str:
         hm = _HEADING_RE.match(line)
         if hm:
             heading_text = hm.group(2)
-            text = re.sub(r"[§\d.\s]+", "", heading_text)
+            # 去前导章节编号（§5.2 / 5.2 等）+ 内部空白；保留正文数字字母（"双11" 不被误删为"双"）
+            text = re.sub(r"\s", "", re.sub(r"^[§\d.\s]+", "", heading_text))
             if text:
                 heading_text_map.append((text, i))
             nums = re.findall(r"§?([\dA-Za-z]+(?:\.\d+)*)", heading_text)
@@ -75,20 +76,17 @@ def inject_captions(content: str, captions: list[ImageCaption]) -> str:
                     best = (len(text), line_i)
         return best[1] if best else None
 
-    placed: list[ImageCaption] = []
+    # 单次定位：命中入 placed_with_line（带行号），未命中入 unplaced（避免 _locate 重复计算）
+    placed_with_line: list[tuple[int, ImageCaption]] = []
     unplaced: list[ImageCaption] = []
-
     for cap in remaining:
-        if _locate(cap) is not None:
-            placed.append(cap)
+        loc = _locate(cap)
+        if loc is not None:
+            placed_with_line.append((loc, cap))
         else:
             unplaced.append(cap)
 
     # 按行号降序插入（避免行号偏移）
-    placed_with_line = [
-        (_locate(cap), cap)  # type: ignore[arg-type]
-        for cap in placed
-    ]
     placed_with_line.sort(key=lambda x: x[0], reverse=True)
 
     for line_idx, cap in placed_with_line:
