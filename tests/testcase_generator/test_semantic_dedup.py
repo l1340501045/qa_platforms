@@ -132,3 +132,99 @@ def test_semantic_missing_vector_skipped():
     emb = {"A": _emb(1.0, 0.0)}  # B 缺向量
     dup = find_duplicates([a, b], embeddings=emb, semantic_threshold=0.86)
     assert dup == {}  # B 无向量，无法配对
+
+
+# ── Task 4：dedup_node 算向量传入 + 降级 ──────────────────────────────────────
+
+import asyncio  # noqa: E402
+
+from src.testcase_generator.schemas.test_case import GeneratedTestCase, Provenance  # noqa: E402
+from src.testcase_generator.stages.dedup import node as dedup_node_mod  # noqa: E402
+
+
+def _tc(case_id: str, tp_id: str, title: str, *, exp: list[str] | None = None) -> GeneratedTestCase:
+    return GeneratedTestCase(
+        id=case_id,
+        test_point_id=tp_id,
+        title=title,
+        expected_results=exp or [],
+        priority="P1",
+        provenance=Provenance(source_section="§x", verbatim_excerpt="x", trust_level=3),
+        trust_level=3,
+    )
+
+
+class _FakeEmbeddingClient:
+    """返回与 case_id 绑定的固定向量，cosine 可控。"""
+
+    def __init__(self, vectors: dict[str, list[float]]):
+        self._vectors = vectors
+
+    async def embed_batch(self, texts):
+        # dedup_node 按 final_cases 顺序传 texts（title + expected_results 拼接）；
+        # 测试里按调用顺序与 case 顺序对齐返回固定向量。
+        return [self._vectors[k] for k in self._vectors][: len(texts)]
+
+
+class _FailingEmbeddingClient:
+    async def embed_batch(self, texts):
+        raise RuntimeError("embedding gateway down")
+
+
+def _semantic_state():
+    # 两条跨 test_point、词面远、语义近的同义用例（mock 向量高度相似）
+    return {
+        "final_test_cases": [
+            _tc("TC-001", "TP-A", "组长可查看全员定向包", exp=["显示所有成员定向包"]),
+            _tc("TC-002", "TP-B", "投放组长能看到所有成员创建的定向包", exp=["列出全部成员定向包"]),
+        ],
+        "test_points": [],
+    }
+
+
+def test_dedup_node_semantic_on_folds_synonyms(monkeypatch):
+    # semantic_dedup_enabled=True：mock 向量高度相似 → 语义折叠生效
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_enabled", True)
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_threshold", 0.86)
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_cross_tp_threshold", 0.90)
+    monkeypatch.setattr(
+        dedup_node_mod, "EmbeddingClient",
+        lambda: _FakeEmbeddingClient({"TC-001": _emb(1.0, 0.0), "TC-002": _emb(0.985, 0.02)}),
+    )
+    result = asyncio.run(dedup_node_mod.dedup_node(_semantic_state()))
+    cases = result["final_test_cases"]
+    # TC-001（先出现）为 canonical，TC-002 标为其重复
+    by_id = {c.id: c for c in cases}
+    assert by_id["TC-002"].duplicate_of == "TC-001"
+    assert result["dedup_summary"]["duplicate_count"] == 1
+
+
+def test_dedup_node_degrades_to_lexical_on_embedding_failure(monkeypatch):
+    # embedding 调用抛异常 → 降级纯词面，不抛、summary 仍产出
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_enabled", True)
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_threshold", 0.86)
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_cross_tp_threshold", 0.90)
+    monkeypatch.setattr(dedup_node_mod, "EmbeddingClient", lambda: _FailingEmbeddingClient())
+    result = asyncio.run(dedup_node_mod.dedup_node(_semantic_state()))
+    # 词面差异大，降级后不折叠
+    cases = result["final_test_cases"]
+    by_id = {c.id: c for c in cases}
+    assert by_id["TC-001"].duplicate_of is None
+    assert by_id["TC-002"].duplicate_of is None
+    assert result["dedup_summary"]["duplicate_count"] == 0
+
+
+def test_dedup_node_semantic_off_no_embedding_call(monkeypatch):
+    # semantic_dedup_enabled=False：不调 EmbeddingClient，行为与现状一致
+    called = {"n": 0}
+
+    class _Spy:
+        async def embed_batch(self, texts):
+            called["n"] += 1
+            return []
+
+    monkeypatch.setattr(dedup_node_mod.settings, "semantic_dedup_enabled", False)
+    monkeypatch.setattr(dedup_node_mod, "EmbeddingClient", lambda: _Spy())
+    result = asyncio.run(dedup_node_mod.dedup_node(_semantic_state()))
+    assert called["n"] == 0  # 关时不触网
+    assert result["dedup_summary"]["total"] == 2
