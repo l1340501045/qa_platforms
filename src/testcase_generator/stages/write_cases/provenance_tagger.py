@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 from src.testcase_generator.schemas.parsed_context import FeatureItem, ParsedContext
 from src.testcase_generator.schemas.test_case import Provenance
@@ -93,26 +94,17 @@ def build_section_index(parsed_context) -> SectionIndex:
     return index
 
 
-class _ResolveResult:
+class _ResolveResult(NamedTuple):
     """单 step quote 解析结果，供 derive_grounded_provenance 循环消费。
 
     counts_keys 可含多个键（ref_corrected 路径同时计 verified/fuzzy + ref_corrected）。
     quote_text / ref / trust 为 None 时不追加到对应列表。
     """
 
-    __slots__ = ("counts_keys", "quote_text", "ref", "trust")
-
-    def __init__(
-        self,
-        counts_keys: list[str],
-        quote_text: str | None,
-        ref: str | None,
-        trust: int | None,
-    ) -> None:
-        self.counts_keys = counts_keys
-        self.quote_text = quote_text
-        self.ref = ref
-        self.trust = trust
+    counts_keys: list[str]
+    quote_text: str | None
+    ref: str | None
+    trust: int | None
 
 
 def _resolve_quote(q: str, r: str, expected: str, index: SectionIndex) -> _ResolveResult:
@@ -133,7 +125,7 @@ def _resolve_quote(q: str, r: str, expected: str, index: SectionIndex) -> _Resol
         return _ResolveResult(
             counts_keys=[_align(q, content), "ref_corrected"],
             quote_text=q,
-            ref=raw_ref,
+            ref=raw_ref,  # source_ref 由 schema 保证为 str，消费侧 None 守卫不改变此路径行为
             trust=trust,
         )
     # ── 仍找不到 → relocate / unresolved（现状逻辑）──

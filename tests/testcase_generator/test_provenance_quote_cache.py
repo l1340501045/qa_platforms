@@ -118,14 +118,28 @@ def test_cache_hit_skips_recompute(monkeypatch):
     assert calls["n"] == 1
 
 
+def test_cache_hit_still_accumulates_per_step():
+    """同一 case 内多 step 引同一 quote → counts 按 step 数累加，cache 仅 1 key（缓存结果非计数）。"""
+    ctx = _Ctx([_Src(1, [_Sec("PRD §1 审核", "责编可通过或驳回，驳回须填写原因。")])])
+    quote = "驳回须填写原因"
+    case = _Case([_Step(quote, "PRD §1 审核")] * 3)
+    cache: dict = {}
+    p = derive_grounded_provenance(case, ctx, quote_cache=cache)
+    assert p.grounding["verified"] == 3
+    assert len(cache) == 1
+
+
 def test_cache_same_quote_different_ref_consistent():
     """同一 quote 配不同 source_ref，传共享 quote_cache → 两条结果一致 + 只算一次。"""
     ctx = _Ctx([_Src(1, [_Sec("PRD §1 审核", "责编可通过或驳回，驳回须填写原因。")])])
     quote = "驳回须填写原因"
-    # case1: ref 正确 → verified
     case1 = _Case([_Step(quote, "PRD §1 审核")])
-    # case2: ref 不存在于索引 → 会走跨章节兜底（也应 verified）
     case2 = _Case([_Step(quote, "PRD §9.9 不存在")])
+
+    # 对照：不传 cache → 同源抖动确实存在（quote 短于跨章节阈值，case2 直接 unresolved）
+    base2 = derive_grounded_provenance(case2, ctx)
+    p1_no_cache = derive_grounded_provenance(case1, ctx)
+    assert base2.grounding != p1_no_cache.grounding  # 证明缓存在消除真实差异
 
     cache: dict = {}
     p1 = derive_grounded_provenance(case1, ctx, quote_cache=cache)
