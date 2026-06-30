@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -18,16 +19,22 @@ from src.platform_api.models.testcase import ExportTask, TestBatch, TestCase
 logger = logging.getLogger(__name__)
 
 
-def _split_cases(cases: list) -> tuple[list, list]:
-    """按 bucket 分流：needs_spec → 需求澄清清单；其余 → 主用例集。
+def _split_cases(cases: list) -> tuple[list, list, list]:
+    """按 verify 分桶（bucket）三路分流，收件人各不相同：
+    - main：grounded（有据）/ unverified（未验上）→ 主用例集（可执行，交 QA）
+    - needs_spec：undefined（PRD 未定义）/ ungrounded（无据编造）→ 需求澄清清单（交 PM 澄清）
+    - to_fix：conflict（与 PRD 明文冲突的错误用例）→ 待修正用例（交测试/AI 改）
     旧批次 bucket 为 None → 归主集（行为不变）。"""
-    main, clarification = [], []
+    main, clarification, to_fix = [], [], []
     for c in cases:
-        if getattr(c, "bucket", None) == "needs_spec":
+        bucket = getattr(c, "bucket", None)
+        if bucket == "needs_spec":
             clarification.append(c)
+        elif bucket == "to_fix":
+            to_fix.append(c)
         else:
             main.append(c)
-    return main, clarification
+    return main, clarification, to_fix
 
 
 @celery_app.task(name="platform_api.export", bind=True)
@@ -98,19 +105,19 @@ async def _execute_export(
             result = await session.execute(stmt)
             cases = list(result.scalars().all())
 
-            # 2. 分流：needs_spec 占位用例 → 需求澄清清单，其余 → 主集
-            main_cases, clarification_cases = _split_cases(cases)
+            # 2. 三路分流：needs_spec → 需求澄清清单（交 PM）；to_fix → 待修正用例（交测试）；其余 → 主集
+            main_cases, clarification_cases, fix_cases = _split_cases(cases)
 
             # 3. 生成文件内容
             if format == "markdown":
                 content, content_type, file_ext = (
-                    _generate_markdown(main_cases, clarification_cases),
+                    _generate_markdown(main_cases, clarification_cases, fix_cases),
                     "text/markdown",
                     "md",
                 )
             else:
                 content, content_type, file_ext = (
-                    _generate_excel(main_cases, clarification_cases),
+                    _generate_excel(main_cases, clarification_cases, fix_cases),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "xlsx",
                 )
@@ -145,10 +152,18 @@ async def _execute_export(
             await session.commit()
 
         logger.info(
-            "Export %s completed: %d main + %d clarification cases, format=%s",
-            export_id, len(main_cases), len(clarification_cases), format,
+            "Export %s completed: %d main + %d clarification + %d to_fix cases, format=%s",
+            export_id, len(main_cases), len(clarification_cases), len(fix_cases), format,
         )
-        return {"status": "completed", "export_id": export_id, "total_cases": len(main_cases)}
+        # 注：total_cases 落库 ExportTask.total_cases（=主集可执行数）；下面两个计数仅随
+        # celery result 返回 + 已写日志，不落库（ExportTask 无对应列），前端查 DB 暂取不到。
+        return {
+            "status": "completed",
+            "export_id": export_id,
+            "total_cases": len(main_cases),
+            "clarification_cases": len(clarification_cases),
+            "to_fix_cases": len(fix_cases),
+        }
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {str(e)}"
@@ -171,11 +186,63 @@ async def _execute_export(
         return {"status": "failed", "export_id": export_id, "error": error_msg}
 
 
-def _generate_markdown(cases: list, clarification: list | None = None) -> str:
-    """将用例列表生成 Markdown 格式"""
+def _md_cell(value) -> str:
+    """Markdown 表格单元格转义：竖线/换行会破坏表格结构，需替换。"""
+    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+
+
+# Excel(openpyxl) 不接受的控制字符（除 \t\n\r），写入会抛 IllegalCharacterError
+_XLSX_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _xlsx_safe(value) -> str:
+    """清洗 Excel 不接受的控制字符，避免 openpyxl 抛 IllegalCharacterError。"""
+    return _XLSX_ILLEGAL_RE.sub("", str(value if value is not None else ""))
+
+
+def _review_row(c) -> tuple[str, str, str]:
+    """从用例提取 (verdict, rationale, prd_evidence)，供需求澄清/待修正清单复用。
+
+    export_task 读取的是 ORM TestCase：verdict 为独立列、rationale/prd_evidence
+    在 verification(JSONB) 内；旧数据 verification 为 None 时全部回退空串。
+    """
+    v = getattr(c, "verification", None)
+    if isinstance(v, dict):
+        rationale = v.get("rationale", "")
+        evidence = v.get("prd_evidence", "")
+    else:
+        rationale = ""
+        evidence = ""
+    verdict = getattr(c, "verdict", "") or ""
+    return verdict, rationale, evidence
+
+
+def _append_md_review_section(lines: list[str], title: str, rows: list) -> None:
+    """向 markdown 追加一个核验清单段（需求澄清清单 / 待修正用例 共用同结构）。"""
+    lines.append(f"## {title}\n")
+    lines.append("| 序号 | 标题 | verdict | 判定理由 | PRD依据 |\n")
+    lines.append("| --- | --- | --- | --- | --- |\n")
+    for i, c in enumerate(rows, 1):
+        verdict, rationale, evidence = _review_row(c)
+        lines.append(
+            f"| {i} | {_md_cell(c.title)} | {_md_cell(verdict)} | {_md_cell(rationale)} | {_md_cell(evidence)} |\n"
+        )
+
+
+def _append_excel_review_sheet(wb, title: str, rows: list) -> None:
+    """向 workbook 追加一个核验清单 sheet（需求澄清清单 / 待修正用例 共用同结构）。"""
+    ws = wb.create_sheet(title)
+    ws.append(["序号", "标题", "verdict", "判定理由", "PRD依据"])
+    for i, c in enumerate(rows, 1):
+        verdict, rationale, evidence = _review_row(c)
+        ws.append([i, _xlsx_safe(c.title), _xlsx_safe(verdict), _xlsx_safe(rationale), _xlsx_safe(evidence)])
+
+
+def _generate_markdown(cases: list, clarification: list | None = None, to_fix: list | None = None) -> str:
+    """将用例列表生成 Markdown 格式（主集 + 可选「需求澄清清单」「待修正用例」两段）"""
     lines: list[str] = ["# 测试用例导出\n"]
     lines.append(f"导出时间: {datetime.now(timezone.utc).isoformat()}\n")
-    lines.append(f"用例总数: {len(cases)}\n")
+    lines.append(f"可执行用例数: {len(cases)}\n")
     lines.append("---\n")
 
     for i, case in enumerate(cases, 1):
@@ -216,29 +283,20 @@ def _generate_markdown(cases: list, clarification: list | None = None) -> str:
         lines.append("---\n")
 
     if clarification:
-        lines.append("## 需求澄清清单（待 PM 确认，未计入可执行用例）\n")
-        lines.append("| 序号 | 标题 | verdict | 判定理由 | PRD依据 |\n")
-        lines.append("| --- | --- | --- | --- | --- |\n")
-        for i, c in enumerate(clarification, 1):
-            v = getattr(c, "verification", None) or {}
-            if isinstance(v, dict):
-                rationale = v.get("rationale", "")
-                evidence = v.get("prd_evidence", "")
-            else:
-                rationale = ""
-                evidence = ""
-            verdict = getattr(c, "verdict", "") or ""
-            lines.append(f"| {i} | {c.title} | {verdict} | {rationale} | {evidence} |\n")
+        _append_md_review_section(lines, "需求澄清清单（待 PM 确认，未计入可执行用例）", clarification)
+    if to_fix:
+        _append_md_review_section(lines, "待修正用例（与 PRD 冲突，需测试/AI 修正，未计入可执行用例）", to_fix)
 
     return "\n".join(lines)
 
 
-def _generate_excel(cases: list, clarification: list | None = None) -> bytes:
-    """将用例列表生成 Excel 格式（使用 openpyxl）"""
+def _generate_excel(cases: list, clarification: list | None = None, to_fix: list | None = None) -> bytes:
+    """将用例列表生成 Excel 格式（主集 sheet +「需求澄清清单」「待修正用例」可选 sheet）"""
     try:
         from openpyxl import Workbook
     except ImportError:
-        return _generate_csv_fallback(cases)
+        logger.info("openpyxl 不可用，降级为 CSV 导出（含需求澄清/待修正区块）")
+        return _generate_csv_fallback(cases, clarification, to_fix)
 
     wb = Workbook()
     ws = wb.active
@@ -254,28 +312,35 @@ def _generate_excel(cases: list, clarification: list | None = None) -> bytes:
         expected = _format_field(case.expected_results)
         dimensions = _format_field(case.dimensions)
 
-        ws.append([i, case.title, case.priority, preconditions, steps, expected, case.trust_level, dimensions])
+        ws.append(
+            [
+                i,
+                _xlsx_safe(case.title),
+                _xlsx_safe(case.priority),
+                _xlsx_safe(preconditions),
+                _xlsx_safe(steps),
+                _xlsx_safe(expected),
+                case.trust_level,
+                _xlsx_safe(dimensions),
+            ]
+        )
 
     if clarification:
-        ws2 = wb.create_sheet("需求澄清清单")
-        ws2.append(["序号", "标题", "verdict", "判定理由", "PRD依据"])
-        for i, c in enumerate(clarification, 1):
-            v = getattr(c, "verification", None) or {}
-            if isinstance(v, dict):
-                rationale = v.get("rationale", "")
-                evidence = v.get("prd_evidence", "")
-            else:
-                rationale = ""
-                evidence = ""
-            ws2.append([i, c.title, getattr(c, "verdict", "") or "", rationale, evidence])
+        _append_excel_review_sheet(wb, "需求澄清清单", clarification)
+    if to_fix:
+        _append_excel_review_sheet(wb, "待修正用例", to_fix)
 
     output = io.BytesIO()
     wb.save(output)
     return output.getvalue()
 
 
-def _generate_csv_fallback(cases: list) -> bytes:
-    """降级 CSV 导出（openpyxl 不可用时）"""
+def _generate_csv_fallback(cases: list, clarification: list | None = None, to_fix: list | None = None) -> bytes:
+    """降级 CSV 导出（openpyxl 不可用时）。
+
+    CSV 是单表格式无法分 sheet，故在主表后用分隔标题行附加「需求澄清清单」
+    「待修正用例」两区块，避免降级时静默丢失这两类用例。
+    """
     import csv
 
     output = io.StringIO()
@@ -295,6 +360,19 @@ def _generate_csv_fallback(cases: list) -> bytes:
                 _format_field(case.dimensions),
             ]
         )
+
+    def _write_review_block(title: str, rows: list | None) -> None:
+        if not rows:
+            return
+        writer.writerow([])
+        writer.writerow([f"# {title}"])
+        writer.writerow(["序号", "标题", "verdict", "判定理由", "PRD依据"])
+        for i, c in enumerate(rows, 1):
+            verdict, rationale, evidence = _review_row(c)
+            writer.writerow([i, c.title, verdict, rationale, evidence])
+
+    _write_review_block("需求澄清清单（待 PM 确认）", clarification)
+    _write_review_block("待修正用例（与 PRD 冲突）", to_fix)
 
     return output.getvalue().encode("utf-8-sig")
 
