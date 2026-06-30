@@ -8,7 +8,7 @@ from src.testcase_generator.schemas.test_case import (
     CrossSectionConflictRef,
     GeneratedTestCase,
     Provenance,
-    TestStep,
+    TestStep as _TestStep,
 )
 
 
@@ -23,7 +23,7 @@ def _case_with_conflict() -> GeneratedTestCase:
             source_section="§x", verbatim_excerpt="e", trust_level=1
         ),
         steps=[
-            TestStep(
+            _TestStep(
                 step_number=1,
                 action="点击提交",
                 input_data="",
