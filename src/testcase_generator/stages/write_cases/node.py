@@ -367,6 +367,7 @@ async def generate_cases(
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
     _grounded_index = build_section_index(parsed_context) if settings.grounded_provenance_enabled else None
+    _quote_cache: dict = {}
     all_test_cases: list[GeneratedTestCase] = []
     failed_features: list[dict] = []
     case_counter = start_counter
@@ -490,7 +491,9 @@ async def generate_cases(
                         continue
 
                     if settings.grounded_provenance_enabled:
-                        provenance = derive_grounded_provenance(llm_case, parsed_context, index=_grounded_index)
+                        provenance = derive_grounded_provenance(
+                            llm_case, parsed_context, index=_grounded_index, quote_cache=_quote_cache
+                        )
                     else:
                         provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
