@@ -208,3 +208,78 @@ async def test_gate_not_triggered_for_non_conflict_verdict(monkeypatch):
     assert res["V0"].conflict_entity_mismatch is False
     # subject 仍透传（落库观测）
     assert res["V0"].conflict_subject_case == "监测链接"
+
+
+# ─── Chunk 4: 已知 §7.2 fixture 端到端（开关因果链）──────────────────────────
+
+
+async def test_section72_fixture_end_to_end(monkeypatch):
+    """真实 §7.2 场景端到端：监测链接用例被 verify 拿投放链接反驳（不同实体），
+    与真 conflict（标题包字数）、grounded 用例混跑——门控开 → §7.2 型降级、真 conflict 与
+    grounded 不动；门控关 → 全部逐字节保持 conflict（开关因果链）。"""
+    from src.testcase_generator.stages.verify import verifier as vmod
+    from src.testcase_generator.stages.verify.verifier import (
+        PrdSection,
+        VerifyCase,
+        verify_cases,
+    )
+
+    # §7.2 监测链接用例（自动绑定预置 hash），PRD §5.8.3 给的是投放链接单选——不同实体
+    # 真 conflict：标题包名称字数 50 vs 30（同实体）
+    # grounded：正常有支撑
+    cases = [
+        VerifyCase(case_id="S72", feature_id="F7.2", title="监测链接自动绑定预置hash"),
+        VerifyCase(case_id="REAL", feature_id="F5.6", title="标题包名称字数50可存"),
+        VerifyCase(case_id="GRD", feature_id="F5.8", title="投放链接单选正常"),
+    ]
+    sections = {
+        "F7.2": [PrdSection("§7.1.1", "监测链接自动绑定预置 hash", "§7.1.1")],
+        "F5.6": [PrdSection("§5.6.1", "标题包名称 ≤ 50 字", "§5.6.1")],
+        "F5.8": [PrdSection("§5.8.3", "投放链接单选", "§5.8.3")],
+    }
+    verdicts = [
+        vmod._CaseVerdict(
+            case_id="S72",
+            verdict="conflict",
+            rationale="原判：与投放链接单选冲突",
+            conflict_subject_case="监测链接",
+            conflict_subject_prd="投放链接",
+            same_entity=False,
+        ),
+        vmod._CaseVerdict(
+            case_id="REAL",
+            verdict="conflict",
+            rationale="标题包名称字数 50 vs 30",
+            conflict_subject_case="标题包名称字数",
+            conflict_subject_prd="标题包名称字数",
+            same_entity=True,
+        ),
+        vmod._CaseVerdict(case_id="GRD", verdict="grounded", rationale="有支撑"),
+    ]
+
+    class _FakeClient:
+        async def generate_structured(self, **kw):
+            return vmod._VerifyLLMOutput(verdicts=verdicts)
+
+    monkeypatch.setattr(vmod, "get_llm_client", lambda: _FakeClient())
+
+    # ── 门控开：§7.2 型降级，真 conflict 与 grounded 不动 ──────────────────
+    monkeypatch.setattr(vmod.settings, "conflict_entity_gate_enabled", True)
+    res_on = await verify_cases(cases, sections)
+    assert res_on["S72"].verdict == "ungrounded"
+    assert res_on["S72"].bucket == "needs_spec"
+    assert res_on["S72"].conflict_entity_mismatch is True
+    assert res_on["REAL"].verdict == "conflict"  # 真 conflict 不误撤
+    assert res_on["REAL"].bucket == "to_fix"
+    assert res_on["REAL"].conflict_entity_mismatch is False
+    assert res_on["GRD"].verdict == "grounded"
+    assert res_on["GRD"].bucket == "main"
+
+    # ── 门控关：§7.2 型 conflict 逐字节保持（零回归）────────────────────
+    monkeypatch.setattr(vmod.settings, "conflict_entity_gate_enabled", False)
+    res_off = await verify_cases(cases, sections)
+    assert res_off["S72"].verdict == "conflict"
+    assert res_off["S72"].bucket == "to_fix"
+    assert res_off["S72"].conflict_entity_mismatch is False
+    assert res_off["REAL"].verdict == "conflict"
+    assert res_off["GRD"].verdict == "grounded"
