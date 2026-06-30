@@ -48,30 +48,45 @@ def inject_captions(content: str, captions: list[ImageCaption]) -> str:
     if not remaining:
         return content
 
-    # 构建章节标题索引：从标题中提取可能的编号
+    # 构建章节标题索引：从标题中提取可能的编号 + 标题纯文本
     lines = content.split("\n")
     section_line_map: dict[str, int] = {}
+    heading_text_map: list[tuple[str, int]] = []  # (标题纯文本, 行号)
     for i, line in enumerate(lines):
         hm = _HEADING_RE.match(line)
         if hm:
             heading_text = hm.group(2)
-            # 从标题中提取 §X.Y.Z 或纯数字编号
+            text = re.sub(r"[§\d.\s]+", "", heading_text)
+            if text:
+                heading_text_map.append((text, i))
             nums = re.findall(r"§?([\dA-Za-z]+(?:\.\d+)*)", heading_text)
             for n in nums:
                 section_line_map[n] = i
+
+    def _locate(cap: ImageCaption) -> int | None:
+        """编号命中 OR 语义命中，返回目标行号"""
+        if cap.section_hint and cap.section_hint in section_line_map:
+            return section_line_map[cap.section_hint]
+        blob = cap.caption_text or ""
+        best: tuple[int, int] | None = None
+        for text, line_i in heading_text_map:
+            if len(text) >= 2 and text in blob:
+                if best is None or len(text) > best[0]:
+                    best = (len(text), line_i)
+        return best[1] if best else None
 
     placed: list[ImageCaption] = []
     unplaced: list[ImageCaption] = []
 
     for cap in remaining:
-        if cap.section_hint and cap.section_hint in section_line_map:
+        if _locate(cap) is not None:
             placed.append(cap)
         else:
             unplaced.append(cap)
 
     # 按行号降序插入（避免行号偏移）
     placed_with_line = [
-        (section_line_map[cap.section_hint], cap)  # type: ignore[arg-type]
+        (_locate(cap), cap)  # type: ignore[arg-type]
         for cap in placed
     ]
     placed_with_line.sort(key=lambda x: x[0], reverse=True)
