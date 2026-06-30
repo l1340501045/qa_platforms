@@ -18,6 +18,18 @@ from src.platform_api.models.testcase import ExportTask, TestBatch, TestCase
 logger = logging.getLogger(__name__)
 
 
+def _split_cases(cases: list) -> tuple[list, list]:
+    """按 bucket 分流：needs_spec → 需求澄清清单；其余 → 主用例集。
+    旧批次 bucket 为 None → 归主集（行为不变）。"""
+    main, clarification = [], []
+    for c in cases:
+        if getattr(c, "bucket", None) == "needs_spec":
+            clarification.append(c)
+        else:
+            main.append(c)
+    return main, clarification
+
+
 @celery_app.task(name="platform_api.export", bind=True)
 def export_task(
     self,
@@ -86,17 +98,24 @@ async def _execute_export(
             result = await session.execute(stmt)
             cases = list(result.scalars().all())
 
-            # 2. 生成文件内容
+            # 2. 分流：needs_spec 占位用例 → 需求澄清清单，其余 → 主集
+            main_cases, clarification_cases = _split_cases(cases)
+
+            # 3. 生成文件内容
             if format == "markdown":
-                content, content_type, file_ext = _generate_markdown(cases), "text/markdown", "md"
+                content, content_type, file_ext = (
+                    _generate_markdown(main_cases, clarification_cases),
+                    "text/markdown",
+                    "md",
+                )
             else:
                 content, content_type, file_ext = (
-                    _generate_excel(cases),
+                    _generate_excel(main_cases, clarification_cases),
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     "xlsx",
                 )
 
-            # 3. 上传 MinIO
+            # 4. 上传 MinIO
             ensure_bucket_exists()
             object_name = f"exports/{export_id}.{file_ext}"
             file_data = content if isinstance(content, bytes) else content.encode("utf-8")
@@ -111,22 +130,25 @@ async def _execute_export(
 
             file_url = f"/{settings.minio_bucket}/{object_name}"
 
-            # 4. 更新 export_tasks 记录
+            # 5. 更新 export_tasks 记录
             update_stmt = (
                 update(ExportTask)
                 .where(ExportTask.id == UUID(export_id))
                 .values(
                     status="completed",
                     file_url=file_url,
-                    total_cases=len(cases),
+                    total_cases=len(main_cases),
                     completed_at=datetime.now(timezone.utc),
                 )
             )
             await session.execute(update_stmt)
             await session.commit()
 
-        logger.info("Export %s completed: %d cases, format=%s", export_id, len(cases), format)
-        return {"status": "completed", "export_id": export_id, "total_cases": len(cases)}
+        logger.info(
+            "Export %s completed: %d main + %d clarification cases, format=%s",
+            export_id, len(main_cases), len(clarification_cases), format,
+        )
+        return {"status": "completed", "export_id": export_id, "total_cases": len(main_cases)}
 
     except Exception as e:
         error_msg = f"{type(e).__name__}: {str(e)}"
@@ -149,7 +171,7 @@ async def _execute_export(
         return {"status": "failed", "export_id": export_id, "error": error_msg}
 
 
-def _generate_markdown(cases: list) -> str:
+def _generate_markdown(cases: list, clarification: list | None = None) -> str:
     """将用例列表生成 Markdown 格式"""
     lines: list[str] = ["# 测试用例导出\n"]
     lines.append(f"导出时间: {datetime.now(timezone.utc).isoformat()}\n")
@@ -193,15 +215,29 @@ def _generate_markdown(cases: list) -> str:
 
         lines.append("---\n")
 
+    if clarification:
+        lines.append("## 需求澄清清单（待 PM 确认，未计入可执行用例）\n")
+        lines.append("| 序号 | 标题 | verdict | 判定理由 | PRD依据 |\n")
+        lines.append("| --- | --- | --- | --- | --- |\n")
+        for i, c in enumerate(clarification, 1):
+            v = getattr(c, "verification", None) or {}
+            if isinstance(v, dict):
+                rationale = v.get("rationale", "")
+                evidence = v.get("prd_evidence", "")
+            else:
+                rationale = ""
+                evidence = ""
+            verdict = getattr(c, "verdict", "") or ""
+            lines.append(f"| {i} | {c.title} | {verdict} | {rationale} | {evidence} |\n")
+
     return "\n".join(lines)
 
 
-def _generate_excel(cases: list) -> bytes:
+def _generate_excel(cases: list, clarification: list | None = None) -> bytes:
     """将用例列表生成 Excel 格式（使用 openpyxl）"""
     try:
         from openpyxl import Workbook
     except ImportError:
-        # 降级为 CSV
         return _generate_csv_fallback(cases)
 
     wb = Workbook()
@@ -219,6 +255,19 @@ def _generate_excel(cases: list) -> bytes:
         dimensions = _format_field(case.dimensions)
 
         ws.append([i, case.title, case.priority, preconditions, steps, expected, case.trust_level, dimensions])
+
+    if clarification:
+        ws2 = wb.create_sheet("需求澄清清单")
+        ws2.append(["序号", "标题", "verdict", "判定理由", "PRD依据"])
+        for i, c in enumerate(clarification, 1):
+            v = getattr(c, "verification", None) or {}
+            if isinstance(v, dict):
+                rationale = v.get("rationale", "")
+                evidence = v.get("prd_evidence", "")
+            else:
+                rationale = ""
+                evidence = ""
+            ws2.append([i, c.title, getattr(c, "verdict", "") or "", rationale, evidence])
 
     output = io.BytesIO()
     wb.save(output)
