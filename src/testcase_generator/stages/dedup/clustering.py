@@ -224,16 +224,16 @@ def find_duplicates(
             for i in range(n):
                 for j in range(i + 1, n):
                     s = float(sim[i, j])
-                    if s < 1.0 - 1e-12 and s < semantic_threshold:
-                        # s≈1 留给 _protected 判（同向量但边界值不同的对需保护）
+                    if s < semantic_threshold:
                         continue
                     a, b = v_ids[i], v_ids[j]
                     if _find(a) == _find(b):
                         continue
                     if _protected(a, b):
                         continue
-                    # 跨 feature_id 用更严阈值（仿词面"跨维严/同维松"控误折叠）
-                    same_tp = bool(c.feature_id) and feature_of[a] == feature_of[b]
+                    # 跨 feature_id 用更严阈值（仿词面"跨维严/同维松"控误折叠）。
+                    # same_tp 必须基于当前对 (a,b) 自身判定，禁止引用循环外变量。
+                    same_tp = bool(feature_of[a]) and feature_of[a] == feature_of[b]
                     thr = semantic_threshold if same_tp else semantic_cross_tp_threshold
                     if s >= thr:
                         _union(a, b)
