@@ -153,8 +153,17 @@ def _resolve_quote(q: str, r: str, expected: str, index: SectionIndex) -> _Resol
     )
 
 
-def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex | None = None) -> Provenance:
-    """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。"""
+def derive_grounded_provenance(
+    llm_case,
+    parsed_context,
+    *,
+    index: SectionIndex | None = None,
+    quote_cache: dict | None = None,
+) -> Provenance:
+    """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。
+
+    quote_cache: 传入时，同一归一化 quote 在 batch 内只解析一次，结果复用，消除同源抖动。
+    """
     if index is None:
         index = build_section_index(parsed_context)
 
@@ -168,7 +177,13 @@ def derive_grounded_provenance(llm_case, parsed_context, *, index: SectionIndex 
         r = (getattr(step, "source_ref", None) or "").strip()
         if not q:
             continue
-        result = _resolve_quote(q, r, getattr(step, "expected_result", ""), index)
+        key = _normalize(q)
+        if quote_cache is not None and key in quote_cache:
+            result = quote_cache[key]
+        else:
+            result = _resolve_quote(q, r, getattr(step, "expected_result", ""), index)
+            if quote_cache is not None:
+                quote_cache[key] = result
         for k in result.counts_keys:
             counts[k] += 1
         if result.quote_text is not None:
