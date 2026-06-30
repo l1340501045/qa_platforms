@@ -492,6 +492,11 @@ async def generate_cases(
                         provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
 
+                    from src.testcase_generator.stages.write_cases.length_check import check_step_lengths
+                    _len_warn = check_step_lengths([{"action": s.action, "input_data": s.input_data, "expected_result": s.expected_result} for s in llm_case.steps])
+                    if _len_warn:
+                        confidence_note = ((confidence_note or "") + " | " + "；".join(_len_warn)).strip(" |")
+
                     steps = [
                         TestStep(
                             step_number=s.step_number,
