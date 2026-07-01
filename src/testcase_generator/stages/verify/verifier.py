@@ -48,6 +48,10 @@ _RECONCILE_STRICTNESS: dict[str, int] = {
     "conflict": 3,
 }
 
+# 5a 改判 conflict 的 rationale 标记，写入与 summarize 判定共享同一常量，
+# 避免 rationale 文案改动导致 reconciled_conflict 静默漏计/误计。
+_RECONCILE_RATIONALE_TAG = "同构一致化"
+
 # 单批最多核验的用例条数（控制单次输出长度，规避网关超时；不减少总数，分批聚合）
 MAX_CASES_PER_BATCH = 15
 
@@ -218,11 +222,14 @@ def reconcile_verdicts(
             for case_id in case_ids:
                 original = reconciled[case_id]
                 rationale = original.rationale or ""
-                rationale = f"{rationale}（同构一致化：簇内多数 → {verdict}）"
+                rationale = f"{rationale}（{_RECONCILE_RATIONALE_TAG}：簇内多数 → {verdict}）"
                 # 衍生证据字段一致化：新 verdict≠conflict 时清空 conflict 依据，避免
                 # verdict=ungrounded 却残留 conflicting_refs/subject 的自相矛盾数据；
                 # 新 verdict=conflict 时保留原字段（升级路径原本就无 refs、保持 False/空，
                 # 不伪造跨节冲突依据，仅靠 rationale 追溯，summarize 单列 reconciled_conflict）。
+                # prd_evidence 用空串而非 None：export_task._review_row 用 .get("prd_evidence","")
+                # 读它进待修正清单，None 会被渲染成字面 "None"，空串才正确显示空。
+                # unsupported_assertions 语义跨 verdict 兼容（"无支撑断言"对 ungrounded/undefined 仍成立），保留。
                 if verdict == "conflict":
                     field_updates: dict = {
                         "verdict": verdict,
@@ -240,6 +247,7 @@ def reconcile_verdicts(
                         "conflicting_refs": [],
                         "conflict_subject_case": "",
                         "conflict_subject_prd": "",
+                        "prd_evidence": "",
                     }
                 reconciled[case_id] = original.model_copy(update=field_updates)
 
@@ -479,7 +487,7 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
                     },
                 )
                 slot["case_count"] += 1
-        elif v.verdict == "conflict" and "同构一致化" in (v.rationale or ""):
+        elif v.verdict == "conflict" and _RECONCILE_RATIONALE_TAG in (v.rationale or ""):
             # 5a 升级出的 conflict：无真实跨节冲突依据，单列计数，不混入 cross_section_conflicts，
             # 使 by_verdict.conflict 与 cross_section_conflicts 的差可解释、不污染 5b 观测基线。
             n_reconciled_conflict += 1

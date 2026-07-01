@@ -19,6 +19,7 @@ def _verification(
     mismatch: bool = False,
     rationale: str = "原判理由",
     conflict_refs: bool = False,
+    prd_evidence: str | None = None,
 ) -> CaseVerification:
     bucket = {
         "grounded": "main",
@@ -39,6 +40,7 @@ def _verification(
         ),
         conflict_subject_case="用例对象" if conflict_refs else "",
         conflict_subject_prd="PRD对象" if conflict_refs else "",
+        prd_evidence=prd_evidence,
     )
 
 
@@ -222,6 +224,63 @@ def test_summarize_reports_reconciled_conflict_separately():
     assert summary["by_verdict"]["conflict"] == 2  # R1 + R2 都是 conflict
     assert summary["cross_section_conflicts"] == 1  # 仅 R1 真实跨节冲突
     assert summary["reconciled_conflict"] == 1  # R2 是 5a 升级出的 conflict
+
+
+def test_reconcile_mismatch_cluster_clears_conflict_evidence_when_downgraded():
+    """🟡#3 边界①：mismatch 簇内带 refs 的 conflict 被 ④ mismatch 剔除降级后，
+    conflict 衍生证据字段（含 prd_evidence）必须清空。mismatch 降级与多数票降级
+    共用同一 else 清字段分支，本用例显式锁定 mismatch 路径下的字段清理。"""
+    cases = [
+        _case("C1", title="监测链接自动绑定预置hash01"),
+        _case("C2", title="监测链接自动绑定预置hash02"),
+        _case("C3", title="监测链接自动绑定预置hash03"),
+    ]
+    results = {
+        # C1 是带完整 conflict 证据 + mismatch 标记的 conflict，会被 mismatch 协同剔除降级
+        "C1": _verification("conflict", mismatch=True, conflict_refs=True, prd_evidence="PRD反驳原文"),
+        "C2": _verification("ungrounded"),
+        "C3": _verification("ungrounded"),
+    }
+
+    reconciled = reconcile_verdicts(results, cases, sim=0.92)
+
+    # C1 因 mismatch 剔除 conflict 候选、降为 ungrounded（簇内非 conflict 多数）
+    assert reconciled["C1"].verdict == "ungrounded"
+    assert reconciled["C1"].conflict_entity_mismatch is True  # mismatch 传播
+    assert reconciled["C1"].cross_section_conflict is False
+    assert reconciled["C1"].conflicting_refs == []
+    assert reconciled["C1"].conflict_subject_case == ""
+    assert reconciled["C1"].conflict_subject_prd == ""
+    assert reconciled["C1"].prd_evidence == ""  # 反驳证据清空，不残留进待修正清单
+
+
+def test_reconcile_preserves_real_conflict_refs_when_verdict_stays_conflict():
+    """🟡#3 边界②：升级簇内原 conflict 项（带真实 refs）保持 conflict 时，
+    conflicting_refs 必须保留——反向断言"保持 conflict 时 refs 不被误清"。"""
+    cases = [
+        _case("C1", title="投放方式为付费直投时自动绑定IAP预置链接01"),
+        _case("C2", title="投放方式为付费直投时自动绑定IAP预置链接02"),
+        _case("C3", title="投放方式为付费直投时自动绑定IAP预置链接03"),
+    ]
+    results = {
+        "C1": _verification("conflict", conflict_refs=True, prd_evidence="PRD反驳原文"),
+        "C2": _verification("conflict", conflict_refs=True, prd_evidence="PRD反驳原文"),
+        "C3": _verification("grounded"),
+    }
+
+    reconciled = reconcile_verdicts(results, cases, sim=0.92)
+
+    # C1/C2 原 conflict 且簇内多数仍 conflict → 保持 conflict，真实 refs 必须保留
+    assert reconciled["C1"].verdict == "conflict"
+    assert reconciled["C2"].verdict == "conflict"
+    assert len(reconciled["C1"].conflicting_refs) == 1
+    assert len(reconciled["C2"].conflicting_refs) == 1
+    assert reconciled["C1"].cross_section_conflict is True
+    assert reconciled["C1"].prd_evidence == "PRD反驳原文"  # 保持 conflict 时证据保留
+    # C3 由 grounded 升级为 conflict，但不伪造 refs（无真实跨节依据）
+    assert reconciled["C3"].verdict == "conflict"
+    assert reconciled["C3"].conflicting_refs == []
+    assert reconciled["C3"].cross_section_conflict is False
 
 
 def test_offline_eval_uses_module_as_feature_fallback():
