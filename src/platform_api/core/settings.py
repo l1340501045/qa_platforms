@@ -140,7 +140,9 @@ class Settings(BaseSettings):
     # ── verify conflict 子集复判（多次投票降抖）───────────────────────────────
     # 开：仅对首轮 verdict=conflict 的用例追加复判，按多数票覆盖首轮 verdict 后再走门控。
     # 关：单次 verify 行为不变。revote_n 表示总投票次数，默认 3。默认开启（仅 conflict 子集，
-    # 成本可控）；如需回退置 False。5b 真实 LLM resume 观测暂未做，详见 roadmap ⑤。
+    # 成本可控）；如需回退置 False。⚠️ 5b 默认开是"未评估的主动决策"：5b 无法离线评估（需真实
+    # LLM），与 5a"评估后开"标准不对齐；成本为每个含 conflict batch 额外 (revote_n-1) 次合并调用。
+    # 待 Task 5 关/开对比 by_verdict.conflict 通过后视情保留或回退（详见 roadmap ⑤）。
     conflict_revote_enabled: bool = True
     revote_n: int = 3
 

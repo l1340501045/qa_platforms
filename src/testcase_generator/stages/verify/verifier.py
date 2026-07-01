@@ -219,14 +219,29 @@ def reconcile_verdicts(
                 original = reconciled[case_id]
                 rationale = original.rationale or ""
                 rationale = f"{rationale}（同构一致化：簇内多数 → {verdict}）"
-                reconciled[case_id] = original.model_copy(
-                    update={
+                # 衍生证据字段一致化：新 verdict≠conflict 时清空 conflict 依据，避免
+                # verdict=ungrounded 却残留 conflicting_refs/subject 的自相矛盾数据；
+                # 新 verdict=conflict 时保留原字段（升级路径原本就无 refs、保持 False/空，
+                # 不伪造跨节冲突依据，仅靠 rationale 追溯，summarize 单列 reconciled_conflict）。
+                if verdict == "conflict":
+                    field_updates: dict = {
                         "verdict": verdict,
                         "bucket": bucket,
                         "rationale": rationale,
                         "conflict_entity_mismatch": original.conflict_entity_mismatch or has_mismatch,
                     }
-                )
+                else:
+                    field_updates = {
+                        "verdict": verdict,
+                        "bucket": bucket,
+                        "rationale": rationale,
+                        "conflict_entity_mismatch": original.conflict_entity_mismatch or has_mismatch,
+                        "cross_section_conflict": False,
+                        "conflicting_refs": [],
+                        "conflict_subject_case": "",
+                        "conflict_subject_prd": "",
+                    }
+                reconciled[case_id] = original.model_copy(update=field_updates)
 
     return reconciled
 
@@ -441,6 +456,7 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
     by_bucket: dict[str, int] = defaultdict(int)
     conflict_pairs: dict[tuple, dict] = {}
     n_conflict_cases = 0
+    n_reconciled_conflict = 0
     for case_id, v in verifications.items():
         by_verdict[v.verdict] += 1
         by_bucket[v.bucket] += 1
@@ -463,10 +479,15 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
                     },
                 )
                 slot["case_count"] += 1
+        elif v.verdict == "conflict" and "同构一致化" in (v.rationale or ""):
+            # 5a 升级出的 conflict：无真实跨节冲突依据，单列计数，不混入 cross_section_conflicts，
+            # 使 by_verdict.conflict 与 cross_section_conflicts 的差可解释、不污染 5b 观测基线。
+            n_reconciled_conflict += 1
     return {
         "total": len(verifications),
         "by_verdict": dict(by_verdict),
         "by_bucket": dict(by_bucket),
         "cross_section_conflicts": n_conflict_cases,
+        "reconciled_conflict": n_reconciled_conflict,
         "prd_conflict_list": list(conflict_pairs.values()),
     }

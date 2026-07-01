@@ -18,6 +18,7 @@ def _verification(
     *,
     mismatch: bool = False,
     rationale: str = "原判理由",
+    conflict_refs: bool = False,
 ) -> CaseVerification:
     bucket = {
         "grounded": "main",
@@ -25,11 +26,19 @@ def _verification(
         "ungrounded": "needs_spec",
         "undefined": "needs_spec",
     }[verdict]
+    from src.testcase_generator.schemas.test_case import CrossSectionConflictRef
+
     return CaseVerification(
         verdict=verdict,
         bucket=bucket,
         rationale=rationale,
         conflict_entity_mismatch=mismatch,
+        cross_section_conflict=conflict_refs,
+        conflicting_refs=(
+            [CrossSectionConflictRef(ref_a="§7.2", quote_a="q1", ref_b="§7.3", quote_b="q2")] if conflict_refs else []
+        ),
+        conflict_subject_case="用例对象" if conflict_refs else "",
+        conflict_subject_prd="PRD对象" if conflict_refs else "",
     )
 
 
@@ -121,6 +130,98 @@ def test_reconcile_verdicts_skips_empty_feature_id():
 
     assert reconciled["C1"].verdict == "grounded"
     assert reconciled["C2"].verdict == "conflict"
+
+
+def test_reconcile_clears_conflict_evidence_fields_when_downgraded():
+    """🔴#1 降级：原 conflict（带 refs/subject/cross_section_conflict）被簇内多数降为
+    ungrounded 时，conflict 衍生证据字段必须清空，避免 verdict=ungrounded 却残留
+    冲突依据的自相矛盾数据。"""
+    cases = [
+        _case("C1", title="监测链接自动绑定预置hash01"),
+        _case("C2", title="监测链接自动绑定预置hash02"),
+        _case("C3", title="监测链接自动绑定预置hash03"),
+    ]
+    results = {
+        "C1": _verification("conflict", conflict_refs=True),
+        "C2": _verification("ungrounded"),
+        "C3": _verification("ungrounded"),
+    }
+
+    reconciled = reconcile_verdicts(results, cases, sim=0.92)
+
+    # C1 由 conflict 降级为 ungrounded（簇内多数 ungrounded）
+    assert reconciled["C1"].verdict == "ungrounded"
+    # 衍生证据字段必须清空——不得残留 conflict 依据
+    assert reconciled["C1"].cross_section_conflict is False
+    assert reconciled["C1"].conflicting_refs == []
+    assert reconciled["C1"].conflict_subject_case == ""
+    assert reconciled["C1"].conflict_subject_prd == ""
+
+
+def test_reconcile_upgrade_to_conflict_does_not_fabricate_cross_section_refs():
+    """🔴#1 升级：原 grounded 被簇内多数升为 conflict 时，不得伪造 cross_section_conflict
+    / conflicting_refs（无真实跨节冲突依据），cross_section_conflict 保持 False；
+    verdict=conflict 仅由 rationale 的"同构一致化"追溯，避免污染 summarize 的
+    cross_section_conflicts 计数。"""
+    cases = [
+        _case("C1", title="投放方式为付费直投时自动绑定IAP预置链接01"),
+        _case("C2", title="投放方式为付费直投时自动绑定IAP预置链接02"),
+        _case("C3", title="投放方式为付费直投时自动绑定IAP预置链接03"),
+    ]
+    results = {
+        "C1": _verification("conflict", conflict_refs=True),
+        "C2": _verification("conflict", conflict_refs=True),
+        "C3": _verification("grounded"),
+    }
+
+    reconciled = reconcile_verdicts(results, cases, sim=0.92)
+
+    # C3 由 grounded 升级为 conflict（簇内多数 conflict）
+    assert reconciled["C3"].verdict == "conflict"
+    assert reconciled["C3"].bucket == "to_fix"
+    # 不得伪造跨节冲突依据——C3 原本就没有 refs
+    assert reconciled["C3"].cross_section_conflict is False
+    assert reconciled["C3"].conflicting_refs == []
+    assert "同构一致化" in reconciled["C3"].rationale
+
+
+def test_summarize_reports_reconciled_conflict_separately():
+    """🔴#1 summarize：5a 升级出的 conflict（verdict=conflict 但 cross_section_conflict=False
+    且 rationale 含"同构一致化"）应单列 reconciled_conflict 计数，不混入 cross_section_conflicts，
+    使 by_verdict.conflict 与 cross_section_conflicts 的差可解释、不污染 5b 观测基线。"""
+    from src.testcase_generator.stages.verify.verifier import summarize
+
+    verifications = {
+        # 真实跨节 conflict（有 refs）——计入 cross_section_conflicts
+        "R1": CaseVerification(
+            verdict="conflict",
+            bucket="to_fix",
+            rationale="跨节冲突",
+            cross_section_conflict=True,
+            conflicting_refs=[
+                __import__(
+                    "src.testcase_generator.schemas.test_case",
+                    fromlist=["CrossSectionConflictRef"],
+                ).CrossSectionConflictRef(ref_a="§7.2", quote_a="q1", ref_b="§7.3", quote_b="q2")
+            ],
+        ),
+        # 5a 升级出的 conflict（无 refs、rationale 含同构一致化）——不计入 cross_section_conflicts，
+        # 应计入 reconciled_conflict
+        "R2": CaseVerification(
+            verdict="conflict",
+            bucket="to_fix",
+            rationale="原判（同构一致化：簇内多数 → conflict）",
+            cross_section_conflict=False,
+            conflicting_refs=[],
+        ),
+        "R3": CaseVerification(verdict="grounded", bucket="main", rationale="有支撑"),
+    }
+
+    summary = summarize(verifications)
+
+    assert summary["by_verdict"]["conflict"] == 2  # R1 + R2 都是 conflict
+    assert summary["cross_section_conflicts"] == 1  # 仅 R1 真实跨节冲突
+    assert summary["reconciled_conflict"] == 1  # R2 是 5a 升级出的 conflict
 
 
 def test_offline_eval_uses_module_as_feature_fallback():
