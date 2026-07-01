@@ -54,7 +54,7 @@
 - [x] 行业调研
 - [x] 五件套顺序与成本策略（本文档）
 - [x] ① spec + plan + 自审 →（Claude Code）**已执行完成** ✅
-- [x] ② spec + plan + 自审（`2026-06-30-provenance-quote-cache-*`）← 执行中（Claude Code）
+- [x] ② spec + plan + 自审（`2026-06-30-provenance-quote-cache-*`）→（Claude Code）**已执行完成** ✅（抽 `_resolve_quote` 纯函数 + `quote_cache` batch 级共享 + 单测；提交 `9add645`→`29d1a43`→`29f1a7b`→`c2471a6`）
 - [x] ③ spec + plan + 自审（`2026-06-30-semantic-dedup-*`）→（Claude Code）**已执行完成** ✅
   - 离线评估（3185 条，`scripts/dedup_offline_eval.py`）：纯词面 duplicate 228 / unique 2957（7.2%）→ hybrid duplicate 1494 / **unique 1691**（46.9%），优于 ~2000 目标。
   - 抽样 10 个仅语义折叠对：7 真同义、3 误折叠（含 1 边界值对 #2「10条不拆 vs 12条拆3包」）——误折叠靠软标记可恢复 + 生产 safe_dedup 护栏兜底；阈值 0.86 对"数字集不同但语义极近"偏松，量大时可上调。
