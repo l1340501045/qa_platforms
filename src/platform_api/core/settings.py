@@ -128,6 +128,21 @@ class Settings(BaseSettings):
     conflict_entity_gate_enabled: bool = False
     # 词法兜底 Jaccard 阈值：>= 阈值判同实体（不撤），< 阈值判不同实体（撤销）。
     conflict_entity_jaccard_threshold: float = 0.5
+    # ── verify 同构 verdict 一致化（判后聚簇，多数票统一）───────────────────────
+    # 开：verify_cases 聚合后，在同 feature 内对高相似标题用例做 verdict 一致化。
+    # 关：聚合结果不变，保持现状。离线评估（3185 条，阈值 0.93）已确认 14/14 真同构簇
+    # 改判正确、误簇切散，默认开启；如需回退置 False。
+    verdict_reconcile_enabled: bool = True
+    # 默认 0.93：离线评估（batch 278c211f, 3185 条）发现 0.92 会把 IAP(35宏参数) 与
+    # IAA(30宏参数) 这类仅差产品代号/数值的高相似标题误并（相似度 0.9231），导致 grounded
+    # 被错误升级为 conflict。0.93 可切散该误簇且保留全部真同构簇（改判 15→13，详见 roadmap ⑤）。
+    reconcile_sim: float = 0.93
+    # ── verify conflict 子集复判（多次投票降抖）───────────────────────────────
+    # 开：仅对首轮 verdict=conflict 的用例追加复判，按多数票覆盖首轮 verdict 后再走门控。
+    # 关：单次 verify 行为不变。revote_n 表示总投票次数，默认 3。默认开启（仅 conflict 子集，
+    # 成本可控）；如需回退置 False。5b 真实 LLM resume 观测暂未做，详见 roadmap ⑤。
+    conflict_revote_enabled: bool = True
+    revote_n: int = 3
 
     # ── Hybrid 跨功能点规格检索（关键词 + 向量 + RRF）─────────────────────────────
     # 关闭时 CrossFeatureIndex 行为与改造前完全一致（纯关键词，不调 embedding，零额外开销）。

@@ -10,8 +10,9 @@ import asyncio
 import json
 import logging
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import List
 
 from pydantic import BaseModel, Field
@@ -38,6 +39,13 @@ _VERDICT_BUCKET: dict[str, Bucket] = {
     "conflict": "to_fix",
     "ungrounded": "needs_spec",
     "undefined": "needs_spec",
+}
+
+_RECONCILE_STRICTNESS: dict[str, int] = {
+    "grounded": 0,
+    "ungrounded": 1,
+    "undefined": 2,
+    "conflict": 3,
 }
 
 # 单批最多核验的用例条数（控制单次输出长度，规避网关超时；不减少总数，分批聚合）
@@ -109,6 +117,7 @@ def _normalize_verdict(raw: str) -> Verdict:
 # 但 Jaccard=|{链,接}|/|{监,测,链,接,投,放}|=2/6≈0.33<0.5 → 判不同实体（核心护栏，
 # 不可退化为"有无公共 token"，否则会把不同实体误判同实体、门控失效）。
 _ENTITY_KEEP = re.compile(r"[一-鿿a-zA-Z]+")
+_TITLE_KEEP = re.compile(r"[一-鿿a-zA-Z0-9]+")
 
 
 def _normalize_entity(s: str) -> str:
@@ -132,6 +141,94 @@ def _same_entity(a: str, b: str, *, threshold: float | None = None) -> bool:
     jaccard = len(set_a & set_b) / len(union)
     thr = settings.conflict_entity_jaccard_threshold if threshold is None else threshold
     return jaccard >= thr
+
+
+def _normalize_title(s: str) -> str:
+    return "".join(_TITLE_KEEP.findall((s or "").lower()))
+
+
+def _choose_reconciled_verdict(verdicts: list[str]) -> Verdict:
+    counts = Counter(verdicts)
+    max_count = max(counts.values())
+    tied = [verdict for verdict, count in counts.items() if count == max_count]
+    return max(tied, key=lambda verdict: _RECONCILE_STRICTNESS.get(verdict, -1))  # type: ignore[return-value]
+
+
+def reconcile_verdicts(
+    results: dict[str, CaseVerification],
+    cases: list[VerifyCase],
+    *,
+    sim: float | None = None,
+) -> dict[str, CaseVerification]:
+    """同 feature 高相似用例 verdict 判后一致化。"""
+    threshold = settings.reconcile_sim if sim is None else sim
+    reconciled = dict(results)
+    cases_by_feature: dict[str, list[VerifyCase]] = defaultdict(list)
+    for c in cases:
+        if c.feature_id and c.case_id in results and results[c.case_id].verdict in _RECONCILE_STRICTNESS:
+            cases_by_feature[c.feature_id].append(c)
+
+    for feature_cases in cases_by_feature.values():
+        if len(feature_cases) < 2:
+            continue
+
+        parent = {c.case_id: c.case_id for c in feature_cases}
+
+        def find(case_id: str) -> str:
+            while parent[case_id] != case_id:
+                parent[case_id] = parent[parent[case_id]]
+                case_id = parent[case_id]
+            return case_id
+
+        def union(a: str, b: str) -> None:
+            root_a, root_b = find(a), find(b)
+            if root_a != root_b:
+                parent[root_b] = root_a
+
+        normalized_titles = {c.case_id: _normalize_title(c.title) for c in feature_cases}
+        for idx, left in enumerate(feature_cases):
+            for right in feature_cases[idx + 1 :]:
+                title_left = normalized_titles[left.case_id]
+                title_right = normalized_titles[right.case_id]
+                if not title_left or not title_right:
+                    continue
+                if SequenceMatcher(None, title_left, title_right).ratio() >= threshold:
+                    union(left.case_id, right.case_id)
+
+        clusters: dict[str, list[str]] = defaultdict(list)
+        for c in feature_cases:
+            clusters[find(c.case_id)].append(c.case_id)
+
+        for case_ids in clusters.values():
+            if len(case_ids) < 2:
+                continue
+
+            cluster_results = [reconciled[case_id] for case_id in case_ids]
+            has_mismatch = any(item.conflict_entity_mismatch for item in cluster_results)
+            verdicts = [item.verdict for item in cluster_results if item.verdict in _RECONCILE_STRICTNESS]
+            if has_mismatch:
+                verdicts = [verdict for verdict in verdicts if verdict != "conflict"]
+                if not verdicts:
+                    verdicts = ["ungrounded"]
+            if not verdicts:
+                continue
+
+            verdict = _choose_reconciled_verdict(verdicts)
+            bucket = _VERDICT_BUCKET.get(verdict, "needs_spec")
+            for case_id in case_ids:
+                original = reconciled[case_id]
+                rationale = original.rationale or ""
+                rationale = f"{rationale}（同构一致化：簇内多数 → {verdict}）"
+                reconciled[case_id] = original.model_copy(
+                    update={
+                        "verdict": verdict,
+                        "bucket": bucket,
+                        "rationale": rationale,
+                        "conflict_entity_mismatch": original.conflict_entity_mismatch or has_mismatch,
+                    }
+                )
+
+    return reconciled
 
 
 def _case_payload(c: VerifyCase) -> dict:
@@ -193,28 +290,78 @@ async def verify_cases(
 
     async def _verify_batch(feature_id: str, batch: list[VerifyCase]) -> dict[str, CaseVerification]:
         sections = prd_sections_by_feature.get(feature_id, [])
-        user_content = json.dumps(
-            {
-                "prd_sections": _sections_payload(sections),
-                "test_cases": [_case_payload(c) for c in batch],
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+
+        def _build_user_content(batch_cases: list[VerifyCase]) -> str:
+            return json.dumps(
+                {
+                    "prd_sections": _sections_payload(sections),
+                    "test_cases": [_case_payload(c) for c in batch_cases],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+
         async with semaphore:
-            try:
-                out = await get_llm_client().generate_structured(
+            client = get_llm_client()
+
+            async def _call_llm(batch_cases: list[VerifyCase]) -> _VerifyLLMOutput:
+                return await client.generate_structured(
                     system_prompt=system_prompt,
-                    user_content=user_content,
+                    user_content=_build_user_content(batch_cases),
                     output_schema=_VerifyLLMOutput,
                     temperature=0.1,
                     model=settings.llm_verify_model or None,
                 )
+
+            try:
+                out = await _call_llm(batch)
             except Exception as e:  # noqa: BLE001 — 单批失败隔离
                 logger.error("verify 失败 (feature=%s, n=%d): %s", feature_id, len(batch), e)
                 return {c.case_id: CaseVerification(verdict="unverified", bucket="main") for c in batch}
 
         by_id = {v.case_id: v for v in out.verdicts}
+        if settings.conflict_revote_enabled and settings.revote_n > 1:
+            conflict_cases = [
+                c
+                for c in batch
+                if (initial := by_id.get(c.case_id)) is not None and _normalize_verdict(initial.verdict) == "conflict"
+            ]
+            if conflict_cases:
+                votes: dict[str, list[_CaseVerdict]] = {c.case_id: [by_id[c.case_id]] for c in conflict_cases}
+                async with semaphore:
+                    client = get_llm_client()
+
+                    async def _revote_llm() -> _VerifyLLMOutput:
+                        return await client.generate_structured(
+                            system_prompt=system_prompt,
+                            user_content=_build_user_content(conflict_cases),
+                            output_schema=_VerifyLLMOutput,
+                            temperature=0.1,
+                            model=settings.llm_verify_model or None,
+                        )
+
+                    for _ in range(settings.revote_n - 1):
+                        try:
+                            revote_out = await _revote_llm()
+                        except Exception as e:  # noqa: BLE001 — 复判失败不放大为整批失败
+                            logger.warning(
+                                "verify conflict 复判失败 (feature=%s, n=%d): %s",
+                                feature_id,
+                                len(conflict_cases),
+                                e,
+                            )
+                            continue
+                        for verdict in revote_out.verdicts:
+                            if verdict.case_id in votes:
+                                votes[verdict.case_id].append(verdict)
+
+                for case_id, case_votes in votes.items():
+                    verdict = _choose_reconciled_verdict([_normalize_verdict(v.verdict) for v in case_votes])
+                    chosen = next(
+                        (v for v in reversed(case_votes) if _normalize_verdict(v.verdict) == verdict),
+                        case_votes[-1],
+                    )
+                    by_id[case_id] = chosen.model_copy(update={"verdict": verdict})
         batch_result: dict[str, CaseVerification] = {}
         for c in batch:
             v = by_id.get(c.case_id)
@@ -283,6 +430,8 @@ async def verify_cases(
     batch_results = await asyncio.gather(*tasks)
     for br in batch_results:
         results.update(br)
+    if settings.verdict_reconcile_enabled:
+        results = reconcile_verdicts(results, cases)
     return results
 
 

@@ -64,4 +64,7 @@
   - GPT Review 修复 🔴-1（rubric 未受开关控制→抽独立常量仅开时注入，关时 rubric 层也零回归）+ 🟡-3（词法兜底不再覆盖 LLM `same_entity=True`，防误伤同实体但措辞分歧大的真 conflict）。
   - 待观测：Task 5 对 `278c211f` resume 重跑 verify（开关开），确认 §7.2 to_fix 显著下降、未误伤真 conflict——按用户决定暂缓，留待手动执行。
 - [x] ⑥ spec + plan + 自审（`2026-06-30-generation-convergence-*`）← 待交 Claude Code
-- [ ] ⑤ 同构同判（**依赖 ④**，待 ④ 做完再出，基于 ④ 后的 verifier 代码）
+- [x] ⑤ spec + plan + 自审（`2026-06-30-verdict-consistency-*`，基于 ④ 后 verifier）→（Cursor）**已落地代码，待观测** ✅
+  - 5a 离线评估（3185 条，`scripts/reconcile_offline_eval.py`）：audit JSONL 无生产态 `feature_id`，脚本使用 module 文件名近似 feature/章节粒度。**抽样 GO/NO-GO 已完成**：原阈值 0.92 下 changed_clusters=15 / changed_verdicts=15，14 簇改判正确（真同构抖动收敛：`32__提交时的绑定规则` 模块 7 对逐字同构用例 grounded/conflict 分裂统一为 conflict；6 对 grounded/ungrounded 平票取严统一为 ungrounded），但 **1 簇误聚类**——`验证IAP预置链接含35宏参数`(grounded) 与 `验证IAA预置链接含30宏参数`(conflict) 相似度 0.9231 刚过 0.92 被误并，grounded 被错误升级为 conflict（IAP/IAA 是不同产品、宏参数数也不同）。**决断**：阈值 0.92→**0.93**（切散该误簇且保留全部 14 真同构簇，changed 15→13、conflict +8→+7），`verdict_reconcile_enabled` 仍**默认关闭**留作灰度，待 5b resume 观测后视情启用。结论：5a 能力就绪、默认关、阈值 0.93。
+  - 5b 已提供 `conflict_revote_enabled` + `revote_n` 灰度复判能力，**默认已开启**（仅 conflict 子集、成本可控）；真实 LLM resume 观测**暂未做**（环境就绪但 `reverify_batch.py` 会删除重写该 batch 已落库数据 test_cases=3185/test_points=1141，按用户决断暂不跑），留待后续手动观测 by_verdict.conflict 翻转率。
+- [x] **五件套 spec/plan 全部配齐** ✅；下一步：各项执行完 → 跑 1 次大 PRD 终验对比 baseline（$100 ×1）
