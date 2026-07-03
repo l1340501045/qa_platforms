@@ -3,6 +3,10 @@
 .env.*
 !.env.example
 
+# ---- MasterGo 登录态（含 cookie）+ 迁移工具备份（绝不提交）----
+.mastergo_session/
+backup_*.content.md
+
 # ---- Python ----
 .venv/
 __pycache__/
@@ -31,9 +35,19 @@ Thumbs.db
 .opencode/
 .xflow/
 .qa_probe/
+.claude/
+.codex/
+.cursor/
+.trellis/workspace/
 .idea/
 .vscode/
 
 # ---- 日志 / 临时 ----
 *.log
+logs/*.pid
+.runtime/
+.audit/
+scripts/backups/
 tmp/
+
+# ---- 平台本地配置（不进入项目基线）----
