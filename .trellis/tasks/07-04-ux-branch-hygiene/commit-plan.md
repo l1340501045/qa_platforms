@@ -254,7 +254,6 @@ docs(quality): align roadmap and architecture notes
 - `docs/2026-06-30-semantic-dedup-review-notes.md`
 - `docs/testcase-generation-best-practice-roadmap.md`
 - `docs/plans/2026-06-23-feature-segmentation-llm-plan.md`
-- `docs/plans/2026-06-23-mastergo-prototype-source-plan.md`
 - `docs/plans/2026-06-25-cot-explicit-write-cases-plan.md`
 - `docs/plans/2026-06-26-clarification-resolves-conflict-plan.md`
 - `docs/plans/2026-06-26-grounded-provenance-cross-section-fallback.md`
