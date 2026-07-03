@@ -4,10 +4,11 @@ interface SplitPaneProps {
   left: ReactNode;
   right: ReactNode;
   leftWidth?: number;
+  rightMinWidth?: number;
   gap?: number;
 }
 
-function SplitPane({ left, right, leftWidth = 280, gap = 20 }: SplitPaneProps) {
+function SplitPane({ left, right, leftWidth = 280, rightMinWidth = 360, gap = 20 }: SplitPaneProps) {
   return (
     <div
       style={{
@@ -28,7 +29,7 @@ function SplitPane({ left, right, leftWidth = 280, gap = 20 }: SplitPaneProps) {
       >
         {left}
       </aside>
-      <section style={{ flex: '1 1 360px', minWidth: 0 }}>{right}</section>
+      <section style={{ flex: `1 1 ${rightMinWidth}px`, minWidth: 0 }}>{right}</section>
     </div>
   );
 }

@@ -10,12 +10,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
-  Card,
-  Col,
   Input,
   Modal,
   Popconfirm,
-  Row,
   Space,
   Spin,
   Typography,
@@ -24,6 +21,8 @@ import {
 
 import { getCaseTree } from '../services/systemApi';
 import CaseDetailDrawer from './CaseDetailDrawer';
+import SplitPane from './layout/SplitPane';
+import { layoutTokens } from './layout/tokens';
 import {
   findCaseAssetNode,
   getCasesForNode,
@@ -42,6 +41,22 @@ import type {
 
 const { Text } = Typography;
 const { TextArea } = Input;
+
+const sectionStyle: React.CSSProperties = {
+  minHeight: 360,
+  padding: 16,
+  border: `1px solid ${layoutTokens.border}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surface,
+};
+
+const sectionHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 12,
+  alignItems: 'center',
+  marginBottom: 12,
+};
 
 type ReviewAction = 'confirmed' | 'needs_modification' | 'deleted';
 
@@ -258,24 +273,42 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
 
   return (
     <Spin spinning={treeLoading}>
-      <Row gutter={16}>
-        <Col span={7}>
-          <Card title="文档 / 模块" size="small">
+      <SplitPane
+        leftWidth={320}
+        rightMinWidth={560}
+        gap={16}
+        left={
+          <div style={sectionStyle}>
+            <div style={sectionHeaderStyle}>
+              <div>
+                <Text strong>文档 / 模块</Text>
+                <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+                  选择范围后审查右侧用例
+                </Text>
+              </div>
+              <Text type="secondary">{caseAssetTree.root.count} 条</Text>
+            </div>
             <CaseAssetTree
               tree={caseAssetTree}
               selectedKey={selectedNodeKey}
               onSelect={setSelectedNodeKey}
               emptyDescription="暂无用例"
-              maxHeight="calc(100vh - 360px)"
+              height={480}
+              maxHeight="min(560px, calc(100vh - 420px))"
             />
-          </Card>
-        </Col>
-        <Col span={17}>
-          <Card
-            title={listTitle}
-            size="small"
-            extra={<Text type="secondary">{selectedCases.length} 条</Text>}
-          >
+          </div>
+        }
+        right={
+          <div style={sectionStyle}>
+            <div style={sectionHeaderStyle}>
+              <div style={{ minWidth: 0 }}>
+                <Text strong>{listTitle}</Text>
+                <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+                  点击标题查看证据、步骤和期望结果
+                </Text>
+              </div>
+              <Text type="secondary" style={{ flexShrink: 0 }}>{selectedCases.length} 条</Text>
+            </div>
             <CaseAssetTable
               cases={selectedCases}
               titleColumnLabel="标题"
@@ -285,9 +318,9 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
               renderActions={editable ? renderReviewActions : undefined}
               pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
             />
-          </Card>
-        </Col>
-      </Row>
+          </div>
+        }
+      />
 
       <Modal
         title="需修改 — 填写修改意见"

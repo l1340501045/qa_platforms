@@ -29,7 +29,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
   showIterationTag = false,
   onOpenCase,
   renderActions,
-  actionColumnWidth = 200,
+  actionColumnWidth = 160,
   pagination,
   rowClickToOpen = false,
 }) => {
@@ -61,20 +61,20 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: '优先级',
         dataIndex: 'priority',
         key: 'priority',
-        width: 80,
+        width: 74,
         render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
       },
       {
         title: '质量',
         key: 'quality',
-        width: 150,
+        width: 138,
         render: (_, record) => renderCaseQualityTags(record),
       },
       {
         title: '可信度',
         dataIndex: 'trust_level',
         key: 'trust_level',
-        width: 90,
+        width: 86,
         render: (val: number) => {
           const { color, label } = getTrustDisplay(val);
           return <span style={{ color, fontWeight: 600 }}>{label}</span>;
@@ -84,7 +84,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: '状态',
         dataIndex: 'review_status',
         key: 'review_status',
-        width: 100,
+        width: 92,
         render: (val: ReviewStatus) => {
           const cfg = REVIEW_TAG[val];
           return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -111,6 +111,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
       dataSource={cases}
       pagination={pagination}
       size="small"
+      scroll={{ x: renderActions ? 680 : 620 }}
       onRow={(record) => ({
         onClick: rowClickToOpen ? () => onOpenCase?.(record.id) : undefined,
         style: rowClickToOpen ? { cursor: 'pointer' } : undefined,

@@ -11,11 +11,14 @@ import {
   Card,
   Input,
   Modal,
+  Progress,
   Radio,
   Select,
+  Space,
   Spin,
   Steps,
   Tag,
+  Typography,
   message,
 } from 'antd';
 import {
@@ -29,8 +32,10 @@ import { useTestcaseStore } from '../../stores/testcaseStore';
 import CaseTreeReview from '../../components/CaseTreeReview';
 import EmptyState from '../../components/common/EmptyState';
 import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
 import type {
   BatchStatus,
   CaseBucket,
@@ -43,6 +48,7 @@ import type {
 } from '../../types';
 
 const { TextArea } = Input;
+const { Text } = Typography;
 
 export function answerFromChoice(q: OpenQuestion, choice: string, custom: string): string {
   const d = q.conflict_detail;
@@ -83,6 +89,61 @@ const STATUS_BADGE_MAP: Record<BatchStatus, { status: 'default' | 'processing' |
   archived: { status: 'success', text: '已落库' },
   failed: { status: 'error', text: '失败' },
 };
+
+const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  pending: '待审',
+  confirmed: '已确认',
+  needs_modification: '需修改',
+  deleted: '已删除',
+};
+
+const GUIDANCE_BY_STATUS: Record<BatchStatus, { type: 'success' | 'info' | 'warning' | 'error'; message: string; description: string }> = {
+  pending: {
+    type: 'info',
+    message: '任务已创建，等待 Worker 处理',
+    description: '批次还没进入生成流水线；如果长时间无进展，可以重新入队。',
+  },
+  running: {
+    type: 'info',
+    message: '生成流水线正在执行',
+    description: '先观察阶段进度；进入待审后再逐模块审查用例。',
+  },
+  suspended: {
+    type: 'warning',
+    message: '质量门需要澄清',
+    description: '先回答阻塞问题，流水线才会继续生成后续用例。',
+  },
+  completed: {
+    type: 'success',
+    message: '生成阶段已完成',
+    description: '系统正在切换到审查阶段；如果页面未自动更新，请稍后刷新或回到工作台查看。',
+  },
+  pending_review: {
+    type: 'info',
+    message: '进入用例审查',
+    description: '按模块/分支浏览候选用例：正确的确认，有问题的标记需修改，废弃的删除。',
+  },
+  reviewing: {
+    type: 'info',
+    message: '审查进行中',
+    description: '继续处理待审用例；需修改项确认完后可触发迭代，全部可接受后落库归档。',
+  },
+  archived: {
+    type: 'success',
+    message: '批次已落库',
+    description: '本批次已经进入用例资产库，可去用例资产或导出中心继续使用。',
+  },
+  failed: {
+    type: 'error',
+    message: '生成任务失败',
+    description: '可重新入队整批重跑；重跑前建议确认 Worker、Redis 和模型网关状态。',
+  },
+};
+
+function getStageLabel(stageName?: string | null): string {
+  if (!stageName) return '未开始';
+  return STAGE_LABELS[stageName] || stageName;
+}
 
 const Workbench: React.FC = () => {
   const { batchId } = useParams<{ batchId: string }>();
@@ -313,6 +374,104 @@ const Workbench: React.FC = () => {
     });
   }, [stages]);
 
+  const stageSummary = useMemo(() => {
+    const completed = stages.filter((stage) => stage.status === 'completed').length;
+    const failed = stages.some((stage) => stage.status === 'failed');
+    const suspended = stages.some((stage) => stage.status === 'suspended');
+    const activeStage =
+      stages.find((stage) => ['running', 'suspended', 'failed'].includes(stage.status)) ||
+      stages.find((stage) => stage.name === batch?.current_stage);
+    const activeProgress = activeStage?.progress ? activeStage.progress / 100 : 0;
+    const percent = Math.min(
+      100,
+      Math.round(((completed + activeProgress) / STAGE_ORDER.length) * 100),
+    );
+
+    return {
+      completed,
+      percent,
+      activeStageLabel: getStageLabel(activeStage?.name || batch?.current_stage),
+      progressStatus: failed ? 'exception' as const : suspended ? 'exception' as const : 'active' as const,
+    };
+  }, [batch?.current_stage, stages]);
+
+  const caseReviewStats = useMemo(() => {
+    const stats: Record<ReviewStatus, number> = {
+      pending: 0,
+      confirmed: 0,
+      needs_modification: 0,
+      deleted: 0,
+    };
+
+    for (const item of allCasesForIterate) {
+      stats[item.review_status] += 1;
+    }
+
+    return stats;
+  }, [allCasesForIterate]);
+
+  const totalCasesForDisplay = allCasesForIterate.length || batch?.total_cases || 0;
+  const openQuestionCount = openQuestions?.length ?? 0;
+  const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
+
+  const metricItems = useMemo(() => {
+    if (!batch) return [];
+
+    return [
+      {
+        key: 'status',
+        label: '批次状态',
+        value: STATUS_BADGE_MAP[batch.status].text,
+        hint: `当前阶段：${stageSummary.activeStageLabel}`,
+        tone: batch.status === 'failed' ? 'danger' as const : batch.status === 'suspended' ? 'warning' as const : 'primary' as const,
+      },
+      {
+        key: 'stage',
+        label: '阶段进度',
+        value: `${stageSummary.completed}/${STAGE_ORDER.length}`,
+        hint: `${stageSummary.percent}%`,
+      },
+      {
+        key: 'total',
+        label: '用例总数',
+        value: totalCasesForDisplay || '—',
+        hint: allCasesForIterate.length ? '来自当前用例树' : '等待用例树加载',
+      },
+      {
+        key: 'pending',
+        label: REVIEW_STATUS_LABELS.pending,
+        value: caseReviewStats.pending,
+        hint: '需要人工判断',
+        tone: caseReviewStats.pending > 0 ? 'warning' as const : 'default' as const,
+      },
+      {
+        key: 'needs_modification',
+        label: REVIEW_STATUS_LABELS.needs_modification,
+        value: caseReviewStats.needs_modification,
+        hint: '可触发迭代',
+        tone: caseReviewStats.needs_modification > 0 ? 'warning' as const : 'default' as const,
+      },
+      {
+        key: 'questions',
+        label: '待澄清',
+        value: openQuestionCount,
+        hint: highPriorityQuestionCount > 0 ? `${highPriorityQuestionCount} 个高优先级` : '质量门问题',
+        tone: openQuestionCount > 0 ? 'danger' as const : 'success' as const,
+      },
+    ];
+  }, [
+    allCasesForIterate.length,
+    batch,
+    caseReviewStats.needs_modification,
+    caseReviewStats.pending,
+    highPriorityQuestionCount,
+    openQuestionCount,
+    stageSummary.activeStageLabel,
+    stageSummary.completed,
+    stageSummary.percent,
+    totalCasesForDisplay,
+  ]);
+
   // ─── 是否展示底部操作栏 ───
   const showBottomActions = batch?.status === 'pending_review' || batch?.status === 'reviewing';
 
@@ -320,7 +479,8 @@ const Workbench: React.FC = () => {
   if (batchLoading && !batch) {
     return (
       <PageShell style={{ textAlign: 'center', padding: 80 }}>
-        <Spin size="large" tip="加载中..." />
+        <Spin size="large" />
+        <div style={{ marginTop: 12, color: layoutTokens.textSecondary }}>加载中...</div>
       </PageShell>
     );
   }
@@ -337,54 +497,99 @@ const Workbench: React.FC = () => {
   }
 
   const badgeCfg = STATUS_BADGE_MAP[batch.status];
+  const statusGuidance = GUIDANCE_BY_STATUS[batch.status];
+  const canIterate = caseReviewStats.needs_modification > 0;
+  const renderPrimaryActions = () => (
+    <>
+      {batch.status === 'suspended' && openQuestionCount > 0 && (
+        <Button type="primary" onClick={() => setGateModalOpen(true)}>
+          处理澄清
+        </Button>
+      )}
+      {(batch.status === 'pending' || batch.status === 'failed') && (
+        <Button danger={batch.status === 'failed'} loading={retrySubmitting} onClick={handleRetry}>
+          重新入队
+        </Button>
+      )}
+      {showBottomActions && (
+        <>
+          <Button type={canIterate ? 'primary' : 'default'} disabled={!canIterate} onClick={handleIterate}>
+            触发迭代
+          </Button>
+          <Button type={canIterate ? 'default' : 'primary'} onClick={handleArchive}>
+            落库归档
+          </Button>
+        </>
+      )}
+    </>
+  );
 
   return (
     <PageShell>
       <PageHeader
         eyebrow="生成与审查"
         title={batch.document_title || '用例工作台'}
-        description="查看生成阶段、处理质量门澄清，并对候选用例执行确认、修改、迭代或落库。"
+        description="集中查看批次状态、质量门澄清和候选用例审查；先处理阻塞，再按模块逐块确认、修改或落库。"
         meta={<Badge status={badgeCfg.status} text={badgeCfg.text} />}
+        actions={renderPrimaryActions()}
       />
 
-      {/* ─── 等待 Worker / 失败提示 ─── */}
-      {batch.status === 'pending' && (
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="任务已创建，等待 Worker 处理"
-          description="如长时间无进展，请确认 Redis 与 Celery Worker 已启动，或点击下方按钮重新入队。"
-          action={
-            <Button size="small" loading={retrySubmitting} onClick={handleRetry}>
-              重新触发
-            </Button>
-          }
-        />
-      )}
-      {batch.status === 'failed' && (
-        <Alert
-          type="error"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="生成任务失败"
-          description="可从失败阶段重试，或重新入队整批重跑。"
-          action={
-            <Button size="small" danger loading={retrySubmitting} onClick={handleRetry}>
-              重试
-            </Button>
-          }
-        />
-      )}
+      <MetricStrip items={metricItems} />
+
+      <Alert
+        type={statusGuidance.type}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={statusGuidance.message}
+        description={statusGuidance.description}
+        action={<Space wrap>{renderPrimaryActions()}</Space>}
+      />
 
       {/* ─── 阶段进度条 ─── */}
-      <Steps
-        size="small"
-        items={stepsItems}
-        style={{ marginBottom: 24 }}
-      />
+      <div
+        style={{
+          marginBottom: 20,
+          padding: 16,
+          border: `1px solid ${layoutTokens.border}`,
+          borderRadius: layoutTokens.radius,
+          background: layoutTokens.surface,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 16,
+            alignItems: 'center',
+            marginBottom: 12,
+          }}
+        >
+          <div>
+            <Text strong>生成阶段</Text>
+            <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+              当前：{stageSummary.activeStageLabel}
+            </Text>
+          </div>
+          <Text style={{ color: layoutTokens.textMuted }}>
+            {stageSummary.completed}/{STAGE_ORDER.length} 已完成
+          </Text>
+        </div>
+        <Progress
+          percent={stageSummary.percent}
+          size="small"
+          status={stageSummary.progressStatus}
+          style={{ marginBottom: 16 }}
+        />
+        <Steps size="small" items={stepsItems} />
+      </div>
 
       {/* ─── 筛选栏 ─── */}
+      <div style={{ marginBottom: 8 }}>
+        <Text strong>用例审查</Text>
+        <Text style={{ marginLeft: 8, color: layoutTokens.textSecondary }}>
+          通过筛选收敛待处理范围，左侧按文档/模块/分支定位，右侧逐条确认。
+        </Text>
+      </div>
       <FilterBar>
         <Input.Search
           allowClear
@@ -472,19 +677,27 @@ const Workbench: React.FC = () => {
       {showBottomActions && (
         <div
           style={{
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 5,
             marginTop: 16,
-            padding: '12px 0',
-            borderTop: '1px solid #f0f0f0',
+            padding: '12px 16px',
+            border: `1px solid ${layoutTokens.border}`,
+            borderRadius: layoutTokens.radius,
+            background: layoutTokens.surface,
             display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             gap: 12,
+            boxShadow: '0 -8px 24px rgba(15, 23, 42, 0.06)',
           }}
         >
-          <Button type="primary" onClick={handleIterate}>
-            触发迭代
-          </Button>
-          <Button danger onClick={handleArchive}>
-            落库
-          </Button>
+          <Text style={{ color: layoutTokens.textSecondary }}>
+            {canIterate
+              ? `已标记 ${caseReviewStats.needs_modification} 条需修改，可触发迭代重写。`
+              : '没有需修改用例时，可将当前批次落库归档。'}
+          </Text>
+          <Space wrap>{renderPrimaryActions()}</Space>
         </div>
       )}
 
