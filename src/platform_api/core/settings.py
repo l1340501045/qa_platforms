@@ -125,9 +125,19 @@ class Settings(BaseSettings):
     # （字符集 Jaccard<0.5）判双方非同一实体（如"监测链接"≠"投放链接"），则撤销 conflict、
     # 降级 ungrounded（needs_spec）+ conflict_entity_mismatch=true，防把不同实体当同字段判矛盾。
     # 关：conflict 逐字节不动（零回归）。保守：真 conflict（同实体）不误撤。
-    conflict_entity_gate_enabled: bool = False
+    conflict_entity_gate_enabled: bool = True
     # 词法兜底 Jaccard 阈值：>= 阈值判同实体（不撤），< 阈值判不同实体（撤销）。
     conflict_entity_jaccard_threshold: float = 0.5
+    # ── verify oracle guards（任务 07-02）灰度开关 ──────────────────────────────
+    # 开：verify_cases 在 reconcile 后应用 8 个确定性 oracle guard：
+    #   R1 含「需求待确认/PRD未定义」信号 → needs_spec（不删，保留风险）
+    #   R2 无据的具体 toast/HTTP状态码/payload/表名 → needs_spec
+    #   R3 无技术方案时，接口契约/幂等/worker/cron/轮询频率 → needs_spec（不误伤业务级）
+    #   R4 cross_section_conflict=True 且 refs 非空 → 强制 to_fix，保留冲突证据
+    #   R5 低信任来源(trust>=4)单独支撑高精度 oracle → needs_spec
+    #   R6 外部目录/「等」无完整映射 + 唯一具体断言 → needs_spec
+    # 关：verify 行为与改造前一致（零回归）。默认开（guard 只降级、不删除，风险可控）。
+    oracle_guard_enabled: bool = True
     # ── verify 同构 verdict 一致化（判后聚簇，多数票统一）───────────────────────
     # 开：verify_cases 聚合后，在同 feature 内对高相似标题用例做 verdict 一致化。
     # 关：聚合结果不变，保持现状。离线评估（3185 条，阈值 0.93）已确认 14/14 真同构簇
@@ -145,6 +155,22 @@ class Settings(BaseSettings):
     # 待 Task 5 关/开对比 by_verdict.conflict 通过后视情保留或回退（详见 roadmap ⑤）。
     conflict_revote_enabled: bool = True
     revote_n: int = 3
+
+    # ── 生成侧收敛（拆条上限 + 存在性合并 + P0 配额，roadmap ⑥）──────────────────
+    # 4.1/4.2 已用 batch 278c211f 离线矩阵评估：cap=4 比 cap=3 更少裁核心维度，
+    # 且仍把 3185 条收敛到约 2525 条；本轮真实跑批默认开启 merge + cap=4。
+    # 4.3 P0 配额：按 risk=likelihood×impact 将非结构化低风险 P0 降为 P1；
+    # 结构化覆盖点/规则锚点豁免，避免误伤权限矩阵、状态机和规则级覆盖。
+    # 默认关闭：本轮真实跑批配置要求只启用 merge + cap=4，避免把 P0 配额作为额外变量混入对比。
+    # 如后续单独评估 P0 泛滥治理，再显式开启 p0_quota_enabled。
+    # 4.1 拆条上限：每测试点用例数超 cap 时裁剪保留多样性代表，被裁软标记 duplicate_of。
+    split_cap_enabled: bool = True
+    cases_per_tp_cap: int = 4
+    # 4.2 存在性合并：同 (test_point_id, source_section) 的纯展示用例合并为 1 条，保留全部检查点。
+    existence_merge_enabled: bool = True
+    # 4.3 P0 配额：P0 占比超 quota 时按 risk 降序降 P1，结构化覆盖点豁免。
+    p0_quota_enabled: bool = False
+    p0_quota: float = 0.30
 
     # ── Hybrid 跨功能点规格检索（关键词 + 向量 + RRF）─────────────────────────────
     # 关闭时 CrossFeatureIndex 行为与改造前完全一致（纯关键词，不调 embedding，零额外开销）。

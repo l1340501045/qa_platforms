@@ -23,6 +23,27 @@ export interface BatchQueryParams extends PaginationParams {
   q?: string;
 }
 
+export const BEST_PRACTICE_GENERATION_CONFIG = {
+  quality_profile: 'best_practice_default_2026_07',
+  rule_extract_enabled: true,
+  rule_driven_testpoints_enabled: true,
+  rule_coverage_gate_enabled: true,
+  safe_dedup_enabled: true,
+  structural_coverage_enabled: true,
+  grounded_provenance_enabled: true,
+  verify_cross_section_conflict_enabled: true,
+  conflict_entity_gate_enabled: true,
+  oracle_guard_enabled: true,
+  verdict_reconcile_enabled: true,
+  conflict_revote_enabled: true,
+  revote_n: 3,
+  split_cap_enabled: true,
+  existence_merge_enabled: true,
+  cases_per_tp_cap: 4,
+  p0_quota_enabled: false,
+  p0_quota: 0.3,
+};
+
 /** 全局批次列表 GET /batches */
 export async function listBatches(params?: {
   status?: string;
@@ -35,7 +56,9 @@ export async function listBatches(params?: {
 
 /** 触发用例生成 POST /documents/:id/generate → 202 */
 export async function triggerGeneration(documentId: string): Promise<GenerateResponse> {
-  const res = await api.post(`/documents/${documentId}/generate`);
+  const res = await api.post(`/documents/${documentId}/generate`, {
+    config: BEST_PRACTICE_GENERATION_CONFIG,
+  });
   return res.data;
 }
 
