@@ -335,6 +335,10 @@ export interface TestCase {
   updated_at: string;
 }
 
+export type CaseBucket = 'main' | 'needs_spec' | 'to_fix';
+export type CaseVerdict = 'grounded' | 'ungrounded' | 'undefined' | 'conflict';
+export type ReviewIssueType = 'case_wrong' | 'prd_conflict' | 'verify_uncertain';
+
 // ─── 审核中心批次（全局列表） ───
 
 export interface ReviewBatch {
@@ -526,6 +530,22 @@ export interface CaseTreeCase {
   trust_level: number;
   review_status: ReviewStatus;
   iteration: number;
+  verdict?: CaseVerdict | null;
+  bucket?: CaseBucket | null;
+  review_issue_type?: ReviewIssueType | null;
+  duplicate_of?: string | null;
+  is_duplicate?: boolean;
+  branch_path?: string[];
+  source_refs?: string[];
+  classification_confidence?: string;
+}
+
+/** 用例树节点 — 分支级 */
+export interface CaseTreeBranch {
+  branch_name: string;
+  branch_path: string[];
+  case_count: number;
+  cases: CaseTreeCase[];
 }
 
 /** 用例树节点 — 模块级 */
@@ -533,6 +553,7 @@ export interface CaseTreeModule {
   module_name: string;
   case_count: number;
   cases: CaseTreeCase[];
+  branches?: CaseTreeBranch[];
 }
 
 /** 用例树节点 — 文档级 */
@@ -542,11 +563,18 @@ export interface CaseTreeDocument {
   modules: CaseTreeModule[];
 }
 
+export type CaseTreeView = 'all' | 'stable' | 'review_required';
+
 /** 用例树请求参数 */
 export interface CaseTreeParams {
   batch_id?: string;
   priority?: Priority;
   review_status?: ReviewStatus;
+  bucket?: CaseBucket;
+  verdict?: CaseVerdict;
+  review_issue_type?: ReviewIssueType;
+  view?: CaseTreeView;
+  include_duplicates?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

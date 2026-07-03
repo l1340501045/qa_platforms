@@ -1,6 +1,6 @@
 /**
  * 用例审核树 — 工作台用例区
- * 左侧「文档 → 模块(source_section)」树，右侧选中节点的用例表（带审核操作）。
+ * 左侧「文档 → 业务模块 → 分支」树，右侧选中节点的用例表（带审核操作）。
  * 复用系统级 case-tree 接口（按 batch_id 取当前批次），支持：
  *  - 行内/抽屉审核（确认 / 需修改 / 删除）
  *  - 审核或编辑完自动跳「当前列表内下一条」
@@ -31,7 +31,14 @@ import type { ColumnsType } from 'antd/es/table';
 
 import { getCaseTree } from '../services/systemApi';
 import CaseDetailDrawer from './CaseDetailDrawer';
-import type { CaseTreeCase, CaseTreeDocument, ReviewStatus } from '../types';
+import type {
+  CaseBucket,
+  CaseTreeCase,
+  CaseTreeDocument,
+  CaseVerdict,
+  ReviewIssueType,
+  ReviewStatus,
+} from '../types';
 
 const { Text } = Typography;
 const { TextArea } = Input;
@@ -50,6 +57,25 @@ const REVIEW_TAG: Record<ReviewStatus, { color: string; label: string }> = {
   confirmed: { color: 'green', label: '已确认' },
   needs_modification: { color: 'orange', label: '需修改' },
   deleted: { color: 'red', label: '已删除' },
+};
+
+const BUCKET_TAG: Record<string, { color: string; label: string }> = {
+  main: { color: 'green', label: '主集' },
+  needs_spec: { color: 'gold', label: '待澄清' },
+  to_fix: { color: 'red', label: '待修正' },
+};
+
+const VERDICT_COLOR: Record<string, string> = {
+  grounded: 'green',
+  ungrounded: 'orange',
+  undefined: 'gold',
+  conflict: 'red',
+};
+
+const REVIEW_ISSUE_TAG: Record<ReviewIssueType, { color: string; label: string }> = {
+  case_wrong: { color: 'red', label: '用例错' },
+  prd_conflict: { color: 'purple', label: 'PRD冲突' },
+  verify_uncertain: { color: 'blue', label: '核验不确定' },
 };
 
 function getTrustDisplay(level: number): { color: string; label: string } {
@@ -77,20 +103,43 @@ function patchCaseInTree(
     modules: doc.modules.map((m) => ({
       ...m,
       cases: m.cases.map((c) => (c.id === caseId ? { ...c, ...patch } : c)),
+      branches: m.branches?.map((b) => ({
+        ...b,
+        cases: b.cases.map((c) => (c.id === caseId ? { ...c, ...patch } : c)),
+      })),
     })),
   }));
+}
+
+function branchPathKey(branchPath: string[]): string {
+  return branchPath.join('/');
+}
+
+function encodeTreePart(value: string): string {
+  return encodeURIComponent(value);
+}
+
+function decodeTreePart(value: string): string {
+  return decodeURIComponent(value);
 }
 
 type SelectedNode =
   | { type: 'all' }
   | { type: 'doc'; docId: string }
-  | { type: 'module'; docId: string; moduleName: string };
+  | { type: 'module'; docId: string; moduleName: string }
+  | { type: 'branch'; docId: string; moduleName: string; branchPathKey: string };
 
 interface CaseTreeReviewProps {
   batchId: string;
   systemId?: string;
   /** Review 状态筛选（传给后端 case-tree） */
   reviewFilter?: ReviewStatus;
+  /** 质量桶筛选（传给后端 case-tree） */
+  bucketFilter?: CaseBucket;
+  /** Verdict 筛选（传给后端 case-tree） */
+  verdictFilter?: CaseVerdict;
+  /** 审查诊断类型筛选（传给后端 case-tree） */
+  reviewIssueTypeFilter?: ReviewIssueType;
   /** 标题关键词（前端跨模块过滤） */
   searchKeyword?: string;
   /** 是否启用审核/编辑/重写（pending_review / reviewing 时为 true） */
@@ -107,6 +156,9 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
   batchId,
   systemId,
   reviewFilter,
+  bucketFilter,
+  verdictFilter,
+  reviewIssueTypeFilter,
   searchKeyword,
   editable = false,
   onReview,
@@ -127,14 +179,20 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     if (!systemId || !batchId) return;
     setTreeLoading(true);
     try {
-      const data = await getCaseTree(systemId, { batch_id: batchId, review_status: reviewFilter });
+      const data = await getCaseTree(systemId, {
+        batch_id: batchId,
+        review_status: reviewFilter,
+        bucket: bucketFilter,
+        verdict: verdictFilter,
+        review_issue_type: reviewIssueTypeFilter,
+      });
       setTreeData(data);
     } catch {
       message.error('加载用例树失败');
     } finally {
       setTreeLoading(false);
     }
-  }, [systemId, batchId, reviewFilter]);
+  }, [systemId, batchId, reviewFilter, bucketFilter, verdictFilter, reviewIssueTypeFilter]);
 
   useEffect(() => {
     loadTree();
@@ -146,7 +204,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [treeData]);
 
-  // ─── Ant Tree 数据（文档 → 模块） ───
+  // ─── Ant Tree 数据（文档 → 业务模块 → 分支） ───
   const antTreeData: DataNode[] = useMemo(() => {
     if (treeData.length === 0) return [];
     const total = allCasesFromTree(treeData).length;
@@ -161,17 +219,34 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
           </Tag>
         </span>
       ),
-      children: doc.modules.map((mod) => ({
-        key: `module::${doc.document_id}::${mod.module_name}`,
-        title: (
-          <span>
-            <AppstoreOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
-            {mod.module_name}
-            <Tag style={{ marginLeft: 8 }}>{mod.case_count}</Tag>
-          </span>
-        ),
-        isLeaf: true,
-      })),
+      children: doc.modules.map((mod) => {
+        const branchNodes: DataNode[] = (mod.branches || []).map((branch) => {
+          const key = branchPathKey(branch.branch_path);
+          return {
+            key: `branch::${doc.document_id}::${encodeTreePart(mod.module_name)}::${encodeTreePart(key)}`,
+            title: (
+              <span>
+                <FolderOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
+                {branch.branch_name}
+                <Tag style={{ marginLeft: 8 }}>{branch.case_count}</Tag>
+              </span>
+            ),
+            isLeaf: true,
+          };
+        });
+        return {
+          key: `module::${doc.document_id}::${encodeTreePart(mod.module_name)}`,
+          title: (
+            <span>
+              <AppstoreOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
+              {mod.module_name}
+              <Tag style={{ marginLeft: 8 }}>{mod.case_count}</Tag>
+            </span>
+          ),
+          children: branchNodes.length > 0 ? branchNodes : undefined,
+          isLeaf: branchNodes.length === 0,
+        };
+      }),
     }));
     return [
       {
@@ -207,6 +282,12 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
         const mod = doc?.modules.find((m) => m.module_name === selectedNode.moduleName);
         return mod?.cases || [];
       }
+      case 'branch': {
+        const doc = treeData.find((d) => String(d.document_id) === selectedNode.docId);
+        const mod = doc?.modules.find((m) => m.module_name === selectedNode.moduleName);
+        const branch = mod?.branches?.find((b) => branchPathKey(b.branch_path) === selectedNode.branchPathKey);
+        return branch?.cases || [];
+      }
     }
   }, [treeData, selectedNode, searchKeyword]);
 
@@ -219,6 +300,8 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
         return treeData.find((d) => String(d.document_id) === selectedNode.docId)?.document_title || '文档用例';
       case 'module':
         return selectedNode.moduleName;
+      case 'branch':
+        return selectedNode.branchPathKey;
     }
   }, [selectedNode, searchKeyword, treeData]);
 
@@ -285,7 +368,15 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
       setSelectedNode({ type: 'doc', docId: key.replace('doc::', '') });
     } else if (key.startsWith('module::')) {
       const parts = key.replace('module::', '').split('::');
-      setSelectedNode({ type: 'module', docId: parts[0], moduleName: parts[1] });
+      setSelectedNode({ type: 'module', docId: parts[0], moduleName: decodeTreePart(parts[1]) });
+    } else if (key.startsWith('branch::')) {
+      const parts = key.replace('branch::', '').split('::');
+      setSelectedNode({
+        type: 'branch',
+        docId: parts[0],
+        moduleName: decodeTreePart(parts[1]),
+        branchPathKey: decodeTreePart(parts[2]),
+      });
     }
   };
 
@@ -311,6 +402,22 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
       key: 'priority',
       width: 80,
       render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
+    },
+    {
+      title: '质量',
+      key: 'quality',
+      width: 150,
+      render: (_, record) => {
+        const bucket = record.bucket ? BUCKET_TAG[record.bucket] : undefined;
+        const reviewIssue = record.review_issue_type ? REVIEW_ISSUE_TAG[record.review_issue_type] : undefined;
+        return (
+          <Space size={4} wrap>
+            {bucket && <Tag color={bucket.color}>{bucket.label}</Tag>}
+            {record.verdict && <Tag color={VERDICT_COLOR[record.verdict] || 'default'}>{record.verdict}</Tag>}
+            {reviewIssue && <Tag color={reviewIssue.color}>{reviewIssue.label}</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: '可信度',

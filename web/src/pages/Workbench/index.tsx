@@ -29,9 +29,12 @@ import { useTestcaseStore } from '../../stores/testcaseStore';
 import CaseTreeReview from '../../components/CaseTreeReview';
 import type {
   BatchStatus,
+  CaseBucket,
   CaseTreeCase,
+  CaseVerdict,
   ClarifyAnswer,
   OpenQuestion,
+  ReviewIssueType,
   ReviewStatus,
 } from '../../types';
 
@@ -106,6 +109,9 @@ const Workbench: React.FC = () => {
   const [clarifySubmitting, setClarifySubmitting] = useState(false);
   const [retrySubmitting, setRetrySubmitting] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
+  const [bucketFilter, setBucketFilter] = useState<CaseBucket | undefined>();
+  const [verdictFilter, setVerdictFilter] = useState<CaseVerdict | undefined>();
+  const [reviewIssueTypeFilter, setReviewIssueTypeFilter] = useState<ReviewIssueType | undefined>();
   const [allCasesForIterate, setAllCasesForIterate] = useState<CaseTreeCase[]>([]);
   const [treeReloadSignal, setTreeReloadSignal] = useState(0);
 
@@ -390,6 +396,47 @@ const Workbench: React.FC = () => {
             { value: 'deleted', label: '已删除' },
           ]}
         />
+        <Select
+          allowClear
+          placeholder="质量桶"
+          style={{ width: 140 }}
+          value={bucketFilter}
+          onChange={setBucketFilter}
+          options={[
+            { value: 'main', label: '主集' },
+            { value: 'needs_spec', label: '待澄清' },
+            { value: 'to_fix', label: '待修正' },
+          ]}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="核验结论"
+          style={{ width: 160 }}
+          value={verdictFilter}
+          onChange={setVerdictFilter}
+          options={[
+            { value: 'grounded', label: 'grounded' },
+            { value: 'ungrounded', label: 'ungrounded' },
+            { value: 'undefined', label: 'undefined' },
+            { value: 'conflict', label: 'conflict' },
+          ]}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="审查诊断"
+          style={{ width: 160 }}
+          value={reviewIssueTypeFilter}
+          onChange={setReviewIssueTypeFilter}
+          options={[
+            { value: 'case_wrong', label: '用例错' },
+            { value: 'prd_conflict', label: 'PRD冲突' },
+            { value: 'verify_uncertain', label: '核验不确定' },
+          ]}
+        />
       </div>
 
       {/* ─── 用例审核树（左模块树 + 右用例表） ─── */}
@@ -397,6 +444,9 @@ const Workbench: React.FC = () => {
         batchId={batchId!}
         systemId={batch.system_id}
         reviewFilter={reviewFilter}
+        bucketFilter={bucketFilter}
+        verdictFilter={verdictFilter}
+        reviewIssueTypeFilter={reviewIssueTypeFilter}
         searchKeyword={searchKeyword}
         editable={showBottomActions}
         onReview={async (caseId, status, comment) => {

@@ -1,6 +1,6 @@
 /**
  * 用例库 — /case-library
- * 三级树形浏览：文档 → 模块(source_section) → 用例
+ * 树形浏览：文档 → 业务模块 → 分支 → 用例
  * 对接 GET /api/v1/systems/:id/case-tree
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -31,9 +31,13 @@ import { getCaseTree, listSystemBatches, listSystemOptions } from '../../service
 import type { SystemBatchItem } from '../../services/systemApi';
 import CaseDetailDrawer from '../../components/CaseDetailDrawer';
 import type {
+  CaseBucket,
   CaseTreeCase,
   CaseTreeDocument,
+  CaseTreeView,
+  CaseVerdict,
   Priority,
+  ReviewIssueType,
   ReviewStatus,
 } from '../../types';
 
@@ -51,6 +55,25 @@ const REVIEW_TAG: Record<ReviewStatus, { color: string; label: string }> = {
   confirmed: { color: 'green', label: '已确认' },
   needs_modification: { color: 'orange', label: '需修改' },
   deleted: { color: 'red', label: '已删除' },
+};
+
+const BUCKET_TAG: Record<string, { color: string; label: string }> = {
+  main: { color: 'green', label: '主集' },
+  needs_spec: { color: 'gold', label: '待澄清' },
+  to_fix: { color: 'red', label: '待修正' },
+};
+
+const VERDICT_COLOR: Record<string, string> = {
+  grounded: 'green',
+  ungrounded: 'orange',
+  undefined: 'gold',
+  conflict: 'red',
+};
+
+const REVIEW_ISSUE_TAG: Record<ReviewIssueType, { color: string; label: string }> = {
+  case_wrong: { color: 'red', label: '用例错' },
+  prd_conflict: { color: 'purple', label: 'PRD冲突' },
+  verify_uncertain: { color: 'blue', label: '核验不确定' },
 };
 
 /**
@@ -77,7 +100,20 @@ function casesFromDoc(doc: CaseTreeDocument): CaseTreeCase[] {
 type SelectedNode =
   | { type: 'all' }
   | { type: 'doc'; docId: string }
-  | { type: 'module'; docId: string; moduleName: string };
+  | { type: 'module'; docId: string; moduleName: string }
+  | { type: 'branch'; docId: string; moduleName: string; branchPathKey: string };
+
+function branchPathKey(branchPath: string[]): string {
+  return branchPath.join('/');
+}
+
+function encodeTreePart(value: string): string {
+  return encodeURIComponent(value);
+}
+
+function decodeTreePart(value: string): string {
+  return decodeURIComponent(value);
+}
 
 const CaseLibraryPage: React.FC = () => {
   // ─── State ───
@@ -85,6 +121,10 @@ const CaseLibraryPage: React.FC = () => {
   const [selectedSystemId, setSelectedSystemId] = useState<string | undefined>();
   const [priority, setPriority] = useState<Priority | undefined>();
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus | undefined>();
+  const [bucket, setBucket] = useState<CaseBucket | undefined>();
+  const [verdict, setVerdict] = useState<CaseVerdict | undefined>();
+  const [reviewIssueType, setReviewIssueType] = useState<ReviewIssueType | undefined>();
+  const [caseTreeView, setCaseTreeView] = useState<CaseTreeView>('stable');
   const [selectedBatchId, setSelectedBatchId] = useState<string | undefined>();
 
   const [treeData, setTreeData] = useState<CaseTreeDocument[]>([]);
@@ -134,19 +174,24 @@ const CaseLibraryPage: React.FC = () => {
         batch_id: selectedBatchId,
         priority,
         review_status: reviewStatus,
+        bucket: caseTreeView === 'stable' ? undefined : bucket,
+        verdict,
+        review_issue_type: reviewIssueType,
+        view: caseTreeView,
+        include_duplicates: caseTreeView === 'all',
       });
       setTreeData(data);
       setSelectedNode({ type: 'all' });
     } finally {
       setTreeLoading(false);
     }
-  }, [selectedSystemId, selectedBatchId, priority, reviewStatus]);
+  }, [selectedSystemId, selectedBatchId, priority, reviewStatus, bucket, verdict, reviewIssueType, caseTreeView]);
 
   useEffect(() => {
     loadTree();
   }, [loadTree]);
 
-  // ─── 构建 Ant Design Tree 数据（三级：文档 → 模块 → 用例数） ───
+  // ─── 构建 Ant Design Tree 数据（文档 → 业务模块 → 分支） ───
   const antTreeData: DataNode[] = useMemo(() => {
     if (treeData.length === 0) return [];
 
@@ -156,19 +201,38 @@ const CaseLibraryPage: React.FC = () => {
     const docNodes: DataNode[] = treeData.map((doc) => {
       const docCaseCount = casesFromDoc(doc).length;
 
-      const moduleNodes: DataNode[] = doc.modules.map((mod) => ({
-        key: `module::${doc.document_id}::${mod.module_name}`,
-        title: (
-          <span>
-            <AppstoreOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
-            {mod.module_name}
-            <Tag style={{ marginLeft: 8 }} color="default">
-              {mod.case_count}
-            </Tag>
-          </span>
-        ),
-        isLeaf: true,
-      }));
+      const moduleNodes: DataNode[] = doc.modules.map((mod) => {
+        const branchNodes: DataNode[] = (mod.branches || []).map((branch) => {
+          const key = branchPathKey(branch.branch_path);
+          return {
+            key: `branch::${doc.document_id}::${encodeTreePart(mod.module_name)}::${encodeTreePart(key)}`,
+            title: (
+              <span>
+                <FolderOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
+                {branch.branch_name}
+                <Tag style={{ marginLeft: 8 }} color="default">
+                  {branch.case_count}
+                </Tag>
+              </span>
+            ),
+            isLeaf: true,
+          };
+        });
+        return {
+          key: `module::${doc.document_id}::${encodeTreePart(mod.module_name)}`,
+          title: (
+            <span>
+              <AppstoreOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
+              {mod.module_name}
+              <Tag style={{ marginLeft: 8 }} color="default">
+                {mod.case_count}
+              </Tag>
+            </span>
+          ),
+          children: branchNodes.length > 0 ? branchNodes : undefined,
+          isLeaf: branchNodes.length === 0,
+        };
+      });
 
       return {
         key: `doc::${doc.document_id}`,
@@ -217,6 +281,13 @@ const CaseLibraryPage: React.FC = () => {
         const mod = doc.modules.find((m) => m.module_name === selectedNode.moduleName);
         return mod?.cases || [];
       }
+      case 'branch': {
+        const doc = treeData.find((d) => String(d.document_id) === selectedNode.docId);
+        if (!doc) return [];
+        const mod = doc.modules.find((m) => m.module_name === selectedNode.moduleName);
+        const branch = mod?.branches?.find((b) => branchPathKey(b.branch_path) === selectedNode.branchPathKey);
+        return branch?.cases || [];
+      }
     }
   }, [treeData, selectedNode]);
 
@@ -231,6 +302,8 @@ const CaseLibraryPage: React.FC = () => {
       }
       case 'module':
         return selectedNode.moduleName;
+      case 'branch':
+        return selectedNode.branchPathKey;
     }
   }, [treeData, selectedNode]);
 
@@ -261,6 +334,22 @@ const CaseLibraryPage: React.FC = () => {
       key: 'priority',
       width: 80,
       render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
+    },
+    {
+      title: '质量',
+      key: 'quality',
+      width: 150,
+      render: (_, record) => {
+        const bucket = record.bucket ? BUCKET_TAG[record.bucket] : undefined;
+        const reviewIssue = record.review_issue_type ? REVIEW_ISSUE_TAG[record.review_issue_type] : undefined;
+        return (
+          <Space size={4} wrap>
+            {bucket && <Tag color={bucket.color}>{bucket.label}</Tag>}
+            {record.verdict && <Tag color={VERDICT_COLOR[record.verdict] || 'default'}>{record.verdict}</Tag>}
+            {reviewIssue && <Tag color={reviewIssue.color}>{reviewIssue.label}</Tag>}
+          </Space>
+        );
+      },
     },
     {
       title: '可信度',
@@ -296,7 +385,15 @@ const CaseLibraryPage: React.FC = () => {
       setSelectedNode({ type: 'doc', docId: key.replace('doc::', '') });
     } else if (key.startsWith('module::')) {
       const parts = key.replace('module::', '').split('::');
-      setSelectedNode({ type: 'module', docId: parts[0], moduleName: parts[1] });
+      setSelectedNode({ type: 'module', docId: parts[0], moduleName: decodeTreePart(parts[1]) });
+    } else if (key.startsWith('branch::')) {
+      const parts = key.replace('branch::', '').split('::');
+      setSelectedNode({
+        type: 'branch',
+        docId: parts[0],
+        moduleName: decodeTreePart(parts[1]),
+        branchPathKey: decodeTreePart(parts[2]),
+      });
     }
   };
 
@@ -320,6 +417,22 @@ const CaseLibraryPage: React.FC = () => {
             setSelectedBatchId(undefined); // 切系统时重置批次
           }}
           options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+        />
+        <Select
+          placeholder="资产视图"
+          style={{ width: 160 }}
+          value={caseTreeView}
+          onChange={(value: CaseTreeView) => {
+            setCaseTreeView(value);
+            if (value === 'stable') {
+              setBucket(undefined);
+            }
+          }}
+          options={[
+            { value: 'stable', label: '稳定主集' },
+            { value: 'all', label: '全部资产' },
+            { value: 'review_required', label: '待分类' },
+          ]}
         />
         <Select
           allowClear
@@ -368,6 +481,48 @@ const CaseLibraryPage: React.FC = () => {
             { value: 'pending', label: '待审' },
             { value: 'confirmed', label: '已确认' },
             { value: 'needs_modification', label: '需修改' },
+          ]}
+        />
+        <Select
+          allowClear
+          placeholder="质量桶"
+          style={{ width: 140 }}
+          value={bucket}
+          onChange={setBucket}
+          disabled={caseTreeView === 'stable'}
+          options={[
+            { value: 'main', label: '主集' },
+            { value: 'needs_spec', label: '待澄清' },
+            { value: 'to_fix', label: '待修正' },
+          ]}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="核验结论"
+          style={{ width: 160 }}
+          value={verdict}
+          onChange={setVerdict}
+          options={[
+            { value: 'grounded', label: 'grounded' },
+            { value: 'ungrounded', label: 'ungrounded' },
+            { value: 'undefined', label: 'undefined' },
+            { value: 'conflict', label: 'conflict' },
+          ]}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="审查诊断"
+          style={{ width: 160 }}
+          value={reviewIssueType}
+          onChange={setReviewIssueType}
+          options={[
+            { value: 'case_wrong', label: '用例错' },
+            { value: 'prd_conflict', label: 'PRD冲突' },
+            { value: 'verify_uncertain', label: '核验不确定' },
           ]}
         />
       </Space>

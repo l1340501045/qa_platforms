@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import select, func, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.models.knowledge import Document
@@ -32,6 +32,9 @@ class TestCaseRepository(BaseRepository[TestCase]):
         batch_ids: list[UUID],
         priority: str | None = None,
         review_status: str | None = None,
+        bucket: str | None = None,
+        verdict: str | None = None,
+        include_duplicates: bool = True,
     ) -> list[dict]:
         """
         用例树聚合数据查询
@@ -42,6 +45,9 @@ class TestCaseRepository(BaseRepository[TestCase]):
             batch_ids: 批次 ID 列表（通常为各文档最新完成批次）
             priority: 优先级筛选
             review_status: review 状态筛选
+            bucket: verify 分桶筛选
+            verdict: verify 判定筛选
+            include_duplicates: 是否包含 duplicate_of 非空的软重复用例
         """
         stmt = (
             select(
@@ -51,6 +57,10 @@ class TestCaseRepository(BaseRepository[TestCase]):
                 TestCase.trust_level,
                 TestCase.review_status,
                 TestCase.iteration,
+                TestCase.verdict,
+                TestCase.bucket,
+                TestCase.verification,
+                TestCase.duplicate_of,
                 TestCase.provenance,
                 TestCase.batch_id,
                 TestBatch.document_id,
@@ -66,6 +76,12 @@ class TestCaseRepository(BaseRepository[TestCase]):
             stmt = stmt.where(TestCase.priority == priority)
         if review_status is not None:
             stmt = stmt.where(TestCase.review_status == review_status)
+        if bucket is not None:
+            stmt = stmt.where(TestCase.bucket == bucket)
+        if verdict is not None:
+            stmt = stmt.where(TestCase.verdict == verdict)
+        if not include_duplicates:
+            stmt = stmt.where(TestCase.duplicate_of.is_(None))
 
         stmt = stmt.order_by(Document.title, TestCase.title)
 

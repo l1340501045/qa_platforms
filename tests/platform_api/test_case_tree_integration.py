@@ -76,6 +76,8 @@ async def seed_tree_data(db_session: AsyncSession):
             "推荐列表-正常加载",
             "P0",
             "confirmed",
+            "main",
+            "grounded",
             '{"derived_from":"t","source_section":"推荐列表","trust_level":1}',
         ),
         (
@@ -84,6 +86,8 @@ async def seed_tree_data(db_session: AsyncSession):
             "推荐列表-空状态",
             "P1",
             "pending",
+            "needs_spec",
+            "undefined",
             '{"derived_from":"t","source_section":"推荐列表","trust_level":2}',
         ),
         # doc1 - 模块"搜索栏"
@@ -93,6 +97,8 @@ async def seed_tree_data(db_session: AsyncSession):
             "搜索栏-关键词搜索",
             "P0",
             "confirmed",
+            "main",
+            "grounded",
             '{"derived_from":"t","source_section":"搜索栏","trust_level":1}',
         ),
         # doc1 - deleted（不应出现）
@@ -102,6 +108,8 @@ async def seed_tree_data(db_session: AsyncSession):
             "已删除用例",
             "P0",
             "deleted",
+            "main",
+            "grounded",
             '{"derived_from":"t","source_section":"推荐列表","trust_level":1}',
         ),
         # doc2 - 模块"播放控制"
@@ -111,20 +119,32 @@ async def seed_tree_data(db_session: AsyncSession):
             "播放-开始播放",
             "P0",
             "confirmed",
+            "to_fix",
+            "conflict",
             '{"derived_from":"t","source_section":"播放控制","trust_level":1}',
         ),
         # doc2 - 缺 source_section → 归"未分类"
-        (uuid.uuid4(), batch2_id, "其他功能测试", "P2", "pending", '{"derived_from":"t","trust_level":3}'),
+        (
+            uuid.uuid4(),
+            batch2_id,
+            "其他功能测试",
+            "P2",
+            "pending",
+            "main",
+            "grounded",
+            '{"derived_from":"t","trust_level":3}',
+        ),
     ]
 
-    for cid, bid, title, priority, rs, prov in cases:
+    for cid, bid, title, priority, rs, bucket, verdict, prov in cases:
         await db_session.execute(
             text(
                 "INSERT INTO testcase.test_cases "
                 "(id, batch_id, title, preconditions, steps, expected_results, priority, "
-                "dimensions, provenance, trust_level, review_status) "
+                "dimensions, provenance, trust_level, review_status, bucket, verdict) "
                 "VALUES (:id, :bid, :title, CAST(:preconds AS jsonb), CAST(:steps AS jsonb), "
-                "CAST(:expected AS jsonb), :pri, CAST(:dims AS jsonb), CAST(:prov AS jsonb), 1, :rs)"
+                "CAST(:expected AS jsonb), :pri, CAST(:dims AS jsonb), CAST(:prov AS jsonb), "
+                "1, :rs, :bucket, :verdict)"
             ),
             {
                 "id": cid,
@@ -132,6 +152,8 @@ async def seed_tree_data(db_session: AsyncSession):
                 "title": title,
                 "pri": priority,
                 "rs": rs,
+                "bucket": bucket,
+                "verdict": verdict,
                 "prov": prov,
                 "preconds": "[]",
                 "steps": '[{"step_number":1,"action":"test"}]',
@@ -236,6 +258,90 @@ async def test_case_tree_priority_filter(db_session: AsyncSession, seed_tree_dat
         for module in doc["modules"]:
             for case in module["cases"]:
                 assert case["priority"] == "P0"
+
+
+@pytest.mark.asyncio
+async def test_case_tree_bucket_and_verdict_filter(db_session: AsyncSession, seed_tree_data):
+    """用例树：bucket / verdict 筛选用于区分可执行主集、待澄清和待修正资产"""
+    service = CaseTreeService(db_session)
+
+    needs_spec_tree = await service.get_case_tree(system_id=seed_tree_data["system_id"], bucket="needs_spec")
+    needs_spec_cases = [case for doc in needs_spec_tree for module in doc["modules"] for case in module["cases"]]
+    assert [case["title"] for case in needs_spec_cases] == ["推荐列表-空状态"]
+    assert needs_spec_cases[0]["bucket"] == "needs_spec"
+    assert needs_spec_cases[0]["verdict"] == "undefined"
+
+    conflict_tree = await service.get_case_tree(system_id=seed_tree_data["system_id"], verdict="conflict")
+    conflict_cases = [case for doc in conflict_tree for module in doc["modules"] for case in module["cases"]]
+    assert [case["title"] for case in conflict_cases] == ["播放-开始播放"]
+    assert conflict_cases[0]["bucket"] == "to_fix"
+    assert conflict_cases[0]["verdict"] == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_case_tree_stable_view_filters_review_noise_and_duplicates(
+    db_session: AsyncSession,
+    seed_tree_data,
+):
+    """稳定执行视图：默认只保留 main、非重复，并排除新批次待分类队列。"""
+    original_id = (
+        await db_session.execute(text("SELECT id FROM testcase.test_cases WHERE title = '搜索栏-关键词搜索' LIMIT 1"))
+    ).scalar_one()
+    duplicate_id = uuid.uuid4()
+    unresolved_id = uuid.uuid4()
+    await db_session.execute(
+        text(
+            "INSERT INTO testcase.test_cases "
+            "(id, batch_id, title, preconditions, steps, expected_results, priority, "
+            "dimensions, provenance, trust_level, review_status, bucket, verdict, duplicate_of) "
+            "VALUES (:id, :bid, :title, CAST(:preconds AS jsonb), CAST(:steps AS jsonb), "
+            "CAST(:expected AS jsonb), 'P0', CAST(:dims AS jsonb), CAST(:prov AS jsonb), "
+            "1, 'pending', 'main', 'grounded', :duplicate_of)"
+        ),
+        {
+            "id": duplicate_id,
+            "bid": seed_tree_data["batch1_id"],
+            "title": "搜索栏-关键词搜索重复",
+            "duplicate_of": original_id,
+            "prov": '{"derived_from":"t","source_section":"搜索栏","trust_level":1}',
+            "preconds": "[]",
+            "steps": '[{"step_number":1,"action":"test"}]',
+            "expected": '["ok"]',
+            "dims": '["functional"]',
+        },
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO testcase.test_cases "
+            "(id, batch_id, title, preconditions, steps, expected_results, priority, "
+            "dimensions, provenance, trust_level, review_status, bucket, verdict) "
+            "VALUES (:id, :bid, :title, CAST(:preconds AS jsonb), CAST(:steps AS jsonb), "
+            "CAST(:expected AS jsonb), 'P0', CAST(:dims AS jsonb), CAST(:prov AS jsonb), "
+            "1, 'pending', 'main', 'grounded')"
+        ),
+        {
+            "id": unresolved_id,
+            "bid": seed_tree_data["batch1_id"],
+            "title": "新批次未匹配模块",
+            "prov": '{"derived_from":[],"source_section":"unresolved","trust_level":1}',
+            "preconds": "[]",
+            "steps": '[{"step_number":1,"action":"test"}]',
+            "expected": '["ok"]',
+            "dims": '["functional"]',
+        },
+    )
+    await db_session.commit()
+
+    service = CaseTreeService(db_session)
+    tree = await service.get_case_tree(system_id=seed_tree_data["system_id"], view="stable")
+    titles = [case["title"] for doc in tree for module in doc["modules"] for case in module["cases"]]
+
+    assert "推荐列表-正常加载" in titles
+    assert "搜索栏-关键词搜索" in titles
+    assert "推荐列表-空状态" not in titles
+    assert "播放-开始播放" not in titles
+    assert "搜索栏-关键词搜索重复" not in titles
+    assert "新批次未匹配模块" not in titles
 
 
 @pytest.mark.asyncio
