@@ -1,9 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Breadcrumb,
   Button,
-  Card,
-  Descriptions,
   Form,
   message,
   Modal,
@@ -12,7 +9,15 @@ import {
   Spin,
   Table,
   Tag,
+  Typography,
 } from 'antd';
+import {
+  ArrowLeftOutlined,
+  FileSearchOutlined,
+  LinkOutlined,
+  PlayCircleOutlined,
+  ProfileOutlined,
+} from '@ant-design/icons';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import { triggerGeneration } from '../../services/batchApi';
@@ -20,8 +25,16 @@ import { createDocAssociation, getDocAssociations, listDocuments } from '../../s
 import { listSystemOptions } from '../../services/systemApi';
 import CheatSheetDrawer from '../../components/CheatSheetDrawer';
 import ParseResultDrawer from '../../components/ParseResultDrawer';
+import EmptyState from '../../components/common/EmptyState';
+import StatusTag, { type StatusTone } from '../../components/common/StatusTag';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
+
+const { Text } = Typography;
 
 const docTypeColorMap: Record<string, string> = {
   prd: 'blue',
@@ -31,6 +44,24 @@ const docTypeColorMap: Record<string, string> = {
   bug_record: 'red',
   prototype: 'cyan',
   other: 'default',
+};
+
+const docTypeLabelMap: Record<string, string> = {
+  prd: 'PRD',
+  tech_doc: '技术文档',
+  test_rule: '测试规则',
+  test_case: '测试用例',
+  bug_record: '缺陷记录',
+  prototype: '原型/图片',
+  other: '其他',
+};
+
+const docStatusMap: Record<string, { label: string; tone: StatusTone }> = {
+  uploading: { label: '上传中', tone: 'processing' },
+  uploaded: { label: '已上传', tone: 'success' },
+  importing: { label: '导入中', tone: 'processing' },
+  imported: { label: '已导入', tone: 'success' },
+  import_failed: { label: '导入失败', tone: 'danger' },
 };
 
 const relationTypeLabels: Record<DocRelationType, string> = {
@@ -43,11 +74,41 @@ const relationTypeLabels: Record<DocRelationType, string> = {
   general: '通用关联',
 };
 
-const EMBEDDING_STATUS: Record<string, { label: string; color: string }> = {
-  pending: { label: '待嵌入', color: 'default' },
-  processing: { label: '嵌入中', color: 'processing' },
-  completed: { label: '已完成', color: 'success' },
-  failed: { label: '嵌入失败', color: 'error' },
+const EMBEDDING_STATUS: Record<string, { label: string; tone: StatusTone }> = {
+  pending: { label: '待嵌入', tone: 'default' },
+  processing: { label: '嵌入中', tone: 'processing' },
+  completed: { label: '已完成', tone: 'success' },
+  failed: { label: '嵌入失败', tone: 'danger' },
+};
+
+const sectionStyle: React.CSSProperties = {
+  border: `1px solid ${layoutTokens.border}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surface,
+  padding: 16,
+  marginBottom: 16,
+};
+
+const sectionTitleStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'center',
+  gap: 12,
+  marginBottom: 14,
+};
+
+const fieldGridStyle: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+  gap: 14,
+};
+
+const metricToneFromStatus = (
+  tone: StatusTone,
+): 'default' | 'primary' | 'success' | 'warning' | 'danger' => {
+  if (tone === 'processing' || tone === 'info') return 'primary';
+  if (tone === 'success' || tone === 'warning' || tone === 'danger') return tone;
+  return 'default';
 };
 
 const DocumentDetailPage: React.FC = () => {
@@ -57,6 +118,7 @@ const DocumentDetailPage: React.FC = () => {
   const { currentDocument, fetchDocument } = useKnowledgeStore();
 
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [associations, setAssociations] = useState<DocAssociations | null>(null);
   const [assocLoading, setAssocLoading] = useState(false);
@@ -78,9 +140,11 @@ const DocumentDetailPage: React.FC = () => {
   const loadDocument = async () => {
     if (!documentId) return;
     setLoading(true);
+    setLoadError(false);
     try {
       await fetchDocument(documentId);
     } catch (err: any) {
+      setLoadError(true);
       message.error(err?.message || '加载文档失败');
     } finally {
       setLoading(false);
@@ -90,6 +154,7 @@ const DocumentDetailPage: React.FC = () => {
   const loadAssociations = async () => {
     if (!documentId) return;
     setAssocLoading(true);
+    setAssociations(null);
     try {
       const data = await getDocAssociations(documentId);
       setAssociations(data);
@@ -100,18 +165,26 @@ const DocumentDetailPage: React.FC = () => {
     }
   };
 
-  const handleGenerate = async () => {
+  const handleGenerate = () => {
     if (!documentId) return;
-    setGenerating(true);
-    try {
-      const res = await triggerGeneration(documentId);
-      message.success('生成任务已创建');
-      navigate(`/batches/${res.batch_id}`);
-    } catch (err: any) {
-      message.error(err?.message || '生成失败');
-    } finally {
-      setGenerating(false);
-    }
+    Modal.confirm({
+      title: '生成测试用例',
+      content: `将基于「${currentDocument?.title ?? '当前文档'}」创建新的生成批次。生成开始后会进入批次工作台查看进度。`,
+      okText: '开始生成',
+      cancelText: '取消',
+      onOk: async () => {
+        setGenerating(true);
+        try {
+          const res = await triggerGeneration(documentId);
+          message.success('生成任务已创建');
+          navigate(`/batches/${res.batch_id}`);
+        } catch (err: any) {
+          message.error(err?.message || '生成失败');
+        } finally {
+          setGenerating(false);
+        }
+      },
+    });
   };
 
   const openAddModal = () => {
@@ -171,7 +244,9 @@ const DocumentDetailPage: React.FC = () => {
       key: 'doc_type',
       width: 100,
       render: (type: string) => (
-        <Tag color={docTypeColorMap[type] || 'default'}>{type}</Tag>
+        <Tag color={docTypeColorMap[type] || 'default'}>
+          {docTypeLabelMap[type] || type}
+        </Tag>
       ),
     },
     {
@@ -188,72 +263,226 @@ const DocumentDetailPage: React.FC = () => {
       dataIndex: 'direction',
       key: 'direction',
       width: 80,
-      render: (dir: string) => (dir === 'outgoing' ? '出' : '入'),
+      render: (dir: string) => (dir === 'outgoing' ? '出站' : '入站'),
     },
   ];
 
-  if (loading || !currentDocument) {
+  if (loading) {
     return (
-      <div style={{ padding: 48, textAlign: 'center' }}>
-        <Spin size="large" />
-        <div style={{ marginTop: 16, color: '#8c8c8c' }}>加载中...</div>
-      </div>
+      <PageShell>
+        <div style={{ padding: 48, textAlign: 'center' }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 16, color: layoutTokens.textSecondary }}>加载中...</div>
+        </div>
+      </PageShell>
     );
   }
 
+  if (loadError || !currentDocument) {
+    return (
+      <PageShell>
+        <EmptyState
+          title="文档不可用"
+          description="当前文档可能已被删除，或暂时无法加载。"
+          action={
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/systems')}>
+              返回项目/系统
+            </Button>
+          }
+        />
+      </PageShell>
+    );
+  }
+
+  const docStatus = docStatusMap[currentDocument.status] || {
+    label: currentDocument.status || '-',
+    tone: 'default' as StatusTone,
+  };
+  const embeddingStatus = EMBEDDING_STATUS[currentDocument.embedding_status ?? ''] || {
+    label: currentDocument.embedding_status || '-',
+    tone: 'default' as StatusTone,
+  };
+  const directAssociationCount = associations?.direct.length ?? currentDocument.association_count ?? 0;
+  const indirectAssociationCount = associations?.indirect.length ?? 0;
+
   return (
-    <div style={{ padding: 24 }}>
-      <Breadcrumb
-        style={{ marginBottom: 16 }}
+    <PageShell>
+      <PageHeader
+        eyebrow="文档详情"
+        title={currentDocument.title}
+        description="确认资料类型、解析状态和关联上下游后，再发起用例生成。"
+        meta={
+          <Space size={8} wrap>
+            <Link to="/systems">项目/系统</Link>
+            <Text type="secondary">/</Text>
+            <Text type="secondary">文档详情</Text>
+            <StatusTag tone={docStatus.tone}>{docStatus.label}</StatusTag>
+            <StatusTag tone={embeddingStatus.tone}>{embeddingStatus.label}</StatusTag>
+          </Space>
+        }
+        actions={
+          [
+            <Button key="back" icon={<ArrowLeftOutlined />} onClick={() => navigate('/systems')}>
+              返回项目/系统
+            </Button>,
+            <Button key="parse" icon={<FileSearchOutlined />} onClick={() => setParseOpen(true)}>
+              解析详情
+            </Button>,
+            <Button key="cheat-sheet" icon={<ProfileOutlined />} onClick={() => setCheatSheetOpen(true)}>
+              知识速查表
+            </Button>,
+            <Button
+              key="generate"
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              onClick={handleGenerate}
+              loading={generating}
+            >
+              生成测试用例
+            </Button>,
+          ]
+        }
+      />
+
+      <MetricStrip
         items={[
-          { title: <Link to="/systems">系统列表</Link> },
-          { title: '文档详情' },
+          {
+            key: 'type',
+            label: '文档类型',
+            value: docTypeLabelMap[currentDocument.doc_type] || currentDocument.doc_type,
+            tone: 'primary',
+          },
+          {
+            key: 'status',
+            label: '导入状态',
+            value: docStatus.label,
+            tone: metricToneFromStatus(docStatus.tone),
+          },
+          {
+            key: 'embedding',
+            label: '嵌入状态',
+            value: embeddingStatus.label,
+            tone: metricToneFromStatus(embeddingStatus.tone),
+          },
+          {
+            key: 'direct',
+            label: '直接关联',
+            value: directAssociationCount,
+            tone: directAssociationCount > 0 ? 'success' : 'warning',
+          },
+          { key: 'indirect', label: '间接关联', value: indirectAssociationCount },
         ]}
       />
 
-      <Card style={{ marginBottom: 24 }}>
-        <Descriptions title="文档基本信息" column={2}>
-          <Descriptions.Item label="标题">{currentDocument.title}</Descriptions.Item>
-          <Descriptions.Item label="类型">
-            <Tag color={docTypeColorMap[currentDocument.doc_type]}>
-              {currentDocument.doc_type}
-            </Tag>
-          </Descriptions.Item>
-          <Descriptions.Item label="嵌入状态">
-            {(() => {
-              const cfg = EMBEDDING_STATUS[currentDocument.embedding_status ?? ''];
-              return cfg ? (
-                <Tag color={cfg.color}>{cfg.label}</Tag>
-              ) : (
-                currentDocument.embedding_status || '-'
-              );
-            })()}
-          </Descriptions.Item>
-          <Descriptions.Item label="存储路径">
-            {currentDocument.storage_path}
-          </Descriptions.Item>
-        </Descriptions>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 12,
+          marginBottom: 16,
+          padding: 12,
+          border: `1px solid ${layoutTokens.border}`,
+          borderRadius: layoutTokens.radius,
+          background: layoutTokens.surface,
+        }}
+      >
+        {[
+          ['1', '确认资料状态', '检查文档类型、导入状态和嵌入状态。'],
+          ['2', '补齐关联资产', '关联技术文档、原型或测试规则，提升生成上下文。'],
+          ['3', '生成并审查', '发起生成后进入批次工作台处理澄清、审核与落库。'],
+        ].map(([step, title, desc]) => (
+          <div key={step} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                flexShrink: 0,
+                display: 'grid',
+                placeItems: 'center',
+                background: layoutTokens.primarySoft,
+                color: layoutTokens.primary,
+                fontWeight: 700,
+              }}
+            >
+              {step}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 650 }}>{title}</div>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                {desc}
+              </Text>
+            </div>
+          </div>
+        ))}
+      </div>
 
-        <Space style={{ marginTop: 16 }}>
-          <Button type="primary" onClick={handleGenerate} loading={generating}>
-            生成测试用例
+      <div style={sectionStyle}>
+        <div style={sectionTitleStyle}>
+          <div>
+            <div style={{ fontWeight: 650 }}>文档概览</div>
+            <Text type="secondary">用于判断这份资料是否已经具备生成用例的基础上下文。</Text>
+          </div>
+        </div>
+        <div style={fieldGridStyle}>
+          <div>
+            <Text type="secondary">标题</Text>
+            <div style={{ marginTop: 4, fontWeight: 600, wordBreak: 'break-word' }}>
+              {currentDocument.title}
+            </div>
+          </div>
+          <div>
+            <Text type="secondary">文档类型</Text>
+            <div style={{ marginTop: 4 }}>
+              <Tag color={docTypeColorMap[currentDocument.doc_type]}>
+                {docTypeLabelMap[currentDocument.doc_type] || currentDocument.doc_type}
+              </Tag>
+            </div>
+          </div>
+          <div>
+            <Text type="secondary">目录路径</Text>
+            <div style={{ marginTop: 4, wordBreak: 'break-word' }}>
+              {currentDocument.folder_path || '根目录'}
+            </div>
+          </div>
+          <div>
+            <Text type="secondary">更新时间</Text>
+            <div style={{ marginTop: 4 }}>
+              {new Date(currentDocument.updated_at).toLocaleString()}
+            </div>
+          </div>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <Text type="secondary">存储路径</Text>
+            <div style={{ marginTop: 4, wordBreak: 'break-all' }}>
+              <Text code>{currentDocument.storage_path}</Text>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={sectionStyle}>
+        <div style={sectionTitleStyle}>
+          <div>
+            <div style={{ fontWeight: 650 }}>关联文档</div>
+            <Text type="secondary">直接关联会参与资料追溯；缺少技术文档、原型或测试规则时，先补关联再生成更稳。</Text>
+          </div>
+          <Button icon={<LinkOutlined />} onClick={openAddModal}>
+            添加关联
           </Button>
-          <Button onClick={openAddModal}>添加关联</Button>
-          <Button onClick={() => setCheatSheetOpen(true)}>知识速查表</Button>
-          <Button onClick={() => setParseOpen(true)}>解析详情</Button>
-        </Space>
-      </Card>
-
-      <Card title="关联文档">
+        </div>
         <Spin spinning={assocLoading}>
           <Table
             columns={assocColumns}
             dataSource={associations?.direct || []}
             rowKey="id"
             pagination={false}
+            scroll={{ x: 520 }}
+            locale={{
+              emptyText: '暂无关联文档。可先关联技术文档、原型或测试规则，再发起生成。',
+            }}
           />
         </Spin>
-      </Card>
+      </div>
 
       {/* 添加关联 Modal */}
       <Modal
@@ -320,7 +549,7 @@ const DocumentDetailPage: React.FC = () => {
         open={parseOpen}
         onClose={() => setParseOpen(false)}
       />
-    </div>
+    </PageShell>
   );
 };
 

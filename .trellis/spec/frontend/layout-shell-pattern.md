@@ -141,6 +141,25 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 - 生成成功后进入批次工作台，符合平台主流程和工作台待办设计。
 - 保留文档详情入口，满足查看解析详情、知识速查表和关联文档等次级任务。
 
+## 文档详情追溯节点
+
+文档详情 `/documents/:documentId` 是“资料是否可用于生成”的判断页，不应只是数据库字段展示页。
+
+实现约定：
+
+- 页面必须接入 `PageShell` / `PageHeader` / `MetricStrip`，顶部直接暴露文档类型、导入状态、嵌入状态、关联数。
+- 顶部主动作必须保留“生成测试用例”，并复用现有 `triggerGeneration(documentId)`；成功后跳转 `/batches/:batchId`。
+- 生成动作必须有确认弹窗，避免误触发真实生成批次。
+- 保留“添加关联”“知识速查表”“解析详情”等已有能力，不改变 API 契约。
+- 关联文档表格需要使用 `scroll.x`，避免长标题或多列在 1024 宽度撑破页面。
+- 加载失败或文档为空时使用 `EmptyState` 给出返回路径，不能无限显示 loading。
+
+为什么：
+
+- 首次使用本平台的 QA 从知识库进入详情后，需要知道这份资料的状态、上下文是否齐、下一步能否生成。
+- 关联文档是测试资产追溯链的一部分，应与生成动作放在同一工作流里呈现。
+- 详情页只改前端动线，不改变文档解析、知识图谱、生成 pipeline 或 worker 逻辑。
+
 ## Wrong vs Correct
 
 ### Wrong：页面各自写标题、筛选和空态
@@ -185,5 +204,6 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 - 1024 宽关键路由无页面级横向溢出
 - 工作台 `/review` 必须验证四个待办队列可见，队列“筛选”按钮能驱动下方表格筛选。
 - 知识库 `/systems/:systemId/documents` 必须验证三步主流程提示和“生成用例”入口可见。
+- 文档详情 `/documents/:documentId` 必须验证状态指标、生成确认弹窗、关联文档表格和空态恢复路径。
 
 当前 `npm run lint` 依赖 ESLint 配置；若仓库没有配置文件，记录为环境/基建缺口，不作为页面改动失败。
