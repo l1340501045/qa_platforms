@@ -66,3 +66,49 @@
 - [ ] 自签书 PRD 开关开：含链接章节并入原型规格摘要（探针实证含"审核状态"等）。
 - [ ] 坏 token / 无链接：零异常、零内容变化。
 - [ ] 令牌仅在 `.env`；改动文件 ruff 干净。
+
+---
+
+## 7. 实测结论与架构升级（2026-06-24）
+
+### 7.1 关键发现：真实链接是 page_id，纯 API 取不到
+
+GPT review 的 🔴 阻断点被实测确认：**真实 PRD 里的 MasterGo 链接只带 `page_id`**（如 `?page_id=68%3A91864`），不带 `layer_id`。而：
+
+- `getDsl(fileId, page_id)` → 返回 `nodes=[]`（空）。`getMeta` / `design-texts` / `design-svgs` 同样空（需客户端预热缓存）。
+- MasterGo 官方 **OpenAPI**（`developers.mastergo.com/rest-api/`）只有组织/文档/组件/样式管理类接口，**无「列出页面下所有 Frame 节点」的能力**；`resource/preview` 仅私有化部署可用。
+- 浏览器抓 HTTP 包：文档节点树**不在 JSON 里**（走 WebSocket/二进制 CRDT 流），拦截不可行。
+
+**结论：SaaS 版上，page_id → 规格没有任何纯 API 路径。** 唯一可自动化的是「模拟客户端」。
+
+### 7.2 攻克：无头浏览器读「图层面板 DOM」枚举 Frame（已端到端验证）
+
+MasterGo 编辑器左侧**图层面板是 HTML（非 canvas）**，每个节点是带 `data-id`（即 layer_id）的 div：
+
+```html
+<div nodename="90:420043" data-id="90:420043" data-offsetleft="0" data-haschild="true" data-isclose="true">
+```
+
+- `data-offsetleft="0"` 标顶层帧（页面直属屏）；虚拟列表需滚动收全。
+- **已用 Playwright（仓库现成依赖）+ 持久化登录态，无头跑通**：`page_id=68:91864` → 枚举出 7 个顶层 frame layer_id。
+- 把这些 id 喂回**已跑通的 `getDsl` + `dsl_to_spec_digest`** → **6809 字真实规格**（审核状态机 `[审核通过][申请签约][签约失败]…`、权限规则「非责编点新建→您暂无权限」、字段取值范围、列表页查询项）。
+
+**最终架构**：浏览器只用来解决「page_id → [frame layer_id...]」这一跳；取数与摘要全复用现有纯函数。无需视觉模型，无需拦 WS。
+
+### 7.3 落地形态：一次性存量迁移工具（用户拍板）
+
+MasterGo 即将下线、后续 PRD 基本不再用它，但存量 PRD 需沉淀。故**不进生成热路径**，做成独立 CLI：
+
+```
+扫 knowledge.documents.content 里含 mastergo.com 的老 PRD
+  → 抽链接（page_id/layer_id/goto）
+  → page_id 用浏览器枚 frame id；layer_id 直接用
+  → getDsl 每帧 → 摘要 → 过滤 MasterGo 自带广告稿
+  → 幂等回灌进 documents.content（带哨兵标记）+ 重算 content_hash + 重嵌
+```
+
+- 登录态：一次性 headed 登录 → 持久化 `.mastergo_session`（gitignore），之后无头复用。
+- 安全：默认 `--dry-run` 只打印不写库；`--apply` 才落库。
+- 噪音：MasterGo 模板/广告帧（"MasterGo MCP / Editorial Architecture / 赋予 AI 掌控画布"）按标记词过滤。
+
+详见实施计划 `docs/plans/2026-06-23-mastergo-prototype-source-plan.md`（v2）。

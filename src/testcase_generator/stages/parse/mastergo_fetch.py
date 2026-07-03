@@ -39,12 +39,21 @@ def _decode_param(raw: str) -> str:
     return httpx.URL(f"http://x/?v={raw}").params.get("v") or raw
 
 
+def _unescape_url(url: str) -> str:
+    """去掉 markdown 转义反斜杠（如 page\\_id → page_id、\\& → &）。
+
+    真实 PRD 正文里 MasterGo 链接常被 markdown 转义存储（`\\_`、`\\&`），
+    导致 page_id/layer_id 正则匹配不到。URL 本身不含字面反斜杠，直接剥离即可。
+    """
+    return (url or "").replace("\\", "")
+
+
 def extract_mastergo_links(content: str) -> list[MgRef]:
     """从文本抽 MasterGo /file/ 链接。同时识别 layer_id 和 page_id。无则 []。"""
     refs: list[MgRef] = []
     seen: set[tuple[str, str]] = set()
     for m in _FILE_RE.finditer(content or ""):
-        url = m.group(0)
+        url = _unescape_url(m.group(0))
         file_id = m.group(1)
         lm = _LAYER_RE.search(url)
         pm = _PAGE_RE.search(url)
@@ -65,8 +74,15 @@ def extract_mastergo_links(content: str) -> list[MgRef]:
 
 
 def extract_goto_links(content: str) -> list[str]:
-    """从文本抽 /goto/ 短链 URL。"""
-    return _GOTO_RE.findall(content or "")
+    """从文本抽 /goto/ 短链 URL（去 markdown 转义、去重）。"""
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in _GOTO_RE.findall(content or ""):
+        cu = _unescape_url(u)
+        if cu not in seen:
+            seen.add(cu)
+            out.append(cu)
+    return out
 
 
 def dsl_to_spec_digest(dsl: dict, max_chars: int = _MAX_DIGEST) -> str:
@@ -171,3 +187,64 @@ async def enrich_sections_with_mastergo(sources: list, token: str) -> int:
     if enriched:
         logger.info("MasterGo 原型规格已并入 %d 个链接", enriched)
     return enriched
+
+
+# ── 存量迁移工具（落点⑦ v2）：噪音过滤 + 幂等回灌注入 ────────────────────────
+# 哨兵包裹回灌块，便于复跑替换与彻底回退（删块即还原）。
+BACKFILL_SENTINEL = "<!-- MASTERGO_SPEC_BACKFILL v1 -->"
+_BACKFILL_END = "<!-- /MASTERGO_SPEC_BACKFILL -->"
+_BACKFILL_RE = re.compile(
+    re.escape(BACKFILL_SENTINEL) + r".*?" + re.escape(_BACKFILL_END),
+    re.DOTALL,
+)
+
+# MasterGo 自带的模板/广告稿特征词（编辑器空文件默认带的「MCP 宣传」屏，非用户设计）
+_PROMO_MARKERS = (
+    "MasterGo MCP",
+    "Editorial Architecture",
+    "赋予 AI 掌控画布",
+    "MCP 服务",
+    "access key",
+    "editorial-artboard",
+)
+
+
+def filter_promo_digests(items: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """滤除 MasterGo 自带广告/模板帧，保留真实业务屏。
+
+    判定：屏名以 editorial-artboard 开头，或 (屏名+摘要) 命中 ≥2 个特征词。
+    """
+    kept: list[tuple[str, str]] = []
+    for name, digest in items:
+        blob = f"{name}\n{digest}"
+        hits = sum(1 for m in _PROMO_MARKERS if m in blob)
+        if (name or "").lower().startswith("editorial-artboard") or hits >= 2:
+            logger.info("MasterGo 广告/模板帧已过滤: %s", name)
+            continue
+        kept.append((name, digest))
+    return kept
+
+
+def build_backfill_block(url_to_digest: dict[str, str]) -> str:
+    """把 {原型链接: 规格摘要} 组织成哨兵包裹的 markdown 回灌块。无有效内容返回 ''。"""
+    parts = [(url, dig.strip()) for url, dig in url_to_digest.items() if dig and dig.strip()]
+    if not parts:
+        return ""
+    lines = [BACKFILL_SENTINEL, "", "## 原型规格补全（MasterGo 设计稿自动抽取）", ""]
+    for url, dig in parts:
+        lines.append(f"> 来源原型：{url}")
+        lines.append("")
+        lines.append(dig)
+        lines.append("")
+    lines.append(_BACKFILL_END)
+    return "\n".join(lines)
+
+
+def inject_backfill_block(content: str, block: str) -> str:
+    """把回灌块幂等注入文档内容：已有哨兵块→整块替换；否则末尾追加。块为空→原样返回。"""
+    if not block:
+        return content
+    if BACKFILL_SENTINEL in (content or ""):
+        return _BACKFILL_RE.sub(lambda _m: block, content)
+    sep = "" if (content or "").endswith("\n") else "\n\n"
+    return (content or "") + sep + block

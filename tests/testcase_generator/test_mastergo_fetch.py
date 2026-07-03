@@ -36,6 +36,16 @@ def test_extract_links_page_only():
     assert refs[0].is_page_only is True
 
 
+def test_extract_links_markdown_escaped():
+    r"""真实 PRD 里 URL 常被 markdown 转义（page\_id、\&），需照样抽到。"""
+    c = r"管理端见原型 https://mastergo.com/file/171777687959897?fileOpenFrom=project\&page\_id=68%3A91864 完"
+    refs = extract_mastergo_links(c)
+    assert len(refs) == 1
+    assert refs[0].file_id == "171777687959897"
+    assert refs[0].layer_id == "68:91864"
+    assert refs[0].is_page_only is True
+
+
 def test_extract_links_multiple_pages():
     c = (
         "页面A https://mastergo.com/file/123?page_id=48%3A74637 "
@@ -84,6 +94,18 @@ def test_extract_goto_links():
 
 def test_extract_goto_links_none():
     assert extract_goto_links("没有 goto 链接") == []
+
+
+def test_extract_goto_escaped_dedup():
+    r"""转义的 goto 短链：去反斜杠 + 去重。"""
+    c = (
+        r"A https://mastergo.com/goto/Nsrm8P6B?page\_id=2:92\&file=174047410648412 "
+        r"B https://mastergo.com/goto/Nsrm8P6B?page\_id=2:92\&file=174047410648412"
+    )
+    urls = extract_goto_links(c)
+    assert len(urls) == 1
+    assert "\\" not in urls[0]
+    assert "goto/Nsrm8P6B" in urls[0]
 
 
 # ── DSL → 摘要 ──
