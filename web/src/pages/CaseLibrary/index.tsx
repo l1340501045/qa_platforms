@@ -6,12 +6,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Card,
-  Col,
-  Row,
   Select,
-  Space,
   Spin,
-  Statistic,
   Typography,
 } from 'antd';
 import { ApartmentOutlined } from '@ant-design/icons';
@@ -35,8 +31,13 @@ import type {
   ReviewIssueType,
   ReviewStatus,
 } from '../../types';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import SplitPane from '../../components/layout/SplitPane';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 const CaseLibraryPage: React.FC = () => {
   // ─── State ───
@@ -155,14 +156,20 @@ const CaseLibraryPage: React.FC = () => {
   }, [caseAssetTree]);
 
   return (
-    <div style={{ padding: 24 }}>
-      <Title level={3} style={{ marginBottom: 24 }}>
-        <ApartmentOutlined style={{ marginRight: 8 }} />
-        用例库
-      </Title>
+    <PageShell>
+      <PageHeader
+        eyebrow="用例资产"
+        title={
+          <>
+            <ApartmentOutlined style={{ marginRight: 8 }} />
+            用例资产
+          </>
+        }
+        description="按系统、批次、资产视图和质量状态浏览沉淀后的用例，模块树支持多级分支。"
+      />
 
       {/* ─── 筛选栏 ─── */}
-      <Space style={{ marginBottom: 16 }} wrap>
+      <FilterBar>
         <Select
           showSearch
           optionFilterProp="label"
@@ -282,45 +289,23 @@ const CaseLibraryPage: React.FC = () => {
             { value: 'verify_uncertain', label: '核验不确定' },
           ]}
         />
-      </Space>
+      </FilterBar>
 
       {/* ─── 统计卡片 ─── */}
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="总用例" value={stats.total} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="文档数" value={stats.docCount} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="模块数" value={stats.moduleCount} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="P0 用例" value={stats.p0} valueStyle={{ color: '#cf1322' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="已确认" value={stats.confirmed} valueStyle={{ color: '#3f8600' }} />
-          </Card>
-        </Col>
-        <Col span={4}>
-          <Card size="small">
-            <Statistic title="待审" value={stats.pending} valueStyle={{ color: '#8c8c8c' }} />
-          </Card>
-        </Col>
-      </Row>
+      <MetricStrip
+        items={[
+          { key: 'total', label: '总用例', value: stats.total, tone: 'primary' },
+          { key: 'docs', label: '文档数', value: stats.docCount },
+          { key: 'modules', label: '模块数', value: stats.moduleCount },
+          { key: 'p0', label: 'P0 用例', value: stats.p0, tone: 'danger' },
+          { key: 'confirmed', label: '已确认', value: stats.confirmed, tone: 'success' },
+          { key: 'pending', label: '待审', value: stats.pending, tone: 'warning' },
+        ]}
+      />
 
       {/* ─── 主体：左树右表 ─── */}
-      <Row gutter={24}>
-        <Col span={8}>
+      <SplitPane
+        left={
           <Card title="文档 / 模块结构" size="small" style={{ height: '100%' }}>
             <Spin spinning={treeLoading}>
               <CaseAssetTree
@@ -331,8 +316,8 @@ const CaseLibraryPage: React.FC = () => {
               />
             </Spin>
           </Card>
-        </Col>
-        <Col span={16}>
+        }
+        right={
           <Card
             title={selectedTitle}
             size="small"
@@ -345,8 +330,9 @@ const CaseLibraryPage: React.FC = () => {
               onOpenCase={setDetailCaseId}
             />
           </Card>
-        </Col>
-      </Row>
+        }
+        leftWidth={340}
+      />
 
       {/* ─── 用例详情 Drawer ─── */}
       <CaseDetailDrawer
@@ -354,7 +340,7 @@ const CaseLibraryPage: React.FC = () => {
         open={!!detailCaseId}
         onClose={() => setDetailCaseId(null)}
       />
-    </div>
+    </PageShell>
   );
 };
 

@@ -1,0 +1,22 @@
+export const layoutTokens = {
+  background: '#f5f7fb',
+  surface: '#ffffff',
+  surfaceMuted: '#f8fafc',
+  border: '#e5e7eb',
+  borderSubtle: '#eef2f7',
+  text: '#111827',
+  textSecondary: '#6b7280',
+  textMuted: '#9ca3af',
+  primary: '#1d4ed8',
+  primarySoft: '#eff6ff',
+  success: '#15803d',
+  successSoft: '#f0fdf4',
+  warning: '#b45309',
+  warningSoft: '#fffbeb',
+  danger: '#b91c1c',
+  dangerSoft: '#fef2f2',
+  radius: 8,
+  headerHeight: 64,
+  sidebarWidth: 248,
+};
+

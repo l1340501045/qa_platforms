@@ -19,6 +19,9 @@ import type { ColumnsType } from 'antd/es/table';
 import { createExport, listExports } from '../../services/exportApi';
 import { listSystemOptions, listSystemBatches } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
 import type {
   CreateExportRequest,
   ExportFormat,
@@ -262,14 +265,41 @@ const Exports: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* ─── 顶部 ─── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>导出中心</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-          新建导出
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="导出中心"
+        title="用例导出任务"
+        description="按批次或系统导出 Markdown/Excel，用于评审交付或同步到外部测试管理工具。"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            新建导出
+          </Button>
+        }
+      />
+
+      <MetricStrip
+        items={[
+          { key: 'total', label: '任务总数', value: data.total },
+          {
+            key: 'processing',
+            label: '处理中',
+            value: data.items.filter((item) => item.status === 'processing').length,
+            tone: 'primary',
+          },
+          {
+            key: 'completed',
+            label: '本页已完成',
+            value: data.items.filter((item) => item.status === 'completed').length,
+            tone: 'success',
+          },
+          {
+            key: 'failed',
+            label: '本页失败',
+            value: data.items.filter((item) => item.status === 'failed').length,
+            tone: 'danger',
+          },
+        ]}
+      />
 
       {/* ─── 列表 ─── */}
       <Spin spinning={loading}>
@@ -380,7 +410,7 @@ const Exports: React.FC = () => {
           </div>
         )}
       </Modal>
-    </div>
+    </PageShell>
   );
 };
 

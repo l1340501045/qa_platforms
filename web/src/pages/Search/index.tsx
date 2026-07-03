@@ -6,11 +6,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Badge,
-  Empty,
   Input,
   Pagination,
   Select,
-  Space,
   Spin,
   Table,
   Tag,
@@ -23,9 +21,14 @@ import type { ColumnsType } from 'antd/es/table';
 import { searchCases } from '../../services/searchApi';
 import { listSystemOptions } from '../../services/systemApi';
 import CaseDetailDrawer from '../../components/CaseDetailDrawer';
+import EmptyState from '../../components/common/EmptyState';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
 import type { Priority, ReviewStatus, SearchResultItem } from '../../types';
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 // ─── 常量 ───
 const PRIORITY_COLOR: Record<string, string> = {
@@ -213,10 +216,22 @@ const SearchPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <Title level={3} style={{ marginBottom: 24 }}>
-        用例搜索
-      </Title>
+    <PageShell>
+      <PageHeader
+        eyebrow="全局搜索"
+        title="用例搜索"
+        description="按关键词跨系统检索用例，可继续用系统、优先级和审核状态缩小范围。"
+      />
+
+      {searched && (
+        <MetricStrip
+          items={[
+            { key: 'total', label: '匹配结果', value: total, tone: 'primary' },
+            { key: 'page', label: '本页展示', value: items.length },
+            { key: 'query', label: '当前关键词', value: query || '-' },
+          ]}
+        />
+      )}
 
       {/* ─── 搜索栏 ─── */}
       <div style={{ marginBottom: 16 }}>
@@ -233,7 +248,7 @@ const SearchPage: React.FC = () => {
       </div>
 
       {/* ─── 筛选栏 ─── */}
-      <Space style={{ marginBottom: 16 }} wrap>
+      <FilterBar>
         <Select
           allowClear
           showSearch
@@ -278,12 +293,15 @@ const SearchPage: React.FC = () => {
             共找到 {total} 条结果
           </Text>
         )}
-      </Space>
+      </FilterBar>
 
       {/* ─── 搜索结果 ─── */}
       <Spin spinning={loading}>
         {searched && items.length === 0 && !loading ? (
-          <Empty description="没有找到匹配的用例" style={{ marginTop: 48 }} />
+          <EmptyState
+            title="没有找到匹配的用例"
+            description="可以换一个业务关键词，或放宽系统、优先级和审核状态筛选。"
+          />
         ) : (
           <Table<SearchResultItem>
             rowKey="id"
@@ -315,7 +333,7 @@ const SearchPage: React.FC = () => {
         open={!!detailCaseId}
         onClose={() => setDetailCaseId(null)}
       />
-    </div>
+    </PageShell>
   );
 };
 

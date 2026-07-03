@@ -1,33 +1,44 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Empty, Select, Spin, Table, Tag } from 'antd';
+import { Select, Spin, Table } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 
 import { listBatches } from '../../services/batchApi';
 import type { BatchStatus, PaginatedData, ReviewBatch } from '../../types';
+import EmptyState from '../../components/common/EmptyState';
+import StatusTag from '../../components/common/StatusTag';
+import type { StatusTone } from '../../components/common/StatusTag';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
 
 const STATUS_OPTIONS = [
+  { value: 'pending', label: '排队中' },
+  { value: 'running', label: '生成中' },
+  { value: 'suspended', label: '待澄清' },
+  { value: 'failed', label: '失败' },
   { value: 'pending_review', label: '待审核' },
   { value: 'reviewing', label: '审核中' },
   { value: 'completed', label: '已完成' },
   { value: 'archived', label: '已落库' },
 ];
 
-const STATUS_TAG: Record<string, { color: string; text: string }> = {
-  pending_review: { color: 'orange', text: '待审核' },
-  reviewing: { color: 'processing', text: '审核中' },
-  completed: { color: 'green', text: '已完成' },
-  archived: { color: 'default', text: '已落库' },
-  running: { color: 'blue', text: '生成中' },
-  failed: { color: 'red', text: '失败' },
-  pending: { color: 'default', text: '排队中' },
-  suspended: { color: 'purple', text: '待澄清' },
+const STATUS_TAG: Record<string, { tone: StatusTone; text: string }> = {
+  pending_review: { tone: 'warning', text: '待审核' },
+  reviewing: { tone: 'processing', text: '审核中' },
+  completed: { tone: 'success', text: '已完成' },
+  archived: { tone: 'default', text: '已落库' },
+  running: { tone: 'processing', text: '生成中' },
+  failed: { tone: 'danger', text: '失败' },
+  pending: { tone: 'default', text: '排队中' },
+  suspended: { tone: 'warning', text: '待澄清' },
 };
 
 const ReviewCenter: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState<string>('pending_review');
+  const [status, setStatus] = useState<string>('');
   const [data, setData] = useState<PaginatedData<ReviewBatch>>({
     items: [],
     total: 0,
@@ -80,8 +91,8 @@ const ReviewCenter: React.FC = () => {
       key: 'status',
       width: 100,
       render: (val: BatchStatus) => {
-        const cfg = STATUS_TAG[val] || { color: 'default', text: val };
-        return <Tag color={cfg.color}>{cfg.text}</Tag>;
+        const cfg = STATUS_TAG[val] || { tone: 'default', text: val };
+        return <StatusTag tone={cfg.tone}>{cfg.text}</StatusTag>;
       },
     },
     {
@@ -109,9 +120,32 @@ const ReviewCenter: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>审核中心</h2>
+    <PageShell>
+      <PageHeader
+        eyebrow="工作台"
+        title="待处理批次"
+        description="优先处理待澄清、失败和待审核批次；从这里进入批次详情完成审查、迭代和落库。"
+      />
+
+      <MetricStrip
+        items={[
+          { key: 'total', label: '当前筛选批次', value: data.total, tone: 'primary' },
+          { key: 'page', label: '本页可处理', value: data.items.length },
+          {
+            key: 'cases',
+            label: '本页用例数',
+            value: data.items.reduce((sum, item) => sum + (item.total_cases ?? 0), 0),
+          },
+          {
+            key: 'filter',
+            label: '当前状态',
+            value: STATUS_OPTIONS.find((item) => item.value === status)?.label || '全部',
+          },
+        ]}
+      />
+
+      <FilterBar>
+        <span style={{ fontWeight: 600 }}>批次状态</span>
         <Select
           showSearch
           optionFilterProp="label"
@@ -122,11 +156,14 @@ const ReviewCenter: React.FC = () => {
           onChange={(val) => setStatus(val || '')}
           options={STATUS_OPTIONS}
         />
-      </div>
+      </FilterBar>
 
       <Spin spinning={loading}>
         {data.items.length === 0 && !loading ? (
-          <Empty description="暂无待审批次" />
+          <EmptyState
+            title="当前筛选下没有批次"
+            description="可切换状态查看审核中、已完成或已落库的批次。"
+          />
         ) : (
           <Table<ReviewBatch>
             rowKey="id"
@@ -144,7 +181,7 @@ const ReviewCenter: React.FC = () => {
           />
         )}
       </Spin>
-    </div>
+    </PageShell>
   );
 };
 

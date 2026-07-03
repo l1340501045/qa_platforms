@@ -17,6 +17,11 @@ import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import type { System } from '../../types';
+import EmptyState from '../../components/common/EmptyState';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
 
 const { Meta } = Card;
 const { Text } = Typography;
@@ -43,6 +48,18 @@ const SystemsPage: React.FC = () => {
   const [editingSystem, setEditingSystem] = useState<System | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
+
+  const knownDocumentTotal = systems.reduce(
+    (sum, system) => sum + (typeof system.document_count === 'number' ? system.document_count : 0),
+    0,
+  );
+  const knownBatchTotal = systems.reduce(
+    (sum, system) => sum + (typeof system.batch_count === 'number' ? system.batch_count : 0),
+    0,
+  );
+  const activeSystems = systems.filter(
+    (system) => (system.document_count ?? 0) > 0 || (system.batch_count ?? 0) > 0,
+  ).length;
 
   useEffect(() => {
     fetchSystems({ page: 1, per_page: systemsPerPage });
@@ -106,15 +123,26 @@ const SystemsPage: React.FC = () => {
   };
 
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          系统列表
-        </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-          新建系统
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="项目入口"
+        title="项目/系统"
+        description="先选择业务系统，再进入知识库上传需求资料、发起生成或查看已有批次。"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            新建系统
+          </Button>
+        }
+      />
+
+      <MetricStrip
+        items={[
+          { key: 'systems', label: '系统总数', value: systemsTotal },
+          { key: 'active', label: '当前页有资料/批次', value: activeSystems, tone: 'primary' },
+          { key: 'documents', label: '当前页文档数', value: knownDocumentTotal },
+          { key: 'batches', label: '当前页批次数', value: knownBatchTotal },
+        ]}
+      />
 
       <Spin spinning={systemsLoading}>
         <Row gutter={[16, 16]}>
@@ -136,14 +164,41 @@ const SystemsPage: React.FC = () => {
                   title={system.name}
                   description={system.description || '暂无描述'}
                 />
-                <div style={{ marginTop: 12 }}>
-                  <Text type="secondary">文档数：{renderCount(system.document_count)}</Text>
-                  <br />
-                  <Text type="secondary">批次数：{renderCount(system.batch_count)}</Text>
-                  <br />
-                  <Text type="secondary">
-                    创建时间：{new Date(system.created_at).toLocaleDateString()}
-                  </Text>
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div
+                      style={{
+                        padding: 10,
+                        borderRadius: layoutTokens.radius,
+                        background: layoutTokens.surfaceMuted,
+                      }}
+                    >
+                      <Text type="secondary">文档数</Text>
+                      <div style={{ fontWeight: 650, fontSize: 18 }}>
+                        {renderCount(system.document_count)}
+                      </div>
+                    </div>
+                    <div
+                      style={{
+                        padding: 10,
+                        borderRadius: layoutTokens.radius,
+                        background: layoutTokens.surfaceMuted,
+                      }}
+                    >
+                      <Text type="secondary">批次数</Text>
+                      <div style={{ fontWeight: 650, fontSize: 18 }}>
+                        {renderCount(system.batch_count)}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <Text type="secondary">
+                      最近更新：{new Date(system.updated_at).toLocaleDateString()}
+                    </Text>
+                  </div>
+                  <Button type="link" style={{ padding: 0, marginTop: 8 }}>
+                    进入知识库
+                  </Button>
                 </div>
               </Card>
             </Col>
@@ -151,9 +206,15 @@ const SystemsPage: React.FC = () => {
         </Row>
 
         {systems.length === 0 && !systemsLoading && (
-          <div style={{ textAlign: 'center', padding: 48 }}>
-            <Text type="secondary">暂无系统，请点击右上角「新建系统」</Text>
-          </div>
+          <EmptyState
+            title="还没有项目/系统"
+            description="先创建一个业务系统，再上传 PRD、技术文档或测试规则。"
+            action={
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                新建系统
+              </Button>
+            }
+          />
         )}
       </Spin>
 
@@ -193,7 +254,7 @@ const SystemsPage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
-    </div>
+    </PageShell>
   );
 };
 

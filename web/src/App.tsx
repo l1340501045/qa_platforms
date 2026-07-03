@@ -24,7 +24,7 @@ function App() {
     <Suspense fallback={<PageLoading />}>
       <Routes>
         <Route path="/" element={<MainLayout />}>
-          <Route index element={<Navigate to="/systems" replace />} />
+          <Route index element={<Navigate to="/review" replace />} />
           <Route path="systems" element={<SystemsPage />} />
           <Route path="systems/:systemId/documents" element={<KnowledgePage />} />
           <Route path="documents/:documentId" element={<DocumentDetailPage />} />

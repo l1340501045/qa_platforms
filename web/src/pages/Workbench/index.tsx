@@ -27,6 +27,10 @@ import {
 
 import { useTestcaseStore } from '../../stores/testcaseStore';
 import CaseTreeReview from '../../components/CaseTreeReview';
+import EmptyState from '../../components/common/EmptyState';
+import FilterBar from '../../components/layout/FilterBar';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
 import type {
   BatchStatus,
   CaseBucket,
@@ -315,25 +319,33 @@ const Workbench: React.FC = () => {
   // ─── 渲染 ───
   if (batchLoading && !batch) {
     return (
-      <div style={{ textAlign: 'center', padding: 80 }}>
+      <PageShell style={{ textAlign: 'center', padding: 80 }}>
         <Spin size="large" tip="加载中..." />
-      </div>
+      </PageShell>
     );
   }
 
   if (!batch) {
-    return <div style={{ textAlign: 'center', padding: 80 }}>批次不存在</div>;
+    return (
+      <PageShell>
+        <EmptyState
+          title="批次不存在"
+          description="请从工作台或系统批次列表重新进入。"
+        />
+      </PageShell>
+    );
   }
 
   const badgeCfg = STATUS_BADGE_MAP[batch.status];
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* ─── 顶部：批次信息 ─── */}
-      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 16 }}>
-        <h2 style={{ margin: 0 }}>{batch.document_title || '用例工作台'}</h2>
-        <Badge status={badgeCfg.status} text={badgeCfg.text} />
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="生成与审查"
+        title={batch.document_title || '用例工作台'}
+        description="查看生成阶段、处理质量门澄清，并对候选用例执行确认、修改、迭代或落库。"
+        meta={<Badge status={badgeCfg.status} text={badgeCfg.text} />}
+      />
 
       {/* ─── 等待 Worker / 失败提示 ─── */}
       {batch.status === 'pending' && (
@@ -373,7 +385,7 @@ const Workbench: React.FC = () => {
       />
 
       {/* ─── 筛选栏 ─── */}
-      <div style={{ marginBottom: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+      <FilterBar>
         <Input.Search
           allowClear
           enterButton
@@ -437,7 +449,7 @@ const Workbench: React.FC = () => {
             { value: 'verify_uncertain', label: '核验不确定' },
           ]}
         />
-      </div>
+      </FilterBar>
 
       {/* ─── 用例审核树（左模块树 + 右用例表） ─── */}
       <CaseTreeReview
@@ -556,7 +568,7 @@ const Workbench: React.FC = () => {
         ))}
       </Modal>
 
-    </div>
+    </PageShell>
   );
 };
 

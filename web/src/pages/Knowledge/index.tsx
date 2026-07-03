@@ -26,6 +26,12 @@ import {
   collectTreeKeysByDepth,
   filterTreeDataByKeyword,
 } from '../../components/treeUtils';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import SplitPane from '../../components/layout/SplitPane';
+import { layoutTokens } from '../../components/layout/tokens';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -251,10 +257,23 @@ const KnowledgePage: React.FC = () => {
   ];
 
   return (
-    <div style={{ padding: 24 }}>
-      <Title level={3}>{currentSystem?.name || '系统'} - 知识库</Title>
+    <PageShell>
+      <PageHeader
+        eyebrow="知识库"
+        title={currentSystem?.name || '系统'}
+        description="上传 PRD、技术文档、测试规则和原型图片资产。生成前请先确认资料类型和目录结构。"
+      />
 
-      <Space align="center" style={{ marginBottom: 12 }} wrap>
+      <MetricStrip
+        items={[
+          { key: 'docs', label: '文档总数', value: documentsTotal },
+          { key: 'visible', label: '当前筛选可见', value: filteredDocuments.length, tone: 'primary' },
+          { key: 'folders', label: '文件夹节点', value: Math.max(allFolderKeys.length - 1, 0) },
+          { key: 'type', label: '本次上传类型', value: docTypeLabelMap[selectedDocType] },
+        ]}
+      />
+
+      <FilterBar>
         <Text strong>上传文档类型</Text>
         <Select<DocType>
           value={selectedDocType}
@@ -264,7 +283,7 @@ const KnowledgePage: React.FC = () => {
           disabled={isUploading}
         />
         <Text type="secondary">本次上传会按所选类型入库，默认 PRD。</Text>
-      </Space>
+      </FilterBar>
 
       <Dragger
         accept=".zip,.md,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg"
@@ -288,7 +307,7 @@ const KnowledgePage: React.FC = () => {
         </p>
       </Dragger>
 
-      <Space style={{ marginBottom: 24 }}>
+      <Space style={{ marginBottom: 20 }} wrap>
         <Upload
           directory
           showUploadList={false}
@@ -304,9 +323,17 @@ const KnowledgePage: React.FC = () => {
         </Text>
       </Space>
 
-      <div style={{ display: 'flex', gap: 24 }}>
-        {/* 左侧文档树 */}
-        <div style={{ width: 240, flexShrink: 0 }}>
+      <SplitPane
+        left={
+          <div
+            style={{
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              padding: 12,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 10 }}>文档目录</div>
           <Space direction="vertical" size={8} style={{ width: '100%' }}>
             <Input.Search
               allowClear
@@ -334,10 +361,18 @@ const KnowledgePage: React.FC = () => {
               />
             </div>
           </Space>
-        </div>
-
-        {/* 右侧文档列表 */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+          </div>
+        }
+        right={
+          <div
+            style={{
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              padding: 12,
+            }}
+          >
+          <div style={{ fontWeight: 600, marginBottom: 10 }}>文档列表</div>
           <Spin spinning={documentsLoading}>
             <Table<Document>
               columns={columns}
@@ -363,8 +398,9 @@ const KnowledgePage: React.FC = () => {
               />
             </div>
           )}
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {/* 上传结果 Modal */}
       <Modal
@@ -429,7 +465,7 @@ const KnowledgePage: React.FC = () => {
           </div>
         )}
       </Modal>
-    </div>
+    </PageShell>
   );
 };
 
