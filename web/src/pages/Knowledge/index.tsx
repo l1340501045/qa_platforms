@@ -18,6 +18,7 @@ import {
 import { FolderOpenOutlined, InboxOutlined } from '@ant-design/icons';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
+import { triggerGeneration } from '../../services/batchApi';
 import type { Document, DocType, DocStatus } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
@@ -141,6 +142,7 @@ const KnowledgePage: React.FC = () => {
   const [selectedDocType, setSelectedDocType] = useState<DocType>('prd');
   const [folderKeyword, setFolderKeyword] = useState('');
   const [expandedFolderKeys, setExpandedFolderKeys] = useState<React.Key[]>(['__all__']);
+  const [generatingDocId, setGeneratingDocId] = useState<string | null>(null);
 
   // 累积一次选择/拖拽的多个文件（文件夹会触发多次 beforeUpload），合并为一个上传请求
   const pendingFilesRef = useRef<File[]>([]);
@@ -214,6 +216,28 @@ const KnowledgePage: React.FC = () => {
     clearUploadResult();
   };
 
+  const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
+    event?.stopPropagation();
+    Modal.confirm({
+      title: '生成测试用例',
+      content: `将基于「${doc.title}」创建一个新的生成批次。生成开始后会进入批次工作台查看进度。`,
+      okText: '开始生成',
+      cancelText: '取消',
+      onOk: async () => {
+        setGeneratingDocId(doc.id);
+        try {
+          const res = await triggerGeneration(doc.id);
+          message.success('生成任务已创建');
+          navigate(`/batches/${res.batch_id}`);
+        } catch (err: any) {
+          message.error(err?.message || '生成失败');
+        } finally {
+          setGeneratingDocId(null);
+        }
+      },
+    });
+  };
+
   const columns: ColumnsType<Document> = [
     {
       title: '标题',
@@ -254,6 +278,35 @@ const KnowledgePage: React.FC = () => {
       width: 160,
       render: (val: string) => new Date(val).toLocaleString(),
     },
+    {
+      title: '下一步',
+      key: 'actions',
+      width: 180,
+      render: (_, record) => (
+        <Space size={8}>
+          <Button
+            type="link"
+            size="small"
+            loading={generatingDocId === record.id}
+            onClick={(event) => handleGenerateDocument(record, event)}
+            style={{ paddingInline: 0 }}
+          >
+            生成用例
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            onClick={(event) => {
+              event.stopPropagation();
+              navigate(`/documents/${record.id}`);
+            }}
+            style={{ paddingInline: 0 }}
+          >
+            查看详情
+          </Button>
+        </Space>
+      ),
+    },
   ];
 
   return (
@@ -272,6 +325,49 @@ const KnowledgePage: React.FC = () => {
           { key: 'type', label: '本次上传类型', value: docTypeLabelMap[selectedDocType] },
         ]}
       />
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 12,
+          marginBottom: 16,
+          padding: 12,
+          border: `1px solid ${layoutTokens.border}`,
+          borderRadius: layoutTokens.radius,
+          background: layoutTokens.surface,
+        }}
+      >
+        {[
+          ['1', '上传资料', '选择文档类型后上传 PRD、技术文档或规则资料。'],
+          ['2', '生成批次', '在文档列表点击“生成用例”，系统会创建批次。'],
+          ['3', '进入审查', '生成后进入批次工作台，处理澄清、审核与落库。'],
+        ].map(([step, title, desc]) => (
+          <div key={step} style={{ display: 'flex', gap: 10, minWidth: 0 }}>
+            <div
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                flexShrink: 0,
+                display: 'grid',
+                placeItems: 'center',
+                background: layoutTokens.primarySoft,
+                color: layoutTokens.primary,
+                fontWeight: 700,
+              }}
+            >
+              {step}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontWeight: 650 }}>{title}</div>
+              <Text type="secondary" style={{ fontSize: 13 }}>
+                {desc}
+              </Text>
+            </div>
+          </div>
+        ))}
+      </div>
 
       <FilterBar>
         <Text strong>上传文档类型</Text>
@@ -379,6 +475,7 @@ const KnowledgePage: React.FC = () => {
               dataSource={filteredDocuments}
               rowKey="id"
               pagination={false}
+              scroll={{ x: 620 }}
               onRow={(record) => ({
                 onClick: () => navigate(`/documents/${record.id}`),
                 style: { cursor: 'pointer' },

@@ -56,6 +56,16 @@
 </PageShell>
 ```
 
+## 全局布局 Reset
+
+入口 `web/src/main.tsx` 必须加载 `web/src/global.css`，用于消除浏览器默认 body margin 和统一 `box-sizing`。
+
+约定：
+
+- `html`、`body`、`#root` 的 `margin` 必须为 0，避免弹窗、布局容器或 100vw 场景出现 8px 横向滚动。
+- `box-sizing: border-box` 应作用到所有元素及伪元素。
+- 页面根节点不应出现横向滚动；数据表格需要横向空间时，应该在表格自身使用 `scroll.x`，不要撑开页面。
+
 ## 数据密集页面规则
 
 - 指标条只放页面级摘要，不替代表格。
@@ -95,9 +105,41 @@ switch (batch.status) {
 
 为什么：
 
-- 首次使用平台的 QA 需要先知道“今天该处理什么”，而不是先理解所有批次状态。
+- 首次使用本平台的 QA 需要先知道“今天该处理什么”，而不是先理解所有批次状态。
 - 生成中/失败/待澄清/待审核是不同工作动作，统一成“去审核”会误导。
 - 这种聚合只使用现有 API 查询能力，不影响生成 pipeline。
+
+## 知识库主流程入口
+
+知识库 `/systems/:systemId/documents` 必须把“上传资料 -> 发起生成 -> 去审查”串起来，而不是只做文档仓库。
+
+实现约定：
+
+- 页面顶部提供 3 步主流程提示：上传资料、生成批次、进入审查。
+- 文档列表必须有显式“下一步”操作列。
+- “生成用例”复用现有 `triggerGeneration(documentId)`，成功后跳转 `/batches/:batchId`。
+- 列表里的生成动作必须有确认弹窗，避免误触发生成任务。
+- 行点击仍可进入 `/documents/:documentId` 详情；按钮点击要 `stopPropagation()`，避免和行点击冲突。
+- 该入口只新增前端动线，不改变生成配置、worker、pipeline 或后端契约。
+
+```tsx
+const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
+  event?.stopPropagation();
+  Modal.confirm({
+    title: '生成测试用例',
+    onOk: async () => {
+      const res = await triggerGeneration(doc.id);
+      navigate(`/batches/${res.batch_id}`);
+    },
+  });
+};
+```
+
+为什么：
+
+- QA 上传完资料后，下一步应直接可见；不应要求用户猜到“先进入文档详情再生成”。
+- 生成成功后进入批次工作台，符合平台主流程和工作台待办设计。
+- 保留文档详情入口，满足查看解析详情、知识速查表和关联文档等次级任务。
 
 ## Wrong vs Correct
 
@@ -115,7 +157,7 @@ switch (batch.status) {
 
 - 页面职责不清。
 - 筛选区、空态、间距每页漂移。
-- 首次使用平台的人不知道下一步该做什么。
+- 首次使用本平台的 QA 不知道下一步该做什么。
 
 ### Correct：共享骨架 + 页面业务内容
 
@@ -142,5 +184,6 @@ switch (batch.status) {
 - 1440 宽关键路由无白屏/运行时错误
 - 1024 宽关键路由无页面级横向溢出
 - 工作台 `/review` 必须验证四个待办队列可见，队列“筛选”按钮能驱动下方表格筛选。
+- 知识库 `/systems/:systemId/documents` 必须验证三步主流程提示和“生成用例”入口可见。
 
 当前 `npm run lint` 依赖 ESLint 配置；若仓库没有配置文件，记录为环境/基建缺口，不作为页面改动失败。
