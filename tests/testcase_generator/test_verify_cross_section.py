@@ -14,9 +14,14 @@ def test_case_verification_has_cross_section_fields():
         verdict="grounded",
         bucket="main",
         cross_section_conflict=True,
-        conflicting_refs=[CrossSectionConflictRef(
-            ref_a="§5.6.1", quote_a="≤50字", ref_b="§9.2首表", quote_b="不限字数",
-        )],
+        conflicting_refs=[
+            CrossSectionConflictRef(
+                ref_a="§5.6.1",
+                quote_a="≤50字",
+                ref_b="§9.2首表",
+                quote_b="不限字数",
+            )
+        ],
     )
     assert cv.cross_section_conflict is True
     assert cv.conflicting_refs[0].ref_b == "§9.2首表"
@@ -36,12 +41,17 @@ async def test_verify_cases_attaches_and_summarizes_conflict(monkeypatch):
 
     class _FakeOut:
         def __init__(self):
-            self.verdicts = [vmod._CaseVerdict(
-                case_id="V0", verdict="grounded", rationale="r",
-                cross_section_conflict=True,
-                conflicting_refs=[vmod._ConflictRef(
-                    ref_a="§5.6.1", quote_a="≤50字", ref_b="§9.2", quote_b="不限字数")],
-            )]
+            self.verdicts = [
+                vmod._CaseVerdict(
+                    case_id="V0",
+                    verdict="grounded",
+                    rationale="r",
+                    cross_section_conflict=True,
+                    conflicting_refs=[
+                        vmod._ConflictRef(ref_a="§5.6.1", quote_a="≤50字", ref_b="§9.2", quote_b="不限字数")
+                    ],
+                )
+            ]
 
     class _FakeClient:
         async def generate_structured(self, **kw):
@@ -50,8 +60,7 @@ async def test_verify_cases_attaches_and_summarizes_conflict(monkeypatch):
     monkeypatch.setattr(vmod, "get_llm_client", lambda: _FakeClient())
 
     cases = [VerifyCase(case_id="V0", feature_id="F1", title="标题包名50字可存")]
-    sections = {"F1": [PrdSection("§5.6.1", "≤50字", "§5.6.1"),
-                       PrdSection("§9.2", "不限字数", "§9.2")]}
+    sections = {"F1": [PrdSection("§5.6.1", "≤50字", "§5.6.1"), PrdSection("§9.2", "不限字数", "§9.2")]}
     res = await verify_cases(cases, sections)
     assert res["V0"].cross_section_conflict is True
     assert res["V0"].verdict == "grounded"  # 不被改写
@@ -88,14 +97,23 @@ async def test_known_prd_conflicts_recalled_end_to_end(monkeypatch):
             verdicts = []
             for tc in payload["test_cases"]:
                 secs = payload["prd_sections"]
-                verdicts.append(vmod._CaseVerdict(
-                    case_id=tc["case_id"], verdict="grounded",
-                    cross_section_conflict=inject,
-                    conflicting_refs=[vmod._ConflictRef(
-                        ref_a=secs[0]["source_ref"], quote_a=secs[0]["content"],
-                        ref_b=secs[1]["source_ref"], quote_b=secs[1]["content"],
-                    )] if inject else [],
-                ))
+                verdicts.append(
+                    vmod._CaseVerdict(
+                        case_id=tc["case_id"],
+                        verdict="grounded",
+                        cross_section_conflict=inject,
+                        conflicting_refs=[
+                            vmod._ConflictRef(
+                                ref_a=secs[0]["source_ref"],
+                                quote_a=secs[0]["content"],
+                                ref_b=secs[1]["source_ref"],
+                                quote_b=secs[1]["content"],
+                            )
+                        ]
+                        if inject
+                        else [],
+                    )
+                )
             return vmod._VerifyLLMOutput(verdicts=verdicts)
 
     monkeypatch.setattr(vmod, "get_llm_client", lambda: _FakeClient())
@@ -119,7 +137,10 @@ def test_summarize_dedups_same_conflict_pair_and_counts():
     pair = [CrossSectionConflictRef(ref_a="§5.6.1", quote_a="≤50字", ref_b="§9.2", quote_b="不限字数")]
     pair_rev = [CrossSectionConflictRef(ref_a="§9.2", quote_a="不限字数", ref_b="§5.6.1", quote_b="≤50字")]
     cv = lambda refs: CaseVerification(  # noqa: E731
-        verdict="grounded", bucket="main", cross_section_conflict=True, conflicting_refs=refs,
+        verdict="grounded",
+        bucket="main",
+        cross_section_conflict=True,
+        conflicting_refs=refs,
     )
     res = {"V0": cv(pair), "V1": cv(pair_rev)}
     summ = summarize(res)

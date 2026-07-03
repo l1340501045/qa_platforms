@@ -134,10 +134,12 @@ def test_reconcile_verdicts_skips_empty_feature_id():
     assert reconciled["C2"].verdict == "conflict"
 
 
-def test_reconcile_clears_conflict_evidence_fields_when_downgraded():
-    """🔴#1 降级：原 conflict（带 refs/subject/cross_section_conflict）被簇内多数降为
-    ungrounded 时，conflict 衍生证据字段必须清空，避免 verdict=ungrounded 却残留
-    冲突依据的自相矛盾数据。"""
+def test_reconcile_preserves_cross_section_refs_when_downgraded():
+    """🔴#1 降级（审查 P1 修订）：原 conflict（带 refs/subject/cross_section_conflict）被簇内
+    多数降为 ungrounded 时，conflict-verdict 专属字段（subject/prd_evidence）清空，但
+    cross_section_conflict / conflicting_refs【必须保留】——跨节冲突是 PRD 内部矛盾事实，
+    与用例 verdict 解耦，reconcile 不该抹掉。apply_oracle_guards 的 R4 在 reconcile 之后执行，
+    需要 conflicting_refs 才能把命中矛盾的用例强制分流到 to_fix。"""
     cases = [
         _case("C1", title="监测链接自动绑定预置hash01"),
         _case("C2", title="监测链接自动绑定预置hash02"),
@@ -153,11 +155,13 @@ def test_reconcile_clears_conflict_evidence_fields_when_downgraded():
 
     # C1 由 conflict 降级为 ungrounded（簇内多数 ungrounded）
     assert reconciled["C1"].verdict == "ungrounded"
-    # 衍生证据字段必须清空——不得残留 conflict 依据
-    assert reconciled["C1"].cross_section_conflict is False
-    assert reconciled["C1"].conflicting_refs == []
+    # conflict-verdict 专属字段清空（verdict 不再是 conflict）
     assert reconciled["C1"].conflict_subject_case == ""
     assert reconciled["C1"].conflict_subject_prd == ""
+    assert reconciled["C1"].prd_evidence == ""
+    # 跨节冲突证据必须保留（供 R4 guard 强制 to_fix，不清不伪造）
+    assert reconciled["C1"].cross_section_conflict is True
+    assert len(reconciled["C1"].conflicting_refs) == 1
 
 
 def test_reconcile_upgrade_to_conflict_does_not_fabricate_cross_section_refs():
@@ -226,10 +230,54 @@ def test_summarize_reports_reconciled_conflict_separately():
     assert summary["reconciled_conflict"] == 1  # R2 是 5a 升级出的 conflict
 
 
-def test_reconcile_mismatch_cluster_clears_conflict_evidence_when_downgraded():
-    """🟡#3 边界①：mismatch 簇内带 refs 的 conflict 被 ④ mismatch 剔除降级后，
-    conflict 衍生证据字段（含 prd_evidence）必须清空。mismatch 降级与多数票降级
-    共用同一 else 清字段分支，本用例显式锁定 mismatch 路径下的字段清理。"""
+def test_summarize_reports_review_issue_type_distribution():
+    """审查报告需要直接区分用例错、PRD 冲突、verify 不确定三类问题。"""
+    from src.testcase_generator.stages.verify.verifier import summarize
+
+    verifications = {
+        "C1": CaseVerification(
+            verdict="conflict",
+            bucket="to_fix",
+            rationale="用例与 PRD 明文相反",
+            review_issue_type="case_wrong",
+        ),
+        "C2": CaseVerification(
+            verdict="grounded",
+            bucket="to_fix",
+            rationale="PRD 内部冲突",
+            cross_section_conflict=True,
+            conflicting_refs=[
+                __import__(
+                    "src.testcase_generator.schemas.test_case",
+                    fromlist=["CrossSectionConflictRef"],
+                ).CrossSectionConflictRef(ref_a="§1", quote_a="A", ref_b="§2", quote_b="B")
+            ],
+            review_issue_type="prd_conflict",
+        ),
+        "C3": CaseVerification(
+            verdict="undefined",
+            bucket="needs_spec",
+            rationale="不同实体误判撤销 hard conflict",
+            conflict_entity_mismatch=True,
+            review_issue_type="verify_uncertain",
+        ),
+        "C4": CaseVerification(verdict="grounded", bucket="main", rationale="有支撑"),
+    }
+
+    summary = summarize(verifications)
+
+    assert summary["by_review_issue_type"] == {
+        "case_wrong": 1,
+        "prd_conflict": 1,
+        "verify_uncertain": 1,
+    }
+
+
+def test_reconcile_mismatch_cluster_preserves_cross_section_refs_when_downgraded():
+    """🟡#3 边界①（审查 P1 修订）：mismatch 簇内带 refs 的 conflict 被 ④ mismatch 剔除降级后，
+    conflict-verdict 专属字段（subject/prd_evidence）清空，但 cross_section_conflict /
+    conflicting_refs【保留】——跨节冲突是 PRD 矛盾事实，与 verdict 解耦，供 R4 guard 强制
+    to_fix。mismatch 降级与多数票降级共用同一 else 分支，本用例显式锁定 mismatch 路径。"""
     cases = [
         _case("C1", title="监测链接自动绑定预置hash01"),
         _case("C2", title="监测链接自动绑定预置hash02"),
@@ -247,11 +295,13 @@ def test_reconcile_mismatch_cluster_clears_conflict_evidence_when_downgraded():
     # C1 因 mismatch 剔除 conflict 候选、降为 ungrounded（簇内非 conflict 多数）
     assert reconciled["C1"].verdict == "ungrounded"
     assert reconciled["C1"].conflict_entity_mismatch is True  # mismatch 传播
-    assert reconciled["C1"].cross_section_conflict is False
-    assert reconciled["C1"].conflicting_refs == []
+    # conflict-verdict 专属字段清空（verdict 不再是 conflict）
     assert reconciled["C1"].conflict_subject_case == ""
     assert reconciled["C1"].conflict_subject_prd == ""
-    assert reconciled["C1"].prd_evidence == ""  # 反驳证据清空，不残留进待修正清单
+    assert reconciled["C1"].prd_evidence == ""  # conflict 反驳证据清空
+    # 跨节冲突证据必须保留（供 R4 guard 强制 to_fix，不清不伪造）
+    assert reconciled["C1"].cross_section_conflict is True
+    assert len(reconciled["C1"].conflicting_refs) == 1
 
 
 def test_reconcile_preserves_real_conflict_refs_when_verdict_stays_conflict():

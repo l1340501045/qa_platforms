@@ -11,7 +11,7 @@ from __future__ import annotations
 
 
 def test_case_verification_has_entity_gate_fields():
-    """CaseVerification 带 3 个新字段，默认值向后兼容（不破坏既有构造）。"""
+    """CaseVerification 带实体门控和审查诊断字段，默认值向后兼容（不破坏既有构造）。"""
     from src.testcase_generator.schemas.test_case import CaseVerification
 
     # 显式构造（verdict=conflict 时填）
@@ -19,16 +19,19 @@ def test_case_verification_has_entity_gate_fields():
         conflict_subject_case="监测链接",
         conflict_subject_prd="投放链接",
         conflict_entity_mismatch=True,
+        review_issue_type="verify_uncertain",
     )
     assert cv.conflict_subject_case == "监测链接"
     assert cv.conflict_subject_prd == "投放链接"
     assert cv.conflict_entity_mismatch is True
+    assert cv.review_issue_type == "verify_uncertain"
 
     # 默认值（向后兼容）
     empty = CaseVerification()
     assert empty.conflict_subject_case == ""
     assert empty.conflict_subject_prd == ""
     assert empty.conflict_entity_mismatch is False
+    assert empty.review_issue_type is None
 
 
 # ─── _same_entity 词法兜底（纯函数）────────────────────────────────────────
@@ -116,6 +119,7 @@ async def test_gate_downgrades_cross_entity_conflict(monkeypatch):
     assert res["V0"].verdict == "ungrounded"
     assert res["V0"].bucket == "needs_spec"
     assert res["V0"].conflict_entity_mismatch is True
+    assert res["V0"].review_issue_type == "verify_uncertain"
     assert res["V0"].conflict_subject_case == "监测链接"
     assert res["V0"].conflict_subject_prd == "投放链接"
     # rationale 前缀标注撤销原因
@@ -144,6 +148,7 @@ async def test_gate_lexical_does_not_override_llm_same_entity_true(monkeypatch):
     assert res["V0"].verdict == "conflict"
     assert res["V0"].bucket == "to_fix"
     assert res["V0"].conflict_entity_mismatch is False
+    assert res["V0"].review_issue_type == "case_wrong"
 
 
 async def test_gate_same_entity_false_downgrades_even_if_lexical_same(monkeypatch):
@@ -167,6 +172,7 @@ async def test_gate_same_entity_false_downgrades_even_if_lexical_same(monkeypatc
     assert res["V0"].verdict == "ungrounded"
     assert res["V0"].bucket == "needs_spec"
     assert res["V0"].conflict_entity_mismatch is True
+    assert res["V0"].review_issue_type == "verify_uncertain"
 
 
 async def test_gate_real_conflict_with_lexical_divergence_not_downgraded(monkeypatch):

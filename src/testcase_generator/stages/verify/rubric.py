@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """verify 关卡的核验判据 — 代码固化的单一 rubric
 
 来源：把人工审计 WORKER_GUIDE 的判据写成统一 prompt，避免多 worker / 多次调用

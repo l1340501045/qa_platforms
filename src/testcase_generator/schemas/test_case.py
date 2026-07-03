@@ -33,6 +33,13 @@ Verdict = Literal["grounded", "ungrounded", "conflict", "undefined", "unverified
 Bucket = Literal["main", "needs_spec", "to_fix"]
 """分桶：main=主用例集 / needs_spec=待补规格·超纲 / to_fix=与 PRD 冲突需修正"""
 
+ReviewIssueType = Literal["case_wrong", "prd_conflict", "verify_uncertain"]
+"""审查诊断类型：
+- case_wrong       用例断言与明确 PRD 事实相反，或生成了不应执行的具体 oracle
+- prd_conflict     PRD 条款之间存在实质互斥，需要产品裁决
+- verify_uncertain verify 判断跨实体/跨层级/证据不足，需人工复核或补同层证据
+"""
+
 
 class CrossSectionConflictRef(BaseModel):
     """跨条款矛盾的一对出处（PRD 两条互斥条款）"""
@@ -63,6 +70,11 @@ class CaseVerification(BaseModel):
     conflict_subject_prd: str = Field(default="", description="（verdict=conflict 时）PRD 反驳条款所约束的对象/字段")
     conflict_entity_mismatch: bool = Field(
         default=False, description="conflict 双方非同一实体（疑似概念混淆假矛盾，已被同实体门控降级）"
+    )
+    same_entity: bool | None = Field(default=None, description="LLM 对 conflict 双方是否同一实体的结构化判断")
+    review_issue_type: ReviewIssueType | None = Field(
+        default=None,
+        description="审查诊断类型：case_wrong / prd_conflict / verify_uncertain，用于报告和待处理队列分流",
     )
 
 

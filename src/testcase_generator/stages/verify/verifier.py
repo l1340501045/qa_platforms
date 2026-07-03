@@ -22,14 +22,25 @@ from src.testcase_generator.schemas.test_case import (
     Bucket,
     CaseVerification,
     CrossSectionConflictRef,
+    ReviewIssueType,
     Verdict,
 )
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.verify.guards import apply_oracle_guards
 from src.testcase_generator.stages.verify.rubric import (
     CONFLICT_ENTITY_GATE_INSTRUCTION,
     CROSS_SECTION_CONFLICT_INSTRUCTION,
     VERIFY_SYSTEM_PROMPT,
 )
+
+__all__ = [
+    "VerifyCase",
+    "PrdSection",
+    "verify_cases",
+    "summarize",
+    "reconcile_verdicts",
+    "apply_oracle_guards",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +78,7 @@ class VerifyCase:
     expected_results: list[str] = field(default_factory=list)
     preconditions: list[str] = field(default_factory=list)
     provenance_excerpt: str | None = None
+    confidence_note: str | None = None
 
 
 @dataclass
@@ -113,6 +125,30 @@ def _normalize_verdict(raw: str) -> Verdict:
     if v in ("grounded", "conflict", "undefined", "ungrounded"):
         return v  # type: ignore[return-value]
     return "ungrounded"  # 无法识别时从严（不放进主集）
+
+
+def _review_issue_type_for(
+    *,
+    verdict: str,
+    bucket: str,
+    cross_section_conflict: bool,
+    conflicting_refs: list[CrossSectionConflictRef],
+    conflict_entity_mismatch: bool,
+) -> ReviewIssueType | None:
+    """把 verify 结果结构化为审查可处理的三类问题。
+
+    优先级：
+    1. 有跨条款冲突证据 → PRD 自身冲突，交产品裁决。
+    2. hard conflict 被实体/层级门控撤销 → verify 不确定，待复核或补同层证据。
+    3. 其余 to_fix/conflict → 用例断言错，生成器/事实表应修。
+    """
+    if cross_section_conflict and conflicting_refs:
+        return "prd_conflict"
+    if conflict_entity_mismatch:
+        return "verify_uncertain"
+    if verdict == "conflict" or bucket == "to_fix":
+        return "case_wrong"
+    return None
 
 
 # ─── 同实体门控 · 词法兜底（字符集 Jaccard）─────────────────────────────────
@@ -223,13 +259,6 @@ def reconcile_verdicts(
                 original = reconciled[case_id]
                 rationale = original.rationale or ""
                 rationale = f"{rationale}（{_RECONCILE_RATIONALE_TAG}：簇内多数 → {verdict}）"
-                # 衍生证据字段一致化：新 verdict≠conflict 时清空 conflict 依据，避免
-                # verdict=ungrounded 却残留 conflicting_refs/subject 的自相矛盾数据；
-                # 新 verdict=conflict 时保留原字段（升级路径原本就无 refs、保持 False/空，
-                # 不伪造跨节冲突依据，仅靠 rationale 追溯，summarize 单列 reconciled_conflict）。
-                # prd_evidence 用空串而非 None：export_task._review_row 用 .get("prd_evidence","")
-                # 读它进待修正清单，None 会被渲染成字面 "None"，空串才正确显示空。
-                # unsupported_assertions 语义跨 verdict 兼容（"无支撑断言"对 ungrounded/undefined 仍成立），保留。
                 if verdict == "conflict":
                     field_updates: dict = {
                         "verdict": verdict,
@@ -238,17 +267,31 @@ def reconcile_verdicts(
                         "conflict_entity_mismatch": original.conflict_entity_mismatch or has_mismatch,
                     }
                 else:
+                    # 衍生证据字段一致化：新 verdict≠conflict 时清空 conflict 反驳证据 prd_evidence
+                    # 与 conflict_subject_*（verdict 不再是 conflict，这些 conflict 专属字段不再适用）。
+                    # 但【保留】cross_section_conflict / conflicting_refs：跨节冲突是 PRD 内部矛盾事实，
+                    # 与用例 verdict 解耦（rubric 明确"发现矛盾不改变 verdict"）。reconcile 改 verdict
+                    # 是用例间一致化，不该抹掉 PRD 矛盾证据——apply_oracle_guards 的 R4 在 reconcile
+                    # 之后执行，需要 conflicting_refs 才能把命中矛盾的用例强制分流到 to_fix（审查 P1）。
+                    # prd_evidence 用空串而非 None：export_task._review_row 用 .get("prd_evidence","")
+                    # 读它进待修正清单，None 会被渲染成字面 "None"，空串才正确显示空。
+                    # unsupported_assertions 语义跨 verdict 兼容（"无支撑断言"对 ungrounded/undefined 仍成立），保留。
                     field_updates = {
                         "verdict": verdict,
                         "bucket": bucket,
                         "rationale": rationale,
                         "conflict_entity_mismatch": original.conflict_entity_mismatch or has_mismatch,
-                        "cross_section_conflict": False,
-                        "conflicting_refs": [],
                         "conflict_subject_case": "",
                         "conflict_subject_prd": "",
                         "prd_evidence": "",
                     }
+                field_updates["review_issue_type"] = _review_issue_type_for(
+                    verdict=verdict,
+                    bucket=bucket,
+                    cross_section_conflict=original.cross_section_conflict,
+                    conflicting_refs=original.conflicting_refs,
+                    conflict_entity_mismatch=field_updates["conflict_entity_mismatch"],
+                )
                 reconciled[case_id] = original.model_copy(update=field_updates)
 
     return reconciled
@@ -271,6 +314,7 @@ def _case_payload(c: VerifyCase) -> dict:
         ],
         "expected_results": c.expected_results,
         "claimed_provenance_excerpt": c.provenance_excerpt,
+        **({"confidence_note": c.confidence_note} if c.confidence_note else {}),
     }
 
 
@@ -292,23 +336,33 @@ async def verify_cases(
     prd_sections_by_feature: dict[str, list[PrdSection]],
     *,
     max_cases_per_batch: int = MAX_CASES_PER_BATCH,
+    tech_source_refs: set[str] | None = None,
+    source_trust: dict[str, int] | None = None,
+    runtime_settings=None,
 ) -> dict[str, CaseVerification]:
     """对一批用例逐条核验，返回 {case_id: CaseVerification}。
 
     - 按 feature 分片，每片只对照该 feature 的 PRD 章节原文（防超窗、对照精准）。
     - 片内再按案数子批；批间并发；单批失败该批用例标 unverified（不污染其它批）。
+    - 核验 + reconcile 后，若 ``settings.oracle_guard_enabled`` 开，应用 oracle guards
+      （任务 07-02）：把无据 fake oracle / 待确认信号 / 无技术方案支撑的技术派生断言 /
+      cross_section_conflict 从 main 确定性分流到 needs_spec/to_fix。
+
+    ``tech_source_refs``：技术方案源(tech_doc)的 source_ref 集合，供 R3 精确判断
+    技术断言是否被技术方案支撑（而非全局一刀切放行）。
     """
+    runtime = runtime_settings or settings
     by_feature: dict[str, list[VerifyCase]] = defaultdict(list)
     for c in cases:
         by_feature[c.feature_id].append(c)
 
     system_prompt = VERIFY_SYSTEM_PROMPT
-    if settings.conflict_entity_gate_enabled:
+    if runtime.conflict_entity_gate_enabled:
         system_prompt += CONFLICT_ENTITY_GATE_INSTRUCTION
-    if settings.verify_cross_section_conflict_enabled:
+    if runtime.verify_cross_section_conflict_enabled:
         system_prompt += CROSS_SECTION_CONFLICT_INSTRUCTION
 
-    semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    semaphore = asyncio.Semaphore(runtime.llm_concurrency)
     results: dict[str, CaseVerification] = {}
 
     async def _verify_batch(feature_id: str, batch: list[VerifyCase]) -> dict[str, CaseVerification]:
@@ -333,7 +387,7 @@ async def verify_cases(
                     user_content=_build_user_content(batch_cases),
                     output_schema=_VerifyLLMOutput,
                     temperature=0.1,
-                    model=settings.llm_verify_model or None,
+                    model=runtime.llm_verify_model or None,
                 )
 
             try:
@@ -343,7 +397,7 @@ async def verify_cases(
                 return {c.case_id: CaseVerification(verdict="unverified", bucket="main") for c in batch}
 
         by_id = {v.case_id: v for v in out.verdicts}
-        if settings.conflict_revote_enabled and settings.revote_n > 1:
+        if runtime.conflict_revote_enabled and runtime.revote_n > 1:
             conflict_cases = [
                 c
                 for c in batch
@@ -360,10 +414,10 @@ async def verify_cases(
                             user_content=_build_user_content(conflict_cases),
                             output_schema=_VerifyLLMOutput,
                             temperature=0.1,
-                            model=settings.llm_verify_model or None,
+                            model=runtime.llm_verify_model or None,
                         )
 
-                    for _ in range(settings.revote_n - 1):
+                    for _ in range(runtime.revote_n - 1):
                         try:
                             revote_out = await _revote_llm()
                         except Exception as e:  # noqa: BLE001 — 复判失败不放大为整批失败
@@ -413,7 +467,7 @@ async def verify_cases(
             _subject_prd = v.conflict_subject_prd or ""
             _entity_mismatch = False
             _lexical_note = ""
-            if settings.conflict_entity_gate_enabled and verdict == "conflict":
+            if runtime.conflict_entity_gate_enabled and verdict == "conflict":
                 if v.same_entity is False:
                     verdict = "ungrounded"
                     _entity_mismatch = True
@@ -441,6 +495,16 @@ async def verify_cases(
                 conflict_subject_case=_subject_case,
                 conflict_subject_prd=_subject_prd,
                 conflict_entity_mismatch=_entity_mismatch,
+                same_entity=v.same_entity
+                if runtime.conflict_entity_gate_enabled and _normalize_verdict(v.verdict) == "conflict"
+                else None,
+                review_issue_type=_review_issue_type_for(
+                    verdict=verdict,
+                    bucket=_VERDICT_BUCKET.get(verdict, "needs_spec"),
+                    cross_section_conflict=_conflict,
+                    conflicting_refs=_refs,
+                    conflict_entity_mismatch=_entity_mismatch,
+                ),
             )
         return batch_result
 
@@ -449,12 +513,20 @@ async def verify_cases(
         for batch in _split(fcases, max_cases_per_batch):
             tasks.append(_verify_batch(feature_id, batch))
 
-    logger.info("verify: %d 个功能点拆成 %d 批核验, 并发度=%d", len(by_feature), len(tasks), settings.llm_concurrency)
+    logger.info("verify: %d 个功能点拆成 %d 批核验, 并发度=%d", len(by_feature), len(tasks), runtime.llm_concurrency)
     batch_results = await asyncio.gather(*tasks)
     for br in batch_results:
         results.update(br)
-    if settings.verdict_reconcile_enabled:
+    if runtime.verdict_reconcile_enabled:
         results = reconcile_verdicts(results, cases)
+    if runtime.oracle_guard_enabled:
+        results = apply_oracle_guards(
+            results,
+            cases,
+            tech_source_refs=tech_source_refs,
+            source_trust=source_trust,
+            conflict_entity_gate_enabled=runtime.conflict_entity_gate_enabled,
+        )
     return results
 
 
@@ -462,12 +534,15 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
     """聚合核验结果分布 + PRD 矛盾清单。"""
     by_verdict: dict[str, int] = defaultdict(int)
     by_bucket: dict[str, int] = defaultdict(int)
+    by_review_issue_type: dict[str, int] = defaultdict(int)
     conflict_pairs: dict[tuple, dict] = {}
     n_conflict_cases = 0
     n_reconciled_conflict = 0
     for case_id, v in verifications.items():
         by_verdict[v.verdict] += 1
         by_bucket[v.bucket] += 1
+        if v.review_issue_type:
+            by_review_issue_type[v.review_issue_type] += 1
         if v.cross_section_conflict:
             n_conflict_cases += 1
             seen_keys_this_case: set[tuple] = set()
@@ -497,5 +572,6 @@ def summarize(verifications: dict[str, CaseVerification]) -> dict:
         "by_bucket": dict(by_bucket),
         "cross_section_conflicts": n_conflict_cases,
         "reconciled_conflict": n_reconciled_conflict,
+        "by_review_issue_type": dict(by_review_issue_type),
         "prd_conflict_list": list(conflict_pairs.values()),
     }
