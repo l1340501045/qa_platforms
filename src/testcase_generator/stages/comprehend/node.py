@@ -202,6 +202,8 @@ async def _build_feature_matrix_llm(
         "features": features_desc,
         "sources": sources_desc,
     }
+    if clarification_answers:
+        user_content_dict["clarification_answers"] = clarification_answers
 
     user_content = json.dumps(user_content_dict, ensure_ascii=False, indent=2)
 

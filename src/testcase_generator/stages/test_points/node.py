@@ -12,11 +12,15 @@ import yaml
 from pydantic import BaseModel, Field
 
 from src.platform_api.core.settings import settings
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.services.llm_client import get_llm_client
 from src.testcase_generator.stages.test_points.applicability_filter import (
     ApplicabilityFilter,
+)
+from src.testcase_generator.stages.test_points.critical_flow import (
+    build_critical_flow_test_points,
 )
 from src.testcase_generator.stages.test_points.mandatory_dimensions import (
     MandatoryDimensionInjector,
@@ -63,6 +67,9 @@ TEST_POINTS_SYSTEM_PROMPT = """角色：你是资深测试工程师，当前任�
   - 好例子："用户名输入超过50个字符时，系统应提示'用户名长度不能超过50个字符'"
   - 坏例子："验证用户名边界值"
 - 测试点应覆盖正常路径和异常路径
+- 跨模块/E2E 场景：当需求描述包含跨页面、跨模块、任务回写、授权回调、后台同步、数据联动等链路时，
+  必须补充端到端场景测试点，覆盖“前置模块动作 → 下游模块状态/数据/任务中心结果”的完整可观测闭环；
+  不要只在单章节内拆字段级测试点。
 - 风险打分（取代固定优先级）：为每个测试点给两个整数（1-3）：
   - impact（业务影响）：3=核心路径/资损/数据完整性/高频功能；2=一般功能；1=边缘/低频。
   - likelihood（易错可能性）：3=边界/异常/复杂逻辑/并发/集成；2=一般分支；1=简单展示。
@@ -131,8 +138,10 @@ P1_MIN_RISK = 3
 
 def risk_to_priority(likelihood: int, impact: int) -> str:
     """risk=likelihood×impact 映射 P0/P1/P2（取代维度硬映射，治 P0 泛滥）。"""
+
     def _clamp(x: int) -> int:
         return max(1, min(3, int(x)))
+
     risk = _clamp(likelihood) * _clamp(impact)
     if risk >= P0_MIN_RISK:
         return "P0"
@@ -141,6 +150,46 @@ def risk_to_priority(likelihood: int, impact: int) -> str:
     return "P2"
 
 
+def _is_structural(tp: TestPointSchema) -> bool:
+    """结构化覆盖点：权限矩阵/状态机展开 或 规则锚点，确定性结构覆盖，配额豁免。"""
+    return tp.structural_type is not None or tp.rule_id is not None
+
+
+def apply_p0_quota(test_points: list[TestPointSchema], *, quota: float) -> list[TestPointSchema]:
+    """P0 全局配额裁剪（roadmap ⑥，治 P0 失真）。
+
+    结构化覆盖点（structural_type/rule_id 非空）豁免配额，不被降级。非结构化 P0 若超过
+    quota × 非结构化总数，按 risk=likelihood×impact 降序保留 top 配额数为 P0，其余 P0
+    降 P1（同 risk 稳定序——保留原顺序前者）。P1/P2 不动。likelihood/impact 为 None 的
+    非结构化点（未评分）按 risk=0 处理（最优先被降级）。
+    """
+    if quota >= 1.0:
+        return test_points
+
+    # 非结构化 P0 候选（按原顺序 + index 稳定序）
+    non_structural = [tp for tp in test_points if not _is_structural(tp)]
+    p0_candidates = [(idx, tp) for idx, tp in enumerate(non_structural) if tp.priority == "P0"]
+    if not p0_candidates:
+        return test_points
+
+    quota_count = max(1, int(quota * len(non_structural)))
+    if len(p0_candidates) <= quota_count:
+        return test_points
+
+    # 按 risk 降序，同 risk 按 index 升序（稳定序保留前者）
+    def _risk(tp: TestPointSchema) -> int:
+        if tp.likelihood is None or tp.impact is None:
+            return 0
+        return max(1, min(3, tp.likelihood)) * max(1, min(3, tp.impact))
+
+    ranked = sorted(p0_candidates, key=lambda x: (-_risk(x[1]), x[0]))
+    keep_p0_ids = {tp.id for _, tp in ranked[:quota_count]}
+
+    # 超额的 P0 降 P1（结构化点本就不在 candidates，不受影响）
+    for idx, tp in p0_candidates:
+        if tp.id not in keep_p0_ids:
+            tp.priority = "P1"
+    return test_points
 
 
 # ─── 质量属性维度信号门控（根因3：维度机械全展开）────────────────────────────────
@@ -158,7 +207,20 @@ _DIMENSION_GATE: dict[str, tuple[str, ...]] = {
     "resource_usage": ("内存占用", "cpu", "资源消耗", "内存泄漏", "电量", "磁盘io"),
     "large_data_volume": ("万级", "十万", "百万", "海量", "大数据量", "大批量", "数据量大", "数据量增长"),
     # 集成
-    "api_contract": ("接口契约", "接口文档", "api接口", "调用接口", "接口返回", "接口参数", "openapi", "swagger", "状态码", "请求参数", "响应结构", "响应体"),
+    "api_contract": (
+        "接口契约",
+        "接口文档",
+        "api接口",
+        "调用接口",
+        "接口返回",
+        "接口参数",
+        "openapi",
+        "swagger",
+        "状态码",
+        "请求参数",
+        "响应结构",
+        "响应体",
+    ),
     "cross_system": ("第三方", "外部系统", "对接", "回调", "webhook", "熔断", "降级", "跨系统"),
     "data_sync": ("数据同步", "主从", "增量同步", "全量同步", "cdc", "数据一致性"),
     "event_driven": ("消息队列", "kafka", "rabbitmq", "事件驱动", "订阅", "发布消息", "死信", "消费消息"),
@@ -181,15 +243,23 @@ _DIMENSION_GATE: dict[str, tuple[str, ...]] = {
     "data_calculation": ("计算", "统计", "公式", "汇总", "百分比", "金额计算", "精度", "四舍五入"),
     # 边界/可用性（分页/格式/无障碍/国际化）
     "pagination_boundary": ("分页", "翻页", "每页", "页码", "下一页", "首页", "末页", "上一页"),
-    "format_validation": ("格式校验", "邮箱格式", "手机号", "日期格式", "正则", "金额格式", "url格式", "编号格式", "格式要求"),
+    "format_validation": (
+        "格式校验",
+        "邮箱格式",
+        "手机号",
+        "日期格式",
+        "正则",
+        "金额格式",
+        "url格式",
+        "编号格式",
+        "格式要求",
+    ),
     "accessibility": ("无障碍", "键盘导航", "屏幕阅读", "aria", "对比度", "可访问性"),
     "multi_language": ("多语言", "国际化", "i18n", "翻译", "rtl", "本地化", "语言切换"),
 }
 
 
-def _gate_quality_dimensions(
-    dims: list[dict], feature_text: str, global_text: str
-) -> list[dict]:
+def _gate_quality_dimensions(dims: list[dict], feature_text: str, global_text: str) -> list[dict]:
     """质量属性/技术派生维度的信号门控：上下文无相关信号则剔除该维度。
 
     功能点自身上下文或全文档任一处命中触发信号即放行（后者避免漏测技术方案文档定义
@@ -241,20 +311,26 @@ def _dim_tp_cap_for(section_kind: str, feature_desc_chars: int) -> int | None:
         return _TIER3_DIM_TP_CAP
     return None
 
+
 # 稀薄/非 spec 章节仍允许保留的核心维度白名单（不被维度增强裁掉）。
 # 选择标准：维度名以"功能正确性 / 输入校验 / 边界值 / 权限"为核心，覆盖 PRD 即便很短也
 # 必然存在的基本可测点。其他维度（性能/集成/安全派生/网络/编码等）一律剔除。
-_CORE_DIMENSIONS = frozenset({
-    "functional_correctness", "happy_path", "negative_path",
-    "invalid_input", "boundary_value", "format_validation",
-    "access_control", "permission_denied",
-    "state_transition",
-})
+_CORE_DIMENSIONS = frozenset(
+    {
+        "functional_correctness",
+        "happy_path",
+        "negative_path",
+        "invalid_input",
+        "boundary_value",
+        "format_validation",
+        "access_control",
+        "permission_denied",
+        "state_transition",
+    }
+)
 
 
-def _gate_by_section_kind(
-    dims: list[dict], section_kind: str, feature_desc_chars: int
-) -> list[dict]:
+def _gate_by_section_kind(dims: list[dict], section_kind: str, feature_desc_chars: int) -> list[dict]:
     """章节性质 + 内容规模分档门控（P1-1 修复）：
 
     防止 LLM 对中小型 feature 机械展开 9 维度产生灌水（典例：F-018 80 字 → 84 case；
@@ -358,7 +434,12 @@ async def _generate_test_points_batched(
                 )
                 return None
 
-    logger.info("test-points: %d 个功能点拆成 %d 批并发, 并发度=%d", len(feature_dim_inputs), len(batches), settings.llm_concurrency)
+    logger.info(
+        "test-points: %d 个功能点拆成 %d 批并发, 并发度=%d",
+        len(feature_dim_inputs),
+        len(batches),
+        settings.llm_concurrency,
+    )
     results = await asyncio.gather(*[_call_batch(i, b) for i, b in enumerate(batches)])
 
     generated: list[GeneratedTestPoint] = []
@@ -396,9 +477,7 @@ async def _generate_test_points_batched(
                 len(still_failed),
             )
             single_feats = [f for _, batch in still_failed for f in batch]
-            single_results = await asyncio.gather(
-                *[_call_batch(0, [f], temperature=0.5) for f in single_feats]
-            )
+            single_results = await asyncio.gather(*[_call_batch(0, [f], temperature=0.5) for f in single_feats])
             for r in single_results:
                 if r is not None:
                     generated.extend(r)
@@ -425,6 +504,7 @@ async def test_points_node(state: PipelineState) -> dict:
     改进：测试点的具体描述由 LLM 生成，而非硬编码模板。
     """
     parsed_context = state["parsed_context"]
+    runtime = effective_settings(state)
     all_dimensions = _load_dimensions()
 
     applicability_filter = ApplicabilityFilter()
@@ -433,9 +513,7 @@ async def test_points_node(state: PipelineState) -> dict:
     # 该维度信号（性能/安全注入/接口契约/状态机/缓存/分页等）才放行，避免对只字未提的
     # 维度机械全展开 → 灌水 needs_spec 占位用例。
     global_signal_text = "\n".join(
-        f"{section.heading} {section.content}"
-        for source in parsed_context.sources
-        for section in source.sections
+        f"{section.heading} {section.content}" for source in parsed_context.sources for section in source.sections
     ).lower()
 
     # 1. 为每个功能点进行适用性裁剪，构建 LLM 输入
@@ -450,9 +528,7 @@ async def test_points_node(state: PipelineState) -> dict:
         # summary/flow/mock/future/tbd 章节、或 description < 200 字的稀薄章节，
         # 不再机械全展 9 维度，仅保留核心维度（功能正确性/输入校验/边界/权限/状态）。
         section_kind = getattr(feature, "section_kind", "spec") or "spec"
-        applicable_dims = _gate_by_section_kind(
-            applicable_dims, section_kind, len(feature.description or "")
-        )
+        applicable_dims = _gate_by_section_kind(applicable_dims, section_kind, len(feature.description or ""))
 
         dims_info = []
         for dim in applicable_dims:
@@ -523,6 +599,8 @@ async def test_points_node(state: PipelineState) -> dict:
             priority=priority,
             derived_from=gtp.derived_from,
             applicable_dimensions=applicable,
+            likelihood=gtp.likelihood,
+            impact=gtp.impact,
         )
         test_points.append(tp)
 
@@ -568,20 +646,19 @@ async def test_points_node(state: PipelineState) -> dict:
     #    维度驱动路径（上面 1~6）保持不变，作为 breadth 增强（rule_id=None）。
     #    开关关或无规则台账时零影响，行为与历史一致。
     rules = state.get("rules") or []
-    if settings.rule_driven_testpoints_enabled and rules:
-        anchors = build_rule_anchored_test_points(
-            rules, parsed_context.features, start_idx=len(test_points)
-        )
+    if runtime.rule_driven_testpoints_enabled and rules:
+        anchors = build_rule_anchored_test_points(rules, parsed_context.features, start_idx=len(test_points))
         test_points.extend(anchors)
         # 统一重编号（保留 rule_id 等字段），避免与维度/强制注入测试点撞号
         for idx, tp in enumerate(test_points, start=1):
             tp.id = f"TP-{idx:03d}"
-        logger.info(
-            "test-points: 追加 %d 个规则锚点（规则台账 %d 条）", len(anchors), len(rules)
-        )
+        logger.info("test-points: 追加 %d 个规则锚点（规则台账 %d 条）", len(anchors), len(rules))
 
     # 8. 结构化覆盖：权限矩阵 + 状态机有界展开（开关控制，关时零影响）。
-    if settings.structural_coverage_enabled:
+    if runtime.structural_coverage_enabled:
+        critical_flow_tps = build_critical_flow_test_points(parsed_context.features, start_idx=len(test_points))
+        test_points.extend(critical_flow_tps)
+
         from src.testcase_generator.stages.test_points.structural.expander import (
             expand_permission,
             expand_state_machine,
@@ -594,17 +671,13 @@ async def test_points_node(state: PipelineState) -> dict:
         )
 
         prd_text = "\n".join(
-            f"{sec.heading}\n{sec.content}"
-            for src_ in parsed_context.sources
-            for sec in src_.sections
+            f"{sec.heading}\n{sec.content}" for src_ in parsed_context.sources for sec in src_.sections
         )
         pm, sms = await asyncio.gather(
             extract_permission_matrix(prd_text),
             extract_state_machines(prd_text),
         )
-        struct_tps = expand_permission(
-            pm, start_idx=len(test_points), features=parsed_context.features
-        )
+        struct_tps = expand_permission(pm, start_idx=len(test_points), features=parsed_context.features)
         for sm in sms:
             struct_tps.extend(
                 expand_state_machine(
@@ -617,11 +690,17 @@ async def test_points_node(state: PipelineState) -> dict:
         for idx, tp in enumerate(test_points, start=1):
             tp.id = f"TP-{idx:03d}"
         logger.info(
-            "test-points: 追加 %d 个结构化覆盖点（权限 %d 格 / 状态机 %d）",
-            len(struct_tps),
+            "test-points: 追加 %d 个结构化覆盖点（关键流 %d / 权限 %d 格 / 状态机 %d）",
+            len(critical_flow_tps) + len(struct_tps),
+            len(critical_flow_tps),
             len(pm.grants),
             len(sms),
         )
+
+    # 9. P0 全局配额裁剪（roadmap ⑥，灰度、关时零影响）。
+    #    结构化覆盖点（权限/状态机/规则锚点）豁免；非结构化 P0 超 quota 时按 risk 降序降 P1。
+    if runtime.p0_quota_enabled:
+        apply_p0_quota(test_points, quota=runtime.p0_quota)
 
     return {
         "test_points": test_points,

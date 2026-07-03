@@ -9,7 +9,8 @@ from __future__ import annotations
 import logging
 
 from src.knowledge_base.services.embedding.embedding_client import EmbeddingClient
-from src.platform_api.core.settings import settings
+from src.platform_api.core.settings import settings  # noqa: F401 - 兼容既有测试 monkeypatch 入口
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def dedup_node(state: PipelineState) -> dict:
     """对最终用例集做全局近重复标记。"""
     final_cases: list[GeneratedTestCase] = state.get("final_test_cases") or state.get("test_cases", [])
+    runtime = effective_settings(state)
 
     # 兜底：保证逻辑 id 全局唯一（任何上游撞号都会让自引用 duplicate_of 落库时违反外键）。
     # 逻辑 id 不入库为列，仅用于 dedup/落库内部映射，重排无副作用。
@@ -66,25 +68,21 @@ async def dedup_node(state: PipelineState) -> dict:
     # → 降级为纯词面（warning，不阻断 dedup）。向量在 node 外部算好传入，find_duplicates
     # 仍纯同步可离线单测。
     embeddings: dict[str, list[float]] | None = None
-    if settings.semantic_dedup_enabled and final_cases:
-        texts = [
-            (c.title or "") + " " + " ".join(c.expected_results or []) for c in final_cases
-        ]
+    if runtime.semantic_dedup_enabled and final_cases:
+        texts = [(c.title or "") + " " + " ".join(c.expected_results or []) for c in final_cases]
         try:
             vectors = await EmbeddingClient().embed_batch(texts)
-            embeddings = {
-                c.id: v for c, v in zip(final_cases, vectors, strict=False) if v
-            }
+            embeddings = {c.id: v for c, v in zip(final_cases, vectors, strict=False) if v}
         except Exception as e:
             logger.warning("dedup_node: embedding 失败，降级纯词面去重: %s", e)
             embeddings = None
 
     dup_map = find_duplicates(
         dedup_inputs,
-        safe_dedup_enabled=settings.safe_dedup_enabled,
+        safe_dedup_enabled=runtime.safe_dedup_enabled,
         embeddings=embeddings,
-        semantic_threshold=settings.semantic_dedup_threshold,
-        semantic_cross_tp_threshold=settings.semantic_dedup_cross_tp_threshold,
+        semantic_threshold=runtime.semantic_dedup_threshold,
+        semantic_cross_tp_threshold=runtime.semantic_dedup_cross_tp_threshold,
     )
 
     for c in final_cases:

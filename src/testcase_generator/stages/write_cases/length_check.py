@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import math
 import re
+import unicodedata
 
 # 字数声明：捕获「N 字/N个字/N 字符」等。
 # - (?<![第\d])：前导不是「第」也不是数字 —— 排除「第3个字段」「第10个字符位置」等序数表述，
@@ -36,3 +38,35 @@ def check_step_lengths(steps: list[dict]) -> list[str]:
             shown = "/".join(str(c) for c in dict.fromkeys(claimed_values))
             warnings.append(f"步骤{idx}字数声明与输入不符：声称{shown}实为{actual}")
     return warnings
+
+
+# ── R7：字数边界确定性算法（任务 07-02）──────────────────────────────────────
+# 半角字符（ASCII：英文字母/数字/半角标点/空格）按 0.5 个字宽计；全角字符
+# （中日韩、全角符号）按 1 个字宽计。9 个半角字符 = 9 × 0.5 = 4.5 → 向上取整为 5。
+# 用 East Asian Width 判定：W/F/A（宽/全角/模糊）按 1 计，Na/H/N（窄/半角/中性）按 0.5 计。
+# 「模糊（A）」按 1 计是保守取整（含希腊/西里尔等可能宽也可能窄，从严计全角）。
+
+
+def _char_width_units(ch: str) -> float:
+    """单个字符的字宽单位：全角=1.0，半角=0.5。"""
+    eaw = unicodedata.east_asian_width(ch)
+    if eaw in ("W", "F", "A"):
+        return 1.0
+    return 0.5
+
+
+def char_count_halfwidth_units(text: str) -> float:
+    """按半角单位计字数：全角字符 1.0，半角字符 0.5。
+
+    用于字数边界规则的确定性计算（不依赖 LLM 自由推理）。
+    例：``char_count_halfwidth_units("abcdefghi") == 4.5``。
+    """
+    return sum(_char_width_units(ch) for ch in (text or ""))
+
+
+def round_half_up(value: float) -> int:
+    """标准四舍五入（半数向上取整），区别于 Python 默认的银行家舍入。
+
+    例：``round_half_up(4.5) == 5``（Python 内置 ``round(4.5) == 4``）。
+    """
+    return int(math.floor(value + 0.5))

@@ -15,8 +15,8 @@ from src.testcase_generator.stages.test_points import node as tp_node
 from src.testcase_generator.stages.test_points.node import (
     GeneratedTestPoint,
     TestPointsLLMOutput,
-    _pack_feature_batches,
     _generate_test_points_batched,
+    _pack_feature_batches,
 )
 
 
@@ -32,8 +32,11 @@ def _feature(fid: str, desc_len: int = 50) -> dict:
 
 def _tp(fid: str) -> GeneratedTestPoint:
     return GeneratedTestPoint(
-        feature_id=fid, dimension="functional_completeness",
-        description="具体测试点", priority="P0", derived_from=["PRD §1"],
+        feature_id=fid,
+        dimension="functional_completeness",
+        description="具体测试点",
+        priority="P0",
+        derived_from=["PRD §1"],
     )
 
 
@@ -53,12 +56,22 @@ def test_pack_batches_respects_char_limit():
     assert sum(len(b) for b in batches) == 5
 
 
+def test_prompt_requires_cross_module_e2e_scenarios():
+    """REPORT 指出跨模块 E2E 漏测；测试点 prompt 必须显式要求链路闭环覆盖。"""
+    prompt = tp_node.TEST_POINTS_SYSTEM_PROMPT
+
+    assert "跨模块/E2E" in prompt
+    assert "端到端场景测试点" in prompt
+    assert "前置模块动作" in prompt
+
+
 @pytest.mark.asyncio
 async def test_batched_generation_aggregates_all_batches():
     feats = [_feature(f"F{i}") for i in range(25)]
 
     async def fake_structured(*, system_prompt, user_content, output_schema, temperature):
         import json
+
         payload = json.loads(user_content)
         fids = [f["feature_id"] for f in payload["features_with_dimensions"]]
         return TestPointsLLMOutput(test_points=[_tp(fid) for fid in fids])
@@ -81,6 +94,7 @@ async def test_partial_batch_failure_keeps_successes():
 
     async def flaky(*, system_prompt, user_content, output_schema, temperature):
         import json
+
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("网关返回空")  # 第一批失败
@@ -112,6 +126,7 @@ async def test_all_batches_failed_raises():
 
 
 # ── 根因3：质量属性维度信号门控 ────────────────────────────────────────────────
+
 
 def _dim(name: str) -> dict:
     return {"name": name}

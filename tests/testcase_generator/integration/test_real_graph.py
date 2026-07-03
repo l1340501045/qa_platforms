@@ -23,8 +23,7 @@ from src.testcase_generator.schemas.parsed_context import (
 )
 
 _INCOMPLETE_REAL_GRAPH_MOCK_REASON = (
-    "pre-existing: 真实图已扩为 9 节点，旧 mock 未覆盖全阶段路径；"
-    "待补齐 rule_extract/verify/dedup/backfill mock 后恢复"
+    "pre-existing: 真实图已扩为 9 节点，旧 mock 未覆盖全阶段路径；待补齐 rule_extract/verify/dedup/backfill mock 后恢复"
 )
 
 
@@ -82,13 +81,15 @@ def _mock_llm_factory(go_coverage: float = 0.9):
             fids = [f["feature_id"] for f in data.get("features_with_dimensions", [])]
             tps = []
             for fid in fids:
-                tps.append({
-                    "feature_id": fid,
-                    "dimension": "functional_correctness",
-                    "description": f"验证{fid}正常工作",
-                    "priority": "P0",
-                    "derived_from": ["PRD §1"],
-                })
+                tps.append(
+                    {
+                        "feature_id": fid,
+                        "dimension": "functional_correctness",
+                        "description": f"验证{fid}正常工作",
+                        "priority": "P0",
+                        "derived_from": ["PRD §1"],
+                    }
+                )
             return output_schema.model_validate({"test_points": tps})
         elif "WriteCases" in schema_name:
             input_data = json.loads(user_content)

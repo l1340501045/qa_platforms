@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from src.platform_api.core.settings import settings
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.services.llm_client import get_llm_client
 from src.testcase_generator.stages.rule_extract.extractor import extract_rules
@@ -23,7 +23,8 @@ logger = logging.getLogger(__name__)
 
 async def rule_extract_node(state: PipelineState) -> dict:
     """抽取规则台账写入 state["rules"]（list[dict]）。"""
-    if not settings.rule_extract_enabled:
+    runtime = effective_settings(state)
+    if not runtime.rule_extract_enabled:
         # 灰度关：直通，不读文档/不调 LLM，产空台账（拓扑不变，老路径完全等价）
         return {"rules": [], "current_stage": "rule_extract"}
 
@@ -33,7 +34,7 @@ async def rule_extract_node(state: PipelineState) -> dict:
     logger.info("rule_extract：seed 原文 %d 字 → %d 个规则单元", len(md), len(units))
 
     client = get_llm_client()
-    ledger = await extract_rules(units, digest, client, concurrency=settings.rule_extract_concurrency)
+    ledger = await extract_rules(units, digest, client, concurrency=runtime.rule_extract_concurrency)
     logger.info("rule_extract：抽出 %d 条规则（失败单元 %d）", ledger.total, ledger.failed_units)
 
     return {

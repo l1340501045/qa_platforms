@@ -124,6 +124,37 @@ def _fake_llm(captured):
     return FakeLLM()
 
 
+def _fake_display_llm(captured):
+    class FakeLLM:
+        async def generate_structured(self, *, system_prompt, user_content, output_schema, **kwargs):
+            captured["system_prompt"] = system_prompt
+            captured["user_content"] = user_content
+            return write_cases_node.WriteCasesLLMOutput(
+                test_cases=[
+                    write_cases_node.LLMGeneratedCase(
+                        test_point_id="TP-001",
+                        title="入口页Tab按钮文案展示",
+                        preconditions=["已登录"],
+                        steps=[
+                            write_cases_node.LLMTestStep(
+                                step_number=1,
+                                action="打开入口页",
+                                input_data="无",
+                                expected_result="页面展示IAP与IAA说明",
+                                source_quote="IAP 与 IAA 是不同变现链路。",
+                                source_ref="PRD §5.8.7",
+                            )
+                        ],
+                        expected_results=["页面展示IAP与IAA说明"],
+                        priority="P0",
+                        dimensions=["ui_interaction"],
+                    )
+                ]
+            )
+
+    return FakeLLM()
+
+
 def _patch_common(monkeypatch, captured):
     async def fake_retrieve_samples(self, system_id, feature_types):
         return []
@@ -221,3 +252,51 @@ async def test_generate_cases_keeps_original_payload_when_disabled(monkeypatch):
     payload = json.loads(captured["user_content"])
     assert set(payload.keys()) == {"test_points", "requirement_context"}
     assert "如何应用 cheat sheet" not in captured["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_generate_cases_demotes_low_value_display_case_priority_when_p0_quota_enabled(monkeypatch):
+    """显式开启 P0 配额时，纯展示/存在性用例不应继承占用 P0。"""
+    captured = {}
+
+    async def fake_retrieve_samples(self, system_id, feature_types):
+        return []
+
+    monkeypatch.setattr(write_cases_node.settings, "cheat_sheet_injection_enabled", False)
+    monkeypatch.setattr(write_cases_node.FewShotRetriever, "retrieve_samples", fake_retrieve_samples)
+    monkeypatch.setattr(write_cases_node, "get_llm_client", lambda: _fake_display_llm(captured))
+
+    cases, failed = await write_cases_node.generate_cases(
+        _parsed_context(uuid4()),
+        _test_points(),
+        uuid4(),
+        generation_config={"p0_quota_enabled": True},
+    )
+
+    assert failed == []
+    assert len(cases) == 1
+    assert cases[0].priority == "P2"
+
+
+@pytest.mark.asyncio
+async def test_generate_cases_keeps_parent_priority_when_p0_quota_disabled(monkeypatch):
+    """P0 配额关闭时保持旧行为，纯展示 case 仍继承父测试点优先级。"""
+    captured = {}
+
+    async def fake_retrieve_samples(self, system_id, feature_types):
+        return []
+
+    monkeypatch.setattr(write_cases_node.settings, "cheat_sheet_injection_enabled", False)
+    monkeypatch.setattr(write_cases_node.FewShotRetriever, "retrieve_samples", fake_retrieve_samples)
+    monkeypatch.setattr(write_cases_node, "get_llm_client", lambda: _fake_display_llm(captured))
+
+    cases, failed = await write_cases_node.generate_cases(
+        _parsed_context(uuid4()),
+        _test_points(),
+        uuid4(),
+        generation_config={"p0_quota_enabled": False},
+    )
+
+    assert failed == []
+    assert len(cases) == 1
+    assert cases[0].priority == "P0"

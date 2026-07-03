@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """T026: write-cases 节点 — LLM + few-shot 生成具体用例（最重要节点）
 
 硬约束#3: 每条用例必带 provenance
@@ -19,7 +20,8 @@ from pydantic import BaseModel, Field
 
 from src.knowledge_base.repositories.cheat_sheet_repo import CheatSheetRepository
 from src.platform_api.core.database import async_session_factory
-from src.platform_api.core.settings import settings
+from src.platform_api.core.settings import settings  # noqa: F401 - 兼容既有测试 monkeypatch 入口
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import (
     GeneratedTestCase,
@@ -41,11 +43,15 @@ from src.testcase_generator.stages.write_cases.cheat_sheet_inject import (
 from src.testcase_generator.stages.write_cases.confidence_scorer import (
     ConfidenceScorer,
 )
+from src.testcase_generator.stages.write_cases.convergence import apply_convergence
 from src.testcase_generator.stages.write_cases.dimension_normalizer import (
     normalize_dimensions,
 )
 from src.testcase_generator.stages.write_cases.length_check import (
     check_step_lengths,
+)
+from src.testcase_generator.stages.write_cases.priority_calibration import (
+    calibrate_case_priority,
 )
 from src.testcase_generator.stages.write_cases.provenance_tagger import (
     ProvenanceTagger,
@@ -228,9 +234,9 @@ def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[l
     return [tps[i : i + max_per_batch] for i in range(0, len(tps), max_per_batch)]
 
 
-async def _load_approved_cheat_sheet(document_id: UUID | None) -> dict:
+async def _load_approved_cheat_sheet(document_id: UUID | None, runtime) -> dict:
     """按文档加载已审核 cheat sheet；开关关或异常时返回空。"""
-    if not settings.cheat_sheet_injection_enabled:
+    if not runtime.cheat_sheet_injection_enabled:
         return {}
     if document_id is None:
         return {}
@@ -253,12 +259,14 @@ async def generate_cases(
     document_id: UUID | None = None,
     start_counter: int = 0,
     feedback: dict | None = None,
+    generation_config: dict | None = None,
 ) -> tuple[list[GeneratedTestCase], list[dict]]:
     """对给定测试点集生成用例的核心例程（write_cases 与 backfill 共用）。
 
     返回 (生成的用例列表, 失败子批列表)。用例编号从 start_counter+1 起递增。
     feedback: QA 修改意见 {case_id: comment}，注入到 prompt 让 AI 按意见重写。
     """
+    runtime = effective_settings({"generation_config": generation_config or {}})
     # 推断 feature_types 用于 few-shot 查询
     all_feature_types: list[str] = []
     for feature in parsed_context.features:
@@ -268,7 +276,7 @@ async def generate_cases(
     # 加载 few-shot 样本（硬约束#6，冷启动返回空列表不影响流程）
     retriever = FewShotRetriever()
     few_shot_samples = await retriever.retrieve_samples(system_id, all_feature_types)
-    approved_cheat_sheet = await _load_approved_cheat_sheet(document_id)
+    approved_cheat_sheet = await _load_approved_cheat_sheet(document_id, runtime)
 
     # 构建 few-shot 注入段（全局共享，只构建一次）
     few_shot_section = ""
@@ -346,9 +354,7 @@ async def generate_cases(
     # 跨章节参考，让模型据此写确定断言而非误判留白。scope=cross_ref。
     cross_index = await CrossFeatureIndex.build(parsed_context)
     for fid, fid_tps in tp_by_feature.items():
-        query_text = "\n".join(
-            f"{tp.dimension} {tp.description}" for tp in fid_tps
-        )
+        query_text = "\n".join(f"{tp.dimension} {tp.description}" for tp in fid_tps)
         for cs in await cross_index.query(query_text, ctx_seen[fid], top_k=3):
             key = (cs.source_ref or "", cs.heading or "")
             ctx_seen[fid].add(key)
@@ -366,7 +372,7 @@ async def generate_cases(
 
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
-    _grounded_index = build_section_index(parsed_context) if settings.grounded_provenance_enabled else None
+    _grounded_index = build_section_index(parsed_context) if runtime.grounded_provenance_enabled else None
     _quote_cache: dict = {}
     all_test_cases: list[GeneratedTestCase] = []
     failed_features: list[dict] = []
@@ -377,11 +383,9 @@ async def generate_cases(
     # 根因是「单次输出的用例条数」，不是输入大小。故按测试点条数硬切批（_split_by_count）：
     # 每批最多生成 MAX_TPS_PER_BATCH 条用例（输出短、稳返回），各批结果再聚合 —— 测试点一个不少、
     # 用例一条不少。上下文保持完整注入（不截断），保证每条用例都带完整背景，契合"维度全面"的诉求。
-    semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    semaphore = asyncio.Semaphore(runtime.llm_concurrency)
 
-    def _split_feature_if_needed(
-        feature_id: str, tps: list[TestPointSchema]
-    ) -> list[list[TestPointSchema]]:
+    def _split_feature_if_needed(feature_id: str, tps: list[TestPointSchema]) -> list[list[TestPointSchema]]:
         sub_batches = _split_by_count(tps)
         if len(sub_batches) > 1:
             logger.warning(
@@ -410,7 +414,7 @@ async def generate_cases(
                     for tp in batch_tps
                 ]
 
-                cheat_sheet_section = CHEAT_SHEET_SYSTEM_PROMPT if settings.cheat_sheet_injection_enabled else ""
+                cheat_sheet_section = CHEAT_SHEET_SYSTEM_PROMPT if runtime.cheat_sheet_injection_enabled else ""
                 feedback_section = ""
                 if feedback:
                     feedback_lines = "\n".join(f"- {comment}" for comment in feedback.values() if comment)
@@ -418,15 +422,14 @@ async def generate_cases(
                         feedback_section = (
                             "\n\n【QA 修改意见（对相关用例的权威纠正，优先级高于原测试点/原用例；"
                             "请先理解意见的业务含义，冲突时一律以 QA 意见为准，"
-                            "允许推翻原有断言、过滤规则或方向，不要保留与意见相悖的原结论）】\n"
-                            + feedback_lines
+                            "允许推翻原有断言、过滤规则或方向，不要保留与意见相悖的原结论）】\n" + feedback_lines
                         )
-                cot_section = COT_REASONING_SECTION if settings.grounded_provenance_enabled else ""
+                cot_section = COT_REASONING_SECTION if runtime.grounded_provenance_enabled else ""
                 full_system_prompt = (
                     WRITE_CASES_SYSTEM_PROMPT + cot_section + cheat_sheet_section + feedback_section + few_shot_section
                 )
                 prompt_payload = {"test_points": test_points_data, "requirement_context": relevant_context}
-                if settings.cheat_sheet_injection_enabled:
+                if runtime.cheat_sheet_injection_enabled:
                     feature = feature_by_id.get(feature_id)
                     filtered_cheat_sheet = (
                         format_cheat_sheet_for_prompt(filter_cheat_sheet_for_feature(feature, approved_cheat_sheet))
@@ -490,7 +493,7 @@ async def generate_cases(
                         logger.warning("LLM generated case for unknown test_point_id: %s", llm_case.test_point_id)
                         continue
 
-                    if settings.grounded_provenance_enabled:
+                    if runtime.grounded_provenance_enabled:
                         provenance = derive_grounded_provenance(
                             llm_case, parsed_context, index=_grounded_index, quote_cache=_quote_cache
                         )
@@ -519,6 +522,16 @@ async def generate_cases(
                         )
                         for s in llm_case.steps
                     ]
+                    dimensions = normalize_dimensions(llm_case.dimensions)
+                    priority = tp.priority if tp else "P2"
+                    if runtime.p0_quota_enabled:
+                        priority = calibrate_case_priority(
+                            parent_priority=priority,
+                            title=llm_case.title,
+                            expected_results=llm_case.expected_results,
+                            step_expected_results=[s.expected_result for s in steps],
+                            dimensions=dimensions,
+                        )
 
                     feature_cases.append(
                         GeneratedTestCase(
@@ -528,8 +541,8 @@ async def generate_cases(
                             preconditions=llm_case.preconditions,
                             steps=steps,
                             expected_results=llm_case.expected_results,
-                            priority=tp.priority if tp else "P2",
-                            dimensions=normalize_dimensions(llm_case.dimensions),
+                            priority=priority,
+                            dimensions=dimensions,
                             provenance=provenance,
                             trust_level=trust_level,
                             confidence_note=confidence_note,
@@ -540,7 +553,7 @@ async def generate_cases(
 
     # 并发执行所有 feature（return_exceptions=True 防止单个异常取消其它）
     feature_ids = list(tp_by_feature.keys())
-    logger.info(f"write-cases: {len(feature_ids)} 个 feature 并发, 并发度={settings.llm_concurrency}")
+    logger.info(f"write-cases: {len(feature_ids)} 个 feature 并发, 并发度={runtime.llm_concurrency}")
     tasks = [_process_feature(fid, tp_by_feature[fid]) for fid in feature_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -566,6 +579,11 @@ async def generate_cases(
 
     if failed_features:
         logger.warning(f"write-cases: {len(failed_features)} 个子批失败，已保留成功结果")
+
+    # ── 生成侧收敛后处理（roadmap ⑥，灰度、关时逐字节现状）─────────────────────
+    # 先存在性合并（同 tp 同 section 的纯展示用例合 1 条、保留全部检查点）→ 再拆条上限
+    # （每 tp 裁剪到 cap、被裁软标记 duplicate_of）。合并减条后再裁剪更准。
+    all_test_cases = apply_convergence(all_test_cases, runtime)
 
     return all_test_cases, failed_features
 
@@ -595,6 +613,7 @@ async def write_cases_node(state: PipelineState) -> dict:
         system_id,
         document_id=document_id,
         feedback=iteration_feedback,
+        generation_config=generation_config,
     )
 
     return {
