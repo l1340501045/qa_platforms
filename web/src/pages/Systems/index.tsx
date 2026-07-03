@@ -21,6 +21,10 @@ import type { System } from '../../types';
 const { Meta } = Card;
 const { Text } = Typography;
 
+function renderCount(count?: number): number | string {
+  return typeof count === 'number' ? count : '--';
+}
+
 const SystemsPage: React.FC = () => {
   const navigate = useNavigate();
   const {
@@ -133,9 +137,9 @@ const SystemsPage: React.FC = () => {
                   description={system.description || '暂无描述'}
                 />
                 <div style={{ marginTop: 12 }}>
-                  <Text type="secondary">文档数：{system.document_count ?? 0}</Text>
+                  <Text type="secondary">文档数：{renderCount(system.document_count)}</Text>
                   <br />
-                  <Text type="secondary">批次数：{system.batch_count ?? 0}</Text>
+                  <Text type="secondary">批次数：{renderCount(system.batch_count)}</Text>
                   <br />
                   <Text type="secondary">
                     创建时间：{new Date(system.created_at).toLocaleDateString()}

@@ -28,6 +28,7 @@ export interface DocumentFilterParams extends PaginationParams {
 export async function batchUploadDocuments(
   systemId: string,
   files: File[],
+  docType: DocType = 'prd',
 ): Promise<UploadResult> {
   const formData = new FormData();
   files.forEach((file) => {
@@ -37,6 +38,7 @@ export async function batchUploadDocuments(
 
   const res = await api.post(`/systems/${systemId}/documents/batch`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    params: { doc_type: docType },
     timeout: 120000, // 上传给 2 分钟超时
   });
   return res.data;

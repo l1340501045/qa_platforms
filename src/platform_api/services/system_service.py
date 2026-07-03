@@ -7,12 +7,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.exceptions import ApiError
+from src.platform_api.models.knowledge import Document
 from src.platform_api.models.public import System, SystemAssociation
+from src.platform_api.models.testcase import TestBatch
 from src.platform_api.repositories.base import BaseRepository
 from src.platform_api.schemas.system import (
     SYSTEM_RELATION_TYPES,
     CreateSystemAssociationRequest,
     CreateSystemRequest,
+    SystemSummaryResponse,
     UpdateSystemRequest,
 )
 
@@ -39,12 +42,40 @@ class SystemService:
             raise ApiError("E4041", "系统不存在")
         return system
 
-    async def list_systems(self, offset: int = 0, limit: int = 50) -> tuple[list[System], int]:
-        """分页列表 + 总数"""
-        items = await self.repo.list_all(offset=offset, limit=limit)
+    async def list_systems(self, offset: int = 0, limit: int = 50) -> tuple[list[SystemSummaryResponse], int]:
+        """分页列表 + 文档/批次聚合统计。"""
+        doc_counts = (
+            select(Document.system_id, func.count(Document.id).label("document_count"))
+            .where(Document.deleted_at.is_(None))
+            .group_by(Document.system_id)
+            .subquery()
+        )
+        batch_counts = (
+            select(TestBatch.system_id, func.count(TestBatch.id).label("batch_count"))
+            .group_by(TestBatch.system_id)
+            .subquery()
+        )
+        stmt = (
+            select(
+                System.id,
+                System.name,
+                System.description,
+                System.created_at,
+                System.updated_at,
+                func.coalesce(doc_counts.c.document_count, 0).label("document_count"),
+                func.coalesce(batch_counts.c.batch_count, 0).label("batch_count"),
+            )
+            .outerjoin(doc_counts, doc_counts.c.system_id == System.id)
+            .outerjoin(batch_counts, batch_counts.c.system_id == System.id)
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        items = [SystemSummaryResponse(**row._mapping) for row in result.all()]
+
         count_stmt = select(func.count()).select_from(System)
-        result = await self.session.execute(count_stmt)
-        total = result.scalar_one()
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar_one()
         return items, total
 
     async def update_system(self, system_id: UUID, data: UpdateSystemRequest) -> System:

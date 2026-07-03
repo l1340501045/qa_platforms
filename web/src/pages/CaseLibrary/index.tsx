@@ -6,8 +6,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Card,
+  Button,
   Col,
   Empty,
+  Input,
   Row,
   Select,
   Space,
@@ -30,6 +32,11 @@ import type { ColumnsType } from 'antd/es/table';
 import { getCaseTree, listSystemBatches, listSystemOptions } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
 import CaseDetailDrawer from '../../components/CaseDetailDrawer';
+import {
+  collectTreeKeys,
+  collectTreeKeysByDepth,
+  filterTreeDataByKeyword,
+} from '../../components/treeUtils';
 import type {
   CaseBucket,
   CaseTreeCase,
@@ -131,6 +138,8 @@ const CaseLibraryPage: React.FC = () => {
   const [treeLoading, setTreeLoading] = useState(false);
 
   const [selectedNode, setSelectedNode] = useState<SelectedNode>({ type: 'all' });
+  const [treeSearchKeyword, setTreeSearchKeyword] = useState('');
+  const [expandedTreeKeys, setExpandedTreeKeys] = useState<React.Key[]>([]);
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
 
   // 可见批次列表（用于批次切换器）
@@ -265,6 +274,20 @@ const CaseLibraryPage: React.FC = () => {
       },
     ];
   }, [treeData, systemOptions, selectedSystemId]);
+  const visibleAntTreeData = useMemo(
+    () => filterTreeDataByKeyword(antTreeData, treeSearchKeyword),
+    [antTreeData, treeSearchKeyword],
+  );
+  const allTreeKeys = useMemo(() => collectTreeKeys(antTreeData), [antTreeData]);
+  const defaultExpandedTreeKeys = useMemo(() => collectTreeKeysByDepth(antTreeData, 1), [antTreeData]);
+
+  useEffect(() => {
+    if (treeSearchKeyword.trim()) {
+      setExpandedTreeKeys(collectTreeKeys(visibleAntTreeData));
+      return;
+    }
+    setExpandedTreeKeys(defaultExpandedTreeKeys);
+  }, [treeSearchKeyword, visibleAntTreeData, defaultExpandedTreeKeys]);
 
   // ─── 选中节点对应的用例 ───
   const selectedCases: CaseTreeCase[] = useMemo(() => {
@@ -306,6 +329,23 @@ const CaseLibraryPage: React.FC = () => {
         return selectedNode.branchPathKey;
     }
   }, [treeData, selectedNode]);
+
+  const selectedTreeKeys = useMemo(() => {
+    switch (selectedNode.type) {
+      case 'all':
+        return [];
+      case 'doc':
+        return [`doc::${selectedNode.docId}`];
+      case 'module':
+        return [`module::${selectedNode.docId}::${encodeTreePart(selectedNode.moduleName)}`];
+      case 'branch':
+        return [
+          `branch::${selectedNode.docId}::${encodeTreePart(selectedNode.moduleName)}::${encodeTreePart(
+            selectedNode.branchPathKey,
+          )}`,
+        ];
+    }
+  }, [selectedNode]);
 
   // ─── 统计 ───
   const stats = useMemo(() => {
@@ -565,20 +605,35 @@ const CaseLibraryPage: React.FC = () => {
       <Row gutter={24}>
         <Col span={8}>
           <Card title="文档 / 模块结构" size="small" style={{ height: '100%' }}>
+            <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 8 }}>
+              <Input.Search
+                allowClear
+                size="small"
+                placeholder="搜索模块/分支"
+                value={treeSearchKeyword}
+                onChange={(e) => setTreeSearchKeyword(e.target.value)}
+              />
+              <Space size={8} wrap>
+                <Button size="small" onClick={() => setExpandedTreeKeys(allTreeKeys)}>
+                  展开全部
+                </Button>
+                <Button size="small" onClick={() => setExpandedTreeKeys([])}>
+                  收起全部
+                </Button>
+              </Space>
+            </Space>
             <Spin spinning={treeLoading}>
               {antTreeData.length > 0 ? (
-                <Tree
-                  treeData={antTreeData}
-                  defaultExpandAll
-                  onSelect={handleTreeSelect}
-                  selectedKeys={
-                    selectedNode.type === 'all'
-                      ? []
-                      : selectedNode.type === 'doc'
-                        ? [`doc::${selectedNode.docId}`]
-                        : [`module::${selectedNode.docId}::${selectedNode.moduleName}`]
-                  }
-                />
+                <div style={{ maxHeight: 'calc(100vh - 380px)', minHeight: 320, overflow: 'auto', paddingRight: 4 }}>
+                  <Tree
+                    treeData={visibleAntTreeData}
+                    expandedKeys={expandedTreeKeys}
+                    onExpand={(keys) => setExpandedTreeKeys(keys)}
+                    onSelect={handleTreeSelect}
+                    selectedKeys={selectedTreeKeys}
+                    height={520}
+                  />
+                </div>
               ) : (
                 <Empty description="暂无数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
               )}

@@ -8,6 +8,7 @@ import type {
   SystemDetail,
   Document,
   DocumentDetail,
+  DocType,
   PaginatedData,
   PaginationParams,
   UploadResult,
@@ -52,7 +53,7 @@ interface KnowledgeState {
   deleteSystem: (id: string) => Promise<void>;
   fetchDocuments: (systemId: string, params?: DocumentFilterParams) => Promise<void>;
   fetchDocument: (documentId: string) => Promise<void>;
-  uploadDocuments: (systemId: string, files: File[]) => Promise<UploadResult>;
+  uploadDocuments: (systemId: string, files: File[], docType?: DocType) => Promise<UploadResult>;
   clearUploadResult: () => void;
   clearCurrentSystem: () => void;
 }
@@ -141,10 +142,10 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     set({ currentDocument: doc });
   },
 
-  uploadDocuments: async (systemId: string, files: File[]) => {
+  uploadDocuments: async (systemId: string, files: File[], docType: DocType = 'prd') => {
     set({ isUploading: true });
     try {
-      const result = await batchUploadDocuments(systemId, files);
+      const result = await batchUploadDocuments(systemId, files, docType);
       set({ uploadResult: result });
       return result;
     } finally {

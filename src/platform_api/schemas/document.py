@@ -6,9 +6,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, computed_field
 
+from src.platform_api.models.enums import DocType
 
 # ─── 文档类型枚举 ───
-DOC_TYPES = ("prd", "tech_doc", "test_rule", "test_case", "bug_record", "prototype", "other")
+DOC_TYPES = tuple(item.value for item in DocType)
 
 # ─── 文档关联类型枚举 ───
 DOC_RELATION_TYPES = (

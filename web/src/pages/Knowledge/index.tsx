@@ -2,9 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
+  Input,
   message,
   Modal,
   Pagination,
+  Select,
   Space,
   Spin,
   Table,
@@ -19,6 +21,11 @@ import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import type { Document, DocType, DocStatus } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 import type { DataNode } from 'antd/es/tree';
+import {
+  collectTreeKeys,
+  collectTreeKeysByDepth,
+  filterTreeDataByKeyword,
+} from '../../components/treeUtils';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -32,6 +39,26 @@ const docTypeColorMap: Record<DocType, string> = {
   prototype: 'cyan',
   other: 'default',
 };
+
+const docTypeLabelMap: Record<DocType, string> = {
+  prd: 'PRD',
+  tech_doc: '技术文档',
+  test_rule: '测试规则',
+  test_case: '测试用例',
+  bug_record: '缺陷记录',
+  prototype: '原型/图片',
+  other: '其他',
+};
+
+const docTypeOptions: Array<{ label: string; value: DocType }> = [
+  { label: docTypeLabelMap.prd, value: 'prd' },
+  { label: docTypeLabelMap.tech_doc, value: 'tech_doc' },
+  { label: docTypeLabelMap.test_rule, value: 'test_rule' },
+  { label: docTypeLabelMap.prototype, value: 'prototype' },
+  { label: docTypeLabelMap.bug_record, value: 'bug_record' },
+  { label: docTypeLabelMap.test_case, value: 'test_case' },
+  { label: docTypeLabelMap.other, value: 'other' },
+];
 
 const docStatusMap: Record<DocStatus, { status: 'processing' | 'success' | 'error' | 'default'; text: string }> = {
   uploading: { status: 'processing', text: '上传中' },
@@ -105,6 +132,9 @@ const KnowledgePage: React.FC = () => {
 
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [resultModalOpen, setResultModalOpen] = useState(false);
+  const [selectedDocType, setSelectedDocType] = useState<DocType>('prd');
+  const [folderKeyword, setFolderKeyword] = useState('');
+  const [expandedFolderKeys, setExpandedFolderKeys] = useState<React.Key[]>(['__all__']);
 
   // 累积一次选择/拖拽的多个文件（文件夹会触发多次 beforeUpload），合并为一个上传请求
   const pendingFilesRef = useRef<File[]>([]);
@@ -123,6 +153,20 @@ const KnowledgePage: React.FC = () => {
   }, [uploadResult]);
 
   const treeData = useMemo(() => buildFolderTree(documents), [documents]);
+  const visibleTreeData = useMemo(
+    () => filterTreeDataByKeyword(treeData, folderKeyword),
+    [treeData, folderKeyword],
+  );
+  const allFolderKeys = useMemo(() => collectTreeKeys(treeData), [treeData]);
+  const defaultFolderKeys = useMemo(() => collectTreeKeysByDepth(treeData, 0), [treeData]);
+
+  useEffect(() => {
+    if (folderKeyword.trim()) {
+      setExpandedFolderKeys(collectTreeKeys(visibleTreeData));
+      return;
+    }
+    setExpandedFolderKeys(defaultFolderKeys);
+  }, [folderKeyword, visibleTreeData, defaultFolderKeys]);
 
   const filteredDocuments = useMemo(() => {
     if (!selectedFolder || selectedFolder === '__all__') return documents;
@@ -139,7 +183,7 @@ const KnowledgePage: React.FC = () => {
   const handleUpload = async (files: File[]) => {
     if (!systemId || files.length === 0) return;
     try {
-      await uploadDocuments(systemId, files);
+      await uploadDocuments(systemId, files, selectedDocType);
       // 上传成功后刷新文档列表
       fetchDocuments(systemId, { page: 1, per_page: documentsPerPage });
     } catch (err: any) {
@@ -177,7 +221,7 @@ const KnowledgePage: React.FC = () => {
       key: 'doc_type',
       width: 100,
       render: (type: DocType) => (
-        <Tag color={docTypeColorMap[type]}>{type}</Tag>
+        <Tag color={docTypeColorMap[type]}>{docTypeLabelMap[type] || type}</Tag>
       ),
     },
     {
@@ -210,6 +254,18 @@ const KnowledgePage: React.FC = () => {
     <div style={{ padding: 24 }}>
       <Title level={3}>{currentSystem?.name || '系统'} - 知识库</Title>
 
+      <Space align="center" style={{ marginBottom: 12 }} wrap>
+        <Text strong>上传文档类型</Text>
+        <Select<DocType>
+          value={selectedDocType}
+          onChange={setSelectedDocType}
+          options={docTypeOptions}
+          style={{ width: 160 }}
+          disabled={isUploading}
+        />
+        <Text type="secondary">本次上传会按所选类型入库，默认 PRD。</Text>
+      </Space>
+
       <Dragger
         accept=".zip,.md,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg"
         multiple
@@ -226,6 +282,9 @@ const KnowledgePage: React.FC = () => {
         </p>
         <p className="ant-upload-hint">
           支持 .zip 压缩包、单个/多个 .md 文件，以及图片文件（可多选）
+        </p>
+        <p className="ant-upload-hint">
+          当前类型：{docTypeLabelMap[selectedDocType]}
         </p>
       </Dragger>
 
@@ -248,13 +307,33 @@ const KnowledgePage: React.FC = () => {
       <div style={{ display: 'flex', gap: 24 }}>
         {/* 左侧文档树 */}
         <div style={{ width: 240, flexShrink: 0 }}>
-          <Tree
-            treeData={treeData}
-            defaultExpandAll
-            onSelect={(keys) => {
-              setSelectedFolder(keys.length > 0 ? (keys[0] as string) : null);
-            }}
-          />
+          <Space direction="vertical" size={8} style={{ width: '100%' }}>
+            <Input.Search
+              allowClear
+              placeholder="搜索文件夹"
+              value={folderKeyword}
+              onChange={(e) => setFolderKeyword(e.target.value)}
+            />
+            <Space size={8} wrap>
+              <Button size="small" onClick={() => setExpandedFolderKeys(allFolderKeys)}>
+                展开全部
+              </Button>
+              <Button size="small" onClick={() => setExpandedFolderKeys([])}>
+                收起全部
+              </Button>
+            </Space>
+            <div style={{ maxHeight: 520, overflow: 'auto', paddingRight: 4 }}>
+              <Tree
+                treeData={visibleTreeData}
+                expandedKeys={expandedFolderKeys}
+                selectedKeys={selectedFolder ? [selectedFolder] : []}
+                onExpand={(keys) => setExpandedFolderKeys(keys)}
+                onSelect={(keys) => {
+                  setSelectedFolder(keys.length > 0 ? (keys[0] as string) : null);
+                }}
+              />
+            </div>
+          </Space>
         </div>
 
         {/* 右侧文档列表 */}
@@ -314,7 +393,9 @@ const KnowledgePage: React.FC = () => {
                 <Title level={5}>已上传</Title>
                 <ul>
                   {uploadResult.uploaded.map((item) => (
-                    <li key={item.id}>{item.title}</li>
+                    <li key={item.id}>
+                      {item.title} <Tag color={docTypeColorMap[item.doc_type]}>{docTypeLabelMap[item.doc_type]}</Tag>
+                    </li>
                   ))}
                 </ul>
               </>
