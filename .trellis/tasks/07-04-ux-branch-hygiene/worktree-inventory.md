@@ -11,6 +11,7 @@
 - 审查导出、日志、pid、备份：不应进入 checkpoint。
 - 已处理 P0 配额默认值：按用户此前真实跑批配置，`p0_quota_enabled` 默认改为 `False`。
 - 已按保守策略处理平台本地配置：`.claude/.codex/.cursor` 不进入 checkpoint，只保留 `.agents` 与 `.trellis` 的项目通用流程资产。
+- 已按用户最新决策移除特定设计工具原型回灌相关方案与代码：不再识别、抓取、回灌该类专属原型规格。
 - 仍需后续单独决策：`.audit` 校准包是否转成正式 fixture。
 
 推荐策略：
@@ -144,26 +145,26 @@ feat/architecture-migration
 - 保留并单独提交。
 - 提交前至少跑 `tests/platform_api/test_case_tree_service.py` 和相关前端 build/typecheck。
 
-### 3. MasterGo 存量回灌
+### 3. 已废弃：特定设计工具存量回灌
 
 相关路径：
 
-- `src/testcase_generator/stages/parse/mastergo_fetch.py`
-- `scripts/mastergo_backfill.py`
-- `tests/testcase_generator/test_mastergo_backfill.py`
-- `docs/plans/2026-06-23-mastergo-prototype-source-plan.md`
-- `docs/spec/2026-06-23-mastergo-prototype-source-design.md`
-- `.gitignore` 中 `.mastergo_session/` 和 `backup_*.content.md`
+- 专属解析/回灌源码
+- 专属回灌脚本
+- 专属测试
+- 专属 plan/design 文档
+- 专属登录态 ignore 规则
 
 判断：
 
-- 这是存量 PRD/原型规格回灌工具，不属于 UI/UX 重构。
-- 但对生成质量和历史资料补全有价值，应作为独立阶段成果提交。
+- 用户已明确：该特定设计工具相关的所有方案与涉及代码都不要，系统不需要识别这块能力。
+- 因此这部分不再作为阶段成果保留，也不进入 UI/UX 前置 checkpoint。
 
 建议：
 
-- 单独提交。
-- `.mastergo_session/` 绝不能提交，当前 `.gitignore` 已覆盖。
+- 已用独立提交移除热路径调用、配置、专属工具、测试与方案文档。
+- `backup_*.content.md` 仍作为通用本地备份忽略，但不再带特定设计工具语义。
+- 后续多源接地若要做，应重新设计为通用“技术方案/接口契约/原型 DOM”能力，不能复用已废弃的专属链路。
 
 ### 4. Docker/本机运行基建
 

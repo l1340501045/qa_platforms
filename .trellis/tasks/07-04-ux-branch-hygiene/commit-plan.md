@@ -101,27 +101,15 @@ scripts/backups/
 docker compose -f docker-compose.infra.yml config
 ```
 
-### Commit 3：MasterGo 存量原型规格回灌
+### Commit 3：特定设计工具原型回灌（已废弃，不再保留）
 
-建议 message：
+当前结论：
 
-```text
-feat(parse): add MasterGo prototype backfill tooling
-```
-
-建议文件：
-
-- `src/testcase_generator/stages/parse/mastergo_fetch.py`
-- `scripts/mastergo_backfill.py`
-- `tests/testcase_generator/test_mastergo_backfill.py`
-- `docs/plans/2026-06-23-mastergo-prototype-source-plan.md`
-- `docs/spec/2026-06-23-mastergo-prototype-source-design.md`
-
-验证：
-
-```bash
-uv run pytest tests/testcase_generator/test_mastergo_backfill.py
-```
+- 用户已明确不要该特定设计工具相关方案和代码。
+- 原先已提交过的专属 tooling 已用后续清理提交移除：
+  - `b91be2b`：移除专属原型 tooling
+  - `c3cd932`：移除残留计划文案
+- 后续 checkpoint 不包含该设计工具的识别、抓取、回灌或相关方案文档。
 
 ### Commit 4：生成运行配置与默认质量开关
 

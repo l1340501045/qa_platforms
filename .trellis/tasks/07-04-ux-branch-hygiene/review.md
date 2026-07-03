@@ -7,8 +7,9 @@
 原因不是流程没走完，而是当前工作区确实有三类风险必须先处理：
 
 1. **配置意图冲突已处理**：`p0_quota_enabled` 原先默认是 `True`，但用户此前指定真实跑批配置为 `False`；本阶段已按真实跑批配置改为默认 `False`。
-2. **运行产物过大且不可提交**：`.audit` 72M、`scripts/backups` 100M，不能进入干净基线；本阶段已补 `.gitignore` 防误提交。
-3. **平台工具配置边界已按保守策略处理**：`.claude/.codex/.cursor` 不进入 checkpoint，只保留 `.agents` 与 `.trellis` 的项目通用流程资产。
+2. **特定设计工具范围判断已校正**：我最初把专属回灌工具误归为“可保留阶段成果”；用户最新决策是全部不要。已用独立提交删除方案、代码、测试、配置与残留文案。
+3. **运行产物过大且不可提交**：`.audit` 72M、`scripts/backups` 100M，不能进入干净基线；本阶段已补 `.gitignore` 防误提交。
+4. **平台工具配置边界已按保守策略处理**：`.claude/.codex/.cursor` 不进入 checkpoint，只保留 `.agents` 与 `.trellis` 的项目通用流程资产。
 
 ## 对 worktree-inventory 的自审
 
@@ -29,12 +30,13 @@
 做得对的地方：
 
 - 没有建议 `git add .`。
-- 把 Trellis、infra、MasterGo、verify、convergence、case-tree、docs 分开，后续 review 能定位问题来源。
+- 把 Trellis、infra、verify、convergence、case-tree、docs 分开，后续 review 能定位问题来源。
 - 明确了哪些路径暂不提交。
 - 把 checkpoint 创建条件写成硬门禁，而不是默认“写完报告就可以拉分支”。
 
 风险：
 
+- 原计划曾建议保留一个特定设计工具链路，这是错误分类；已经按用户决策改为删除，但这说明后续每个“看似有价值”的历史工具都必须重新过一遍产品范围，不应因为已有代码就自动保留。
 - Commit 4/5/6/7 之间存在少量同文件跨主题耦合，尤其是：
   - `src/platform_api/core/settings.py`
   - `src/testcase_generator/schemas/test_case.py`
@@ -76,7 +78,10 @@
 uv run pytest tests/testcase_generator/test_pipeline_generation_config.py tests/testcase_generator/test_priority_risk.py
 uv run pytest tests/platform_api/test_case_tree_service.py tests/platform_api/test_case_tree_integration.py tests/testcase_generator/test_audit_export_module_tree.py
 uv run pytest tests/testcase_generator/test_generation_convergence.py tests/testcase_generator/test_oracle_guards.py tests/testcase_generator/test_pipeline_generation_config.py tests/testcase_generator/test_priority_risk.py
+uv run pytest tests/testcase_generator --ignore=tests/testcase_generator/integration
+uv run ruff check src/platform_api/core/settings.py src/testcase_generator/stages/parse/node.py
 npm run build
+关键词残留扫描：工作区与 HEAD 均无命中。
 ```
 
 验证缺口：
