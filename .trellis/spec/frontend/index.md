@@ -10,6 +10,7 @@
 | 文件 | 内容 | 状态 |
 |------|------|------|
 | [表单模式](./form-pattern.md) | 增/改/删表单、校验、反馈、四层数据流、axios 信封解包 | ✅ 已填（code-backed） |
+| [用例资产浏览模式](./case-asset-browser-pattern.md) | 用例树归一化、递归 branch_path、共享树/表格组件、工作台审核动作插槽 | ✅ 已填（code-backed） |
 
 ---
 

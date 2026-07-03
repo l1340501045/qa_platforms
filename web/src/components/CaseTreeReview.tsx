@@ -12,30 +12,25 @@ import {
   Button,
   Card,
   Col,
-  Empty,
   Input,
   Modal,
   Popconfirm,
   Row,
   Space,
   Spin,
-  Table,
-  Tag,
-  Tree,
   Typography,
   message,
 } from 'antd';
-import { AppstoreOutlined, FileTextOutlined, FolderOutlined } from '@ant-design/icons';
-import type { DataNode } from 'antd/es/tree';
-import type { ColumnsType } from 'antd/es/table';
 
 import { getCaseTree } from '../services/systemApi';
 import CaseDetailDrawer from './CaseDetailDrawer';
 import {
-  collectTreeKeys,
-  collectTreeKeysByDepth,
-  filterTreeDataByKeyword,
-} from './treeUtils';
+  findCaseAssetNode,
+  getCasesForNode,
+  normalizeCaseTreeDocuments,
+} from './case-assets/caseAssetModel';
+import CaseAssetTree from './case-assets/CaseAssetTree';
+import CaseAssetTable from './case-assets/CaseAssetTable';
 import type {
   CaseBucket,
   CaseTreeCase,
@@ -49,53 +44,6 @@ const { Text } = Typography;
 const { TextArea } = Input;
 
 type ReviewAction = 'confirmed' | 'needs_modification' | 'deleted';
-
-const PRIORITY_COLOR: Record<string, string> = {
-  P0: 'red',
-  P1: 'orange',
-  P2: 'blue',
-  P3: 'default',
-};
-
-const REVIEW_TAG: Record<ReviewStatus, { color: string; label: string }> = {
-  pending: { color: 'default', label: '待审' },
-  confirmed: { color: 'green', label: '已确认' },
-  needs_modification: { color: 'orange', label: '需修改' },
-  deleted: { color: 'red', label: '已删除' },
-};
-
-const BUCKET_TAG: Record<string, { color: string; label: string }> = {
-  main: { color: 'green', label: '主集' },
-  needs_spec: { color: 'gold', label: '待澄清' },
-  to_fix: { color: 'red', label: '待修正' },
-};
-
-const VERDICT_COLOR: Record<string, string> = {
-  grounded: 'green',
-  ungrounded: 'orange',
-  undefined: 'gold',
-  conflict: 'red',
-};
-
-const REVIEW_ISSUE_TAG: Record<ReviewIssueType, { color: string; label: string }> = {
-  case_wrong: { color: 'red', label: '用例错' },
-  prd_conflict: { color: 'purple', label: 'PRD冲突' },
-  verify_uncertain: { color: 'blue', label: '核验不确定' },
-};
-
-function getTrustDisplay(level: number): { color: string; label: string } {
-  if (level <= 2) return { color: '#52c41a', label: '高可信' };
-  if (level === 3) return { color: '#faad14', label: '中可信' };
-  return { color: '#f5222d', label: '低可信' };
-}
-
-function allCasesFromTree(tree: CaseTreeDocument[]): CaseTreeCase[] {
-  return tree.flatMap((doc) => doc.modules.flatMap((m) => m.cases));
-}
-
-function casesFromDoc(doc: CaseTreeDocument): CaseTreeCase[] {
-  return doc.modules.flatMap((m) => m.cases);
-}
 
 /** 局部更新树中某条用例（审核后改 review_status，不重新拉树，保持列表稳定） */
 function patchCaseInTree(
@@ -115,24 +63,6 @@ function patchCaseInTree(
     })),
   }));
 }
-
-function branchPathKey(branchPath: string[]): string {
-  return branchPath.join('/');
-}
-
-function encodeTreePart(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function decodeTreePart(value: string): string {
-  return decodeURIComponent(value);
-}
-
-type SelectedNode =
-  | { type: 'all' }
-  | { type: 'doc'; docId: string }
-  | { type: 'module'; docId: string; moduleName: string }
-  | { type: 'branch'; docId: string; moduleName: string; branchPathKey: string };
 
 interface CaseTreeReviewProps {
   batchId: string;
@@ -172,9 +102,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
 }) => {
   const [treeData, setTreeData] = useState<CaseTreeDocument[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
-  const [selectedNode, setSelectedNode] = useState<SelectedNode>({ type: 'all' });
-  const [treeSearchKeyword, setTreeSearchKeyword] = useState('');
-  const [expandedTreeKeys, setExpandedTreeKeys] = useState<React.Key[]>([]);
+  const [selectedNodeKey, setSelectedNodeKey] = useState('root');
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
 
   const [modifyOpen, setModifyOpen] = useState(false);
@@ -194,6 +122,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
         review_issue_type: reviewIssueTypeFilter,
       });
       setTreeData(data);
+      setSelectedNodeKey('root');
     } catch {
       message.error('加载用例树失败');
     } finally {
@@ -206,142 +135,38 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadTree, reloadSignal]);
 
-  useEffect(() => {
-    onAllCasesChange?.(allCasesFromTree(treeData));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [treeData]);
-
-  // ─── Ant Tree 数据（文档 → 业务模块 → 分支） ───
-  const antTreeData: DataNode[] = useMemo(() => {
-    if (treeData.length === 0) return [];
-    const total = allCasesFromTree(treeData).length;
-    const docNodes: DataNode[] = treeData.map((doc) => ({
-      key: `doc::${doc.document_id}`,
-      title: (
-        <span>
-          <FileTextOutlined style={{ marginRight: 4 }} />
-          {doc.document_title}
-          <Tag style={{ marginLeft: 8 }} color="blue">
-            {casesFromDoc(doc).length}
-          </Tag>
-        </span>
-      ),
-      children: doc.modules.map((mod) => {
-        const branchNodes: DataNode[] = (mod.branches || []).map((branch) => {
-          const key = branchPathKey(branch.branch_path);
-          return {
-            key: `branch::${doc.document_id}::${encodeTreePart(mod.module_name)}::${encodeTreePart(key)}`,
-            title: (
-              <span>
-                <FolderOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
-                {branch.branch_name}
-                <Tag style={{ marginLeft: 8 }}>{branch.case_count}</Tag>
-              </span>
-            ),
-            isLeaf: true,
-          };
-        });
-        return {
-          key: `module::${doc.document_id}::${encodeTreePart(mod.module_name)}`,
-          title: (
-            <span>
-              <AppstoreOutlined style={{ marginRight: 4, color: '#8c8c8c' }} />
-              {mod.module_name}
-              <Tag style={{ marginLeft: 8 }}>{mod.case_count}</Tag>
-            </span>
-          ),
-          children: branchNodes.length > 0 ? branchNodes : undefined,
-          isLeaf: branchNodes.length === 0,
-        };
-      }),
-    }));
-    return [
-      {
-        key: '__root__',
-        title: (
-          <span>
-            <FolderOutlined style={{ marginRight: 4 }} />
-            全部模块
-            <Tag style={{ marginLeft: 8 }}>{total}</Tag>
-          </span>
-        ),
-        children: docNodes,
-      },
-    ];
-  }, [treeData]);
-  const visibleAntTreeData = useMemo(
-    () => filterTreeDataByKeyword(antTreeData, treeSearchKeyword),
-    [antTreeData, treeSearchKeyword],
+  const caseAssetTree = useMemo(
+    () => normalizeCaseTreeDocuments(treeData, { rootTitle: '全部模块' }),
+    [treeData],
   );
-  const allTreeKeys = useMemo(() => collectTreeKeys(antTreeData), [antTreeData]);
-  const defaultExpandedTreeKeys = useMemo(() => collectTreeKeysByDepth(antTreeData, 1), [antTreeData]);
 
   useEffect(() => {
-    if (treeSearchKeyword.trim()) {
-      setExpandedTreeKeys(collectTreeKeys(visibleAntTreeData));
-      return;
+    onAllCasesChange?.(getCasesForNode(caseAssetTree.root.key, caseAssetTree));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseAssetTree, onAllCasesChange]);
+
+  useEffect(() => {
+    if (!findCaseAssetNode(caseAssetTree.root, selectedNodeKey)) {
+      setSelectedNodeKey(caseAssetTree.root.key);
     }
-    setExpandedTreeKeys(defaultExpandedTreeKeys);
-  }, [treeSearchKeyword, visibleAntTreeData, defaultExpandedTreeKeys]);
+  }, [caseAssetTree, selectedNodeKey]);
 
   // ─── 当前列表（选中节点 + 标题搜索） ───
   const selectedCases: CaseTreeCase[] = useMemo(() => {
     const kw = (searchKeyword || '').trim();
+    const allCases = getCasesForNode(caseAssetTree.root.key, caseAssetTree);
     if (kw) {
       // 搜索时跨全部模块过滤
-      return allCasesFromTree(treeData).filter((c) => c.title.includes(kw));
+      return allCases.filter((c) => c.title.includes(kw));
     }
-    switch (selectedNode.type) {
-      case 'all':
-        return allCasesFromTree(treeData);
-      case 'doc': {
-        const doc = treeData.find((d) => String(d.document_id) === selectedNode.docId);
-        return doc ? casesFromDoc(doc) : [];
-      }
-      case 'module': {
-        const doc = treeData.find((d) => String(d.document_id) === selectedNode.docId);
-        const mod = doc?.modules.find((m) => m.module_name === selectedNode.moduleName);
-        return mod?.cases || [];
-      }
-      case 'branch': {
-        const doc = treeData.find((d) => String(d.document_id) === selectedNode.docId);
-        const mod = doc?.modules.find((m) => m.module_name === selectedNode.moduleName);
-        const branch = mod?.branches?.find((b) => branchPathKey(b.branch_path) === selectedNode.branchPathKey);
-        return branch?.cases || [];
-      }
-    }
-  }, [treeData, selectedNode, searchKeyword]);
+    return getCasesForNode(selectedNodeKey, caseAssetTree);
+  }, [caseAssetTree, selectedNodeKey, searchKeyword]);
 
   const listTitle = useMemo(() => {
     if ((searchKeyword || '').trim()) return `搜索「${searchKeyword!.trim()}」`;
-    switch (selectedNode.type) {
-      case 'all':
-        return '全部用例';
-      case 'doc':
-        return treeData.find((d) => String(d.document_id) === selectedNode.docId)?.document_title || '文档用例';
-      case 'module':
-        return selectedNode.moduleName;
-      case 'branch':
-        return selectedNode.branchPathKey;
-    }
-  }, [selectedNode, searchKeyword, treeData]);
-
-  const selectedTreeKeys = useMemo(() => {
-    switch (selectedNode.type) {
-      case 'all':
-        return [];
-      case 'doc':
-        return [`doc::${selectedNode.docId}`];
-      case 'module':
-        return [`module::${selectedNode.docId}::${encodeTreePart(selectedNode.moduleName)}`];
-      case 'branch':
-        return [
-          `branch::${selectedNode.docId}::${encodeTreePart(selectedNode.moduleName)}::${encodeTreePart(
-            selectedNode.branchPathKey,
-          )}`,
-        ];
-    }
-  }, [selectedNode]);
+    const selectedNode = findCaseAssetNode(caseAssetTree.root, selectedNodeKey);
+    return selectedNode?.title || '全部用例';
+  }, [caseAssetTree, selectedNodeKey, searchKeyword]);
 
   // ─── 审核（落库 + 局部更新树） ───
   const applyReview = useCallback(
@@ -396,95 +221,9 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     setModifyOpen(false);
   }, [modifyCaseId, modifyComment, applyReview]);
 
-  const handleTreeSelect = (keys: React.Key[]) => {
-    if (keys.length === 0 || keys[0] === '__root__') {
-      setSelectedNode({ type: 'all' });
-      return;
-    }
-    const key = keys[0] as string;
-    if (key.startsWith('doc::')) {
-      setSelectedNode({ type: 'doc', docId: key.replace('doc::', '') });
-    } else if (key.startsWith('module::')) {
-      const parts = key.replace('module::', '').split('::');
-      setSelectedNode({ type: 'module', docId: parts[0], moduleName: decodeTreePart(parts[1]) });
-    } else if (key.startsWith('branch::')) {
-      const parts = key.replace('branch::', '').split('::');
-      setSelectedNode({
-        type: 'branch',
-        docId: parts[0],
-        moduleName: decodeTreePart(parts[1]),
-        branchPathKey: decodeTreePart(parts[2]),
-      });
-    }
-  };
-
-  const columns: ColumnsType<CaseTreeCase> = [
-    {
-      title: '标题',
-      dataIndex: 'title',
-      key: 'title',
-      render: (text: string, record) => (
-        <Space size={4} align="start">
-          {record.iteration > 1 && (
-            <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>
-              已重写
-            </Tag>
-          )}
-          <a onClick={() => setDetailCaseId(record.id)}>{text}</a>
-        </Space>
-      ),
-    },
-    {
-      title: '优先级',
-      dataIndex: 'priority',
-      key: 'priority',
-      width: 80,
-      render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
-    },
-    {
-      title: '质量',
-      key: 'quality',
-      width: 150,
-      render: (_, record) => {
-        const bucket = record.bucket ? BUCKET_TAG[record.bucket] : undefined;
-        const reviewIssue = record.review_issue_type ? REVIEW_ISSUE_TAG[record.review_issue_type] : undefined;
-        return (
-          <Space size={4} wrap>
-            {bucket && <Tag color={bucket.color}>{bucket.label}</Tag>}
-            {record.verdict && <Tag color={VERDICT_COLOR[record.verdict] || 'default'}>{record.verdict}</Tag>}
-            {reviewIssue && <Tag color={reviewIssue.color}>{reviewIssue.label}</Tag>}
-          </Space>
-        );
-      },
-    },
-    {
-      title: '可信度',
-      dataIndex: 'trust_level',
-      key: 'trust_level',
-      width: 80,
-      render: (val: number) => {
-        const { color, label } = getTrustDisplay(val);
-        return <span style={{ color, fontWeight: 600 }}>{label}</span>;
-      },
-    },
-    {
-      title: 'Review 状态',
-      dataIndex: 'review_status',
-      key: 'review_status',
-      width: 100,
-      render: (val: ReviewStatus) => {
-        const cfg = REVIEW_TAG[val];
-        return <Tag color={cfg.color}>{cfg.label}</Tag>;
-      },
-    },
-  ];
-
-  if (editable) {
-    columns.push({
-      title: '操作',
-      key: 'actions',
-      width: 200,
-      render: (_, record) => (
+  const renderReviewActions = useCallback(
+    (record: CaseTreeCase) =>
+      editable ? (
         <Space size="small">
           <Button
             size="small"
@@ -513,46 +252,22 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
             </Button>
           </Popconfirm>
         </Space>
-      ),
-    });
-  }
+      ) : null,
+    [editable, handleConfirm, handleDelete, openModify],
+  );
 
   return (
     <Spin spinning={treeLoading}>
       <Row gutter={16}>
         <Col span={7}>
           <Card title="文档 / 模块" size="small">
-            <Space direction="vertical" size={8} style={{ width: '100%', marginBottom: 8 }}>
-              <Input.Search
-                allowClear
-                size="small"
-                placeholder="搜索模块/分支"
-                value={treeSearchKeyword}
-                onChange={(e) => setTreeSearchKeyword(e.target.value)}
-              />
-              <Space size={8} wrap>
-                <Button size="small" onClick={() => setExpandedTreeKeys(allTreeKeys)}>
-                  展开全部
-                </Button>
-                <Button size="small" onClick={() => setExpandedTreeKeys([])}>
-                  收起全部
-                </Button>
-              </Space>
-            </Space>
-            {antTreeData.length > 0 ? (
-              <div style={{ maxHeight: 'calc(100vh - 360px)', minHeight: 320, overflow: 'auto', paddingRight: 4 }}>
-                <Tree
-                  treeData={visibleAntTreeData}
-                  expandedKeys={expandedTreeKeys}
-                  onExpand={(keys) => setExpandedTreeKeys(keys)}
-                  onSelect={handleTreeSelect}
-                  selectedKeys={selectedTreeKeys}
-                  height={520}
-                />
-              </div>
-            ) : (
-              <Empty description="暂无用例" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-            )}
+            <CaseAssetTree
+              tree={caseAssetTree}
+              selectedKey={selectedNodeKey}
+              onSelect={setSelectedNodeKey}
+              emptyDescription="暂无用例"
+              maxHeight="calc(100vh - 360px)"
+            />
           </Card>
         </Col>
         <Col span={17}>
@@ -561,12 +276,14 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
             size="small"
             extra={<Text type="secondary">{selectedCases.length} 条</Text>}
           >
-            <Table<CaseTreeCase>
-              rowKey="id"
-              columns={columns}
-              dataSource={selectedCases}
+            <CaseAssetTable
+              cases={selectedCases}
+              titleColumnLabel="标题"
+              titleAsLink
+              showIterationTag
+              onOpenCase={setDetailCaseId}
+              renderActions={editable ? renderReviewActions : undefined}
               pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
-              size="small"
             />
           </Card>
         </Col>

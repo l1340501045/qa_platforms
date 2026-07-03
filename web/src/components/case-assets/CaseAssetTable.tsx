@@ -1,0 +1,122 @@
+import React, { useMemo } from 'react';
+import { Space, Table, Tag } from 'antd';
+import type { ColumnsType, TablePaginationConfig } from 'antd/es/table';
+
+import type { CaseTreeCase, ReviewStatus } from '../../types';
+import {
+  PRIORITY_COLOR,
+  REVIEW_TAG,
+  getTrustDisplay,
+  renderCaseQualityTags,
+} from './caseDisplay';
+
+interface CaseAssetTableProps {
+  cases: CaseTreeCase[];
+  titleColumnLabel?: string;
+  titleAsLink?: boolean;
+  showIterationTag?: boolean;
+  onOpenCase?: (caseId: string) => void;
+  renderActions?: (record: CaseTreeCase) => React.ReactNode;
+  actionColumnWidth?: number;
+  pagination?: TablePaginationConfig;
+  rowClickToOpen?: boolean;
+}
+
+const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
+  cases,
+  titleColumnLabel = '用例标题',
+  titleAsLink = false,
+  showIterationTag = false,
+  onOpenCase,
+  renderActions,
+  actionColumnWidth = 200,
+  pagination,
+  rowClickToOpen = false,
+}) => {
+  const columns: ColumnsType<CaseTreeCase> = useMemo(() => {
+    const tableColumns: ColumnsType<CaseTreeCase> = [
+      {
+        title: titleColumnLabel,
+        dataIndex: 'title',
+        key: 'title',
+        ellipsis: !titleAsLink,
+        render: (text: string, record) => {
+          const titleNode = titleAsLink ? (
+            <a onClick={() => onOpenCase?.(record.id)}>{text}</a>
+          ) : (
+            text
+          );
+          if (!showIterationTag || record.iteration <= 1) return titleNode;
+          return (
+            <Space size={4} align="start">
+              <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>
+                已重写
+              </Tag>
+              {titleNode}
+            </Space>
+          );
+        },
+      },
+      {
+        title: '优先级',
+        dataIndex: 'priority',
+        key: 'priority',
+        width: 80,
+        render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
+      },
+      {
+        title: '质量',
+        key: 'quality',
+        width: 150,
+        render: (_, record) => renderCaseQualityTags(record),
+      },
+      {
+        title: '可信度',
+        dataIndex: 'trust_level',
+        key: 'trust_level',
+        width: 90,
+        render: (val: number) => {
+          const { color, label } = getTrustDisplay(val);
+          return <span style={{ color, fontWeight: 600 }}>{label}</span>;
+        },
+      },
+      {
+        title: '状态',
+        dataIndex: 'review_status',
+        key: 'review_status',
+        width: 100,
+        render: (val: ReviewStatus) => {
+          const cfg = REVIEW_TAG[val];
+          return <Tag color={cfg.color}>{cfg.label}</Tag>;
+        },
+      },
+    ];
+
+    if (renderActions) {
+      tableColumns.push({
+        title: '操作',
+        key: 'actions',
+        width: actionColumnWidth,
+        render: (_, record) => renderActions(record),
+      });
+    }
+
+    return tableColumns;
+  }, [actionColumnWidth, onOpenCase, renderActions, showIterationTag, titleAsLink, titleColumnLabel]);
+
+  return (
+    <Table<CaseTreeCase>
+      rowKey="id"
+      columns={columns}
+      dataSource={cases}
+      pagination={pagination}
+      size="small"
+      onRow={(record) => ({
+        onClick: rowClickToOpen ? () => onOpenCase?.(record.id) : undefined,
+        style: rowClickToOpen ? { cursor: 'pointer' } : undefined,
+      })}
+    />
+  );
+};
+
+export default CaseAssetTable;
