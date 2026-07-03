@@ -1,6 +1,7 @@
 """离线评估：语义去重（hybrid）vs 纯词面 压缩率对照。
 
-读 .audit/<batch>/modules/*.cases.jsonl → 构造 DedupCase → 算 embedding →
+读 .audit/<batch>/modules/<模块>/branches/**/cases.jsonl（兼容旧版 modules/*.cases.jsonl）
+→ 构造 DedupCase → 算 embedding →
 跑 find_duplicates（语义开/关各一次）→ 打印 duplicate 数、唯一数、压缩率，
 并随机抽 10 个"仅语义折叠"的对供人工判真伪。
 
@@ -14,45 +15,40 @@
 from __future__ import annotations
 
 import asyncio
-import glob
-import json
-import os
 import random
 import sys
+from pathlib import Path
 
 # 让脚本可从仓库根直接跑（uv run python scripts/...）
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.audit_case_reader import iter_case_records, resolve_batch_path  # noqa: E402
 from src.knowledge_base.services.embedding.embedding_client import EmbeddingClient  # noqa: E402
 from src.testcase_generator.stages.dedup.clustering import DedupCase, find_duplicates  # noqa: E402
 
-_AUDIT_DIR = ".audit"
 _SAMPLE_PAIRS = 10
 
 
 def load_cases(batch_id: str) -> list[DedupCase]:
-    pattern = os.path.join(_AUDIT_DIR, batch_id, "modules", "*.cases.jsonl")
-    files = sorted(glob.glob(pattern))
-    if not files:
-        raise SystemExit(f"找不到 cases.jsonl：{pattern}")
+    batch_path = resolve_batch_path(batch_id)
+    if not batch_path.exists():
+        raise SystemExit(f"batch 不存在：{batch_path}")
+
     cases: list[DedupCase] = []
-    for fp in files:
-        for line in open(fp, encoding="utf-8"):
-            line = line.strip()
-            if not line:
-                continue
-            d = json.loads(line)
-            cases.append(
-                DedupCase(
-                    case_id=d["id"],
-                    feature_id=d.get("test_point_id") or "",
-                    title=d.get("title") or "",
-                    text=" ".join(d.get("expected_results") or []),
-                    dimension=" ".join(d.get("dimensions") or []),
-                    # 离线导出 JSON 无 rule_id → rule_codes 缺失，safe_dedup 护栏退化；
-                    # 护栏真实性以 tests/testcase_generator/test_semantic_dedup.py 单测为准。
-                )
+    for _, _, record in iter_case_records(batch_path):
+        cases.append(
+            DedupCase(
+                case_id=record["id"],
+                feature_id=record.get("test_point_id") or "",
+                title=record.get("title") or "",
+                text=" ".join(record.get("expected_results") or []),
+                dimension=" ".join(record.get("dimensions") or []),
+                # 离线导出 JSON 无 rule_id → rule_codes 缺失，safe_dedup 护栏退化；
+                # 护栏真实性以 tests/testcase_generator/test_semantic_dedup.py 单测为准。
             )
+        )
+    if not cases:
+        raise SystemExit(f"找不到 cases.jsonl：{batch_path / 'modules'}")
     return cases
 
 

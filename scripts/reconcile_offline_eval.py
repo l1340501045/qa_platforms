@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from collections import Counter, defaultdict
@@ -11,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.audit_case_reader import feature_fallback_from_path, iter_case_records, resolve_batch_path
 from src.testcase_generator.schemas.test_case import CaseVerification
 from src.testcase_generator.stages.verify.verifier import VerifyCase, reconcile_verdicts
 
@@ -21,29 +21,8 @@ def _normalize_title(title: str) -> str:
     return "".join(_TITLE_KEEP.findall((title or "").lower()))
 
 
-def _resolve_batch_path(batch: str) -> Path:
-    path = Path(batch)
-    if path.exists():
-        return path
-    return Path(".audit") / batch
-
-
-def _iter_case_records(batch_path: Path):
-    modules_dir = batch_path / "modules"
-    for path in sorted(modules_dir.glob("*.cases.jsonl")):
-        with path.open(encoding="utf-8") as fh:
-            for line_no, line in enumerate(fh, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield path, line_no, json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise ValueError(f"{path}:{line_no} 不是合法 JSONL") from exc
-
-
 def _module_feature_id(path: Path) -> str:
-    return path.name.removesuffix(".cases.jsonl")
+    return feature_fallback_from_path(path)
 
 
 def _to_case(path: Path, record: dict) -> tuple[VerifyCase, CaseVerification] | None:
@@ -110,14 +89,14 @@ def main() -> int:
     parser.add_argument("--examples", type=int, default=10, help="输出改判示例数量")
     args = parser.parse_args()
 
-    batch_path = _resolve_batch_path(args.batch)
+    batch_path = resolve_batch_path(args.batch)
     if not batch_path.exists():
         raise SystemExit(f"batch 不存在：{batch_path}")
 
     cases: list[VerifyCase] = []
     results: dict[str, CaseVerification] = {}
     uses_module_fallback = False
-    for path, _, record in _iter_case_records(batch_path):
+    for path, _, record in iter_case_records(batch_path):
         converted = _to_case(path, record)
         if converted is None:
             continue

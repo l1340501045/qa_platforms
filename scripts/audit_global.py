@@ -13,12 +13,14 @@
 
 from __future__ import annotations
 
-import json
 import sys
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from scripts.audit_case_reader import iter_case_records  # noqa: E402
 
 # 已知语义重复的维度归并组（中英并存 → 同一测试意图）
 DIM_SEMANTIC_GROUPS = {
@@ -69,32 +71,9 @@ def _is_cn(s: str) -> bool:
     return any("\u4e00" <= ch <= "\u9fff" for ch in s)
 
 
-def _read_jsonl(path: Path) -> list[dict]:
-    records: list[dict] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            records.append(json.loads(line))
-    return records
-
-
 def _load_cases(base: Path) -> list[dict]:
     """读取审查包中的用例，兼容新模块树与旧平铺 modules/*.cases.jsonl。"""
-    files = sorted((base / "modules").glob("*/branches/**/cases.jsonl"))
-    if not files:
-        files = sorted((base / "modules").glob("*.cases.jsonl"))
-
-    cases: list[dict] = []
-    seen_ids: set[str] = set()
-    for file in files:
-        for case in _read_jsonl(file):
-            case_id = str(case.get("id") or "")
-            if case_id and case_id in seen_ids:
-                continue
-            if case_id:
-                seen_ids.add(case_id)
-            cases.append(case)
-    return cases
+    return [record for _, _, record in iter_case_records(base)]
 
 
 def main() -> None:

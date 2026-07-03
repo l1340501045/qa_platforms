@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from scripts.audit_case_reader import case_jsonl_files, feature_fallback_from_path, iter_case_records
 from scripts.audit_export import (
     AUDIT_SCHEMA_VERSION,
     _branch_quality_flags,
@@ -657,3 +658,43 @@ def test_audit_global_loads_nested_module_tree_cases_and_deduplicates(tmp_path):
 
     assert {case["id"] for case in cases} == {"TC-A", "TC-B"}
     assert len(cases) == 2
+
+
+def test_audit_case_reader_prefers_nested_module_tree_and_deduplicates(tmp_path):
+    """离线审查脚本应统一读取新版模块树，重复出现在多个分支的 case 只算一次。"""
+    nested = tmp_path / "modules" / "标题包" / "branches" / "自动拆包" / "cases.jsonl"
+    legacy = tmp_path / "modules" / "legacy.cases.jsonl"
+    nested.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+
+    nested.write_text(
+        "\n".join(
+            json.dumps(case, ensure_ascii=False)
+            for case in [
+                {"id": "TC-A", "title": "标题包 A"},
+                {"id": "TC-B", "title": "标题包 B"},
+                {"id": "TC-A", "title": "重复 A"},
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    legacy.write_text(json.dumps({"id": "TC-OLD", "title": "旧平铺"}, ensure_ascii=False), encoding="utf-8")
+
+    records = [record for _, _, record in iter_case_records(tmp_path)]
+
+    assert case_jsonl_files(tmp_path) == [nested]
+    assert [record["id"] for record in records] == ["TC-A", "TC-B"]
+
+
+def test_audit_case_reader_legacy_fallback_and_nested_feature_group(tmp_path):
+    """旧审查包仍可读；新版嵌套路径的 feature fallback 不能退化成 cases。"""
+    legacy = tmp_path / "modules" / "99__prd_任务中心.cases.jsonl"
+    nested = tmp_path / "modules" / "账户授权" / "branches" / "权限" / "字段约束" / "cases.jsonl"
+    legacy.parent.mkdir(parents=True)
+    nested.parent.mkdir(parents=True)
+    legacy.write_text(json.dumps({"id": "TC-OLD", "title": "旧平铺"}, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    assert case_jsonl_files(tmp_path) == [legacy]
+    assert feature_fallback_from_path(legacy) == "99__prd_任务中心"
+    assert feature_fallback_from_path(nested) == "账户授权/权限/字段约束"
