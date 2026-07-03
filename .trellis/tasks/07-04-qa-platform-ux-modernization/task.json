@@ -1,0 +1,32 @@
+{
+  "id": "qa-platform-ux-modernization",
+  "name": "qa-platform-ux-modernization",
+  "title": "QA 平台 UI/UX 重构与主流程安全对齐",
+  "description": "",
+  "status": "planning",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "Echo_Lacey",
+  "assignee": "Echo_Lacey",
+  "createdAt": "2026-07-04",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "feat/architecture-migration",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "07-04-ux-branch-hygiene",
+    "07-04-ux-critical-flow-safety-fixes",
+    "07-04-ux-case-asset-browser",
+    "07-04-ux-information-architecture-visual",
+    "07-04-ux-runtime-verification-release"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}
