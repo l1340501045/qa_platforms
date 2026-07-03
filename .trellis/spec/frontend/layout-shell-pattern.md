@@ -64,6 +64,41 @@
 - 入口页空数据使用 `EmptyState`，必须给出下一步动作或恢复路径。
 - 表格、树、上传、审查动作继续使用 Ant Design 原生组件和现有 store/service 数据流。
 
+## 工作台待办队列
+
+工作台 `/review` 不是单纯“审核列表”，必须先暴露 QA 最需要处理的批次队列：
+
+- 待澄清：`status=suspended`
+- 失败：`status=failed`
+- 生成中：`status=running`
+- 待审核：`status=pending_review`
+
+实现约定：
+
+- 使用现有 `listBatches({ status, page: 1, per_page: 3 })` 分状态读取，不为 UI 聚合改后端契约。
+- 队列卡片只显示最近少量批次和总数；完整浏览仍由下方表格分页负责。
+- 队列卡片的“筛选”按钮只改变下方表格状态筛选，不跳走页面。
+- 批次动作文案必须匹配状态，不要所有状态都叫“去审核”。
+
+```tsx
+switch (batch.status) {
+  case 'suspended':
+    return '处理澄清';
+  case 'failed':
+    return '查看失败';
+  case 'running':
+    return '查看进度';
+  case 'pending_review':
+    return '去审核';
+}
+```
+
+为什么：
+
+- 首次使用平台的 QA 需要先知道“今天该处理什么”，而不是先理解所有批次状态。
+- 生成中/失败/待澄清/待审核是不同工作动作，统一成“去审核”会误导。
+- 这种聚合只使用现有 API 查询能力，不影响生成 pipeline。
+
 ## Wrong vs Correct
 
 ### Wrong：页面各自写标题、筛选和空态
@@ -106,5 +141,6 @@
 - 相关共享组件/模型测试，例如 `npm run test:case-assets`
 - 1440 宽关键路由无白屏/运行时错误
 - 1024 宽关键路由无页面级横向溢出
+- 工作台 `/review` 必须验证四个待办队列可见，队列“筛选”按钮能驱动下方表格筛选。
 
 当前 `npm run lint` 依赖 ESLint 配置；若仓库没有配置文件，记录为环境/基建缺口，不作为页面改动失败。

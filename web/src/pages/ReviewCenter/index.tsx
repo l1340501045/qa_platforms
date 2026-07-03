@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Select, Spin, Table } from 'antd';
+import { Button, Card, Select, Spin, Table, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -12,6 +12,11 @@ import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
+
+const { Text } = Typography;
+
+type WorkbenchLaneStatus = Extract<BatchStatus, 'suspended' | 'failed' | 'running' | 'pending_review'>;
 
 const STATUS_OPTIONS = [
   { value: 'pending', label: '排队中' },
@@ -35,10 +40,91 @@ const STATUS_TAG: Record<string, { tone: StatusTone; text: string }> = {
   suspended: { tone: 'warning', text: '待澄清' },
 };
 
+const WORKBENCH_LANES: Array<{
+  status: WorkbenchLaneStatus;
+  title: string;
+  description: string;
+  emptyText: string;
+  tone: StatusTone;
+}> = [
+  {
+    status: 'suspended',
+    title: '待澄清',
+    description: '质量门需要人工明确规则或冲突结论。',
+    emptyText: '暂无待澄清批次',
+    tone: 'warning',
+  },
+  {
+    status: 'failed',
+    title: '失败',
+    description: '生成链路失败，需要查看原因后重试。',
+    emptyText: '暂无失败批次',
+    tone: 'danger',
+  },
+  {
+    status: 'running',
+    title: '生成中',
+    description: '流水线正在执行，可进入查看阶段进度。',
+    emptyText: '暂无运行中批次',
+    tone: 'processing',
+  },
+  {
+    status: 'pending_review',
+    title: '待审核',
+    description: '用例已生成，等待 QA 审查确认。',
+    emptyText: '暂无待审核批次',
+    tone: 'info',
+  },
+];
+
+function createEmptyBatchPage(): PaginatedData<ReviewBatch> {
+  return {
+    items: [],
+    total: 0,
+    page: 1,
+    per_page: 3,
+    total_pages: 0,
+  };
+}
+
+function createInitialLaneData(): Record<WorkbenchLaneStatus, PaginatedData<ReviewBatch>> {
+  return {
+    suspended: createEmptyBatchPage(),
+    failed: createEmptyBatchPage(),
+    running: createEmptyBatchPage(),
+    pending_review: createEmptyBatchPage(),
+  };
+}
+
+function getBatchActionLabel(status: BatchStatus): string {
+  switch (status) {
+    case 'suspended':
+      return '处理澄清';
+    case 'failed':
+      return '查看失败';
+    case 'pending':
+    case 'running':
+      return '查看进度';
+    case 'pending_review':
+    case 'reviewing':
+      return '去审核';
+    case 'completed':
+      return '查看结果';
+    case 'archived':
+      return '查看资产';
+    default:
+      return '打开批次';
+  }
+}
+
 const ReviewCenter: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [laneLoading, setLaneLoading] = useState(false);
   const [status, setStatus] = useState<string>('');
+  const [laneData, setLaneData] = useState<Record<WorkbenchLaneStatus, PaginatedData<ReviewBatch>>>(
+    () => createInitialLaneData(),
+  );
   const [data, setData] = useState<PaginatedData<ReviewBatch>>({
     items: [],
     total: 0,
@@ -56,14 +142,51 @@ const ReviewCenter: React.FC = () => {
         per_page: perPage,
       });
       setData(result);
+    } catch {
+      setData({
+        items: [],
+        total: 0,
+        page,
+        per_page: perPage,
+        total_pages: 0,
+      });
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const fetchWorkbenchLanes = useCallback(async () => {
+    setLaneLoading(true);
+    try {
+      const results = await Promise.all(
+        WORKBENCH_LANES.map(async (lane) => ({
+          status: lane.status,
+          data: await listBatches({
+            status: lane.status,
+            page: 1,
+            per_page: 3,
+          }),
+        })),
+      );
+      const next = createInitialLaneData();
+      results.forEach((result) => {
+        next[result.status] = result.data;
+      });
+      setLaneData(next);
+    } catch {
+      setLaneData(createInitialLaneData());
+    } finally {
+      setLaneLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchList(1, 20, status || undefined);
   }, [fetchList, status]);
+
+  useEffect(() => {
+    fetchWorkbenchLanes();
+  }, [fetchWorkbenchLanes]);
 
   const handlePageChange = useCallback(
     (page: number, pageSize: number) => {
@@ -114,7 +237,9 @@ const ReviewCenter: React.FC = () => {
       key: 'action',
       width: 100,
       render: (_, record) => (
-        <a onClick={() => navigate(`/batches/${record.id}`)}>去审核</a>
+        <Button type="link" size="small" onClick={() => navigate(`/batches/${record.id}`)}>
+          {getBatchActionLabel(record.status)}
+        </Button>
       ),
     },
   ];
@@ -130,11 +255,20 @@ const ReviewCenter: React.FC = () => {
       <MetricStrip
         items={[
           { key: 'total', label: '当前筛选批次', value: data.total, tone: 'primary' },
-          { key: 'page', label: '本页可处理', value: data.items.length },
           {
-            key: 'cases',
-            label: '本页用例数',
-            value: data.items.reduce((sum, item) => sum + (item.total_cases ?? 0), 0),
+            key: 'todo',
+            label: '待澄清/失败/待审',
+            value:
+              laneData.suspended.total +
+              laneData.failed.total +
+              laneData.pending_review.total,
+            tone: 'warning',
+          },
+          {
+            key: 'running',
+            label: '运行中批次',
+            value: laneData.running.total,
+            tone: 'primary',
           },
           {
             key: 'filter',
@@ -143,6 +277,116 @@ const ReviewCenter: React.FC = () => {
           },
         ]}
       />
+
+      <Spin spinning={laneLoading}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+            gap: 12,
+            marginBottom: 16,
+          }}
+        >
+          {WORKBENCH_LANES.map((lane) => {
+            const lanePage = laneData[lane.status];
+            return (
+              <Card
+                key={lane.status}
+                size="small"
+                title={
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <StatusTag tone={lane.tone}>{lane.title}</StatusTag>
+                    <span style={{ fontVariantNumeric: 'tabular-nums' }}>{lanePage.total}</span>
+                  </span>
+                }
+                extra={
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => setStatus(lane.status)}
+                    style={{ paddingInline: 0 }}
+                  >
+                    筛选
+                  </Button>
+                }
+                styles={{ body: { minHeight: 168 } }}
+              >
+                <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                  {lane.description}
+                </Text>
+                {lanePage.items.length === 0 ? (
+                  <div
+                    style={{
+                      padding: '18px 0',
+                      color: layoutTokens.textMuted,
+                      fontSize: 13,
+                    }}
+                  >
+                    {lane.emptyText}
+                  </div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {lanePage.items.map((batch) => (
+                      <button
+                        key={batch.id}
+                        type="button"
+                        onClick={() => navigate(`/batches/${batch.id}`)}
+                        style={{
+                          width: '100%',
+                          minHeight: 52,
+                          padding: '8px 10px',
+                          border: `1px solid ${layoutTokens.borderSubtle}`,
+                          borderRadius: layoutTokens.radius,
+                          background: layoutTokens.surfaceMuted,
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <div
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            color: layoutTokens.text,
+                            fontWeight: 600,
+                          }}
+                          title={batch.document_title}
+                        >
+                          {batch.document_title}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 4,
+                            color: layoutTokens.textSecondary,
+                            fontSize: 12,
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: 8,
+                          }}
+                        >
+                          <span
+                            style={{
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                            title={batch.system_name}
+                          >
+                            {batch.system_name}
+                          </span>
+                          <span style={{ flexShrink: 0 }}>
+                            {batch.total_cases ?? 0} 例
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      </Spin>
 
       <FilterBar>
         <span style={{ fontWeight: 600 }}>批次状态</span>
