@@ -195,12 +195,6 @@ class Settings(BaseSettings):
     # 仅改 write_cases 溯源链，不动 verify 判定/输出主结构。默认关。
     grounded_provenance_enabled: bool = False
 
-    # ── 原型多源接地（落点⑦）：MasterGo 原型 DSL 规格接入 ──────────────────────
-    # 关：忽略 PRD 里的 MasterGo 链接（行为不变）。开：拉原型 DSL、抽规格并入章节内容。
-    # 无链接/无 token/单链接失败均安全跳过，绝不阻断解析。
-    mastergo_enabled: bool = False
-    mastergo_api_token: str = ""  # env MASTERGO_API_TOKEN，勿提交
-
     # Embedding（默认复用 LLM 网关，可单独覆盖）
     openai_api_key: str = ""  # 兼容旧字段，作为各处 key 的最终回退
     embedding_base_url: str = ""  # 留空回退 llm_base_url

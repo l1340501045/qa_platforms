@@ -23,7 +23,6 @@ from src.testcase_generator.stages.parse.kb_retriever import (
     retrieve_entity_graph_hints,
     retrieve_knowledge_context,
 )
-from src.testcase_generator.stages.parse.mastergo_fetch import enrich_sections_with_mastergo
 from src.testcase_generator.stages.parse.playwright_fetch import (
     PlaywrightConfig,
     fetch_prototype_observations,
@@ -123,10 +122,6 @@ async def parse_node(state: PipelineState) -> dict:
         features=features,
         prototype_observations=prototype_observations,
     )
-
-    # 落点⑦：MasterGo 原型规格接入（仅开关开且有 token；无链接/失败安全跳过）
-    if settings.mastergo_enabled and settings.mastergo_api_token:
-        await enrich_sections_with_mastergo(parsed_context.sources, settings.mastergo_api_token)
 
     # 5.5 章节性质分类（标 section_kind，供下游 oracle 策略 + verify 关卡使用）
     await classify_sections(parsed_context.sources)

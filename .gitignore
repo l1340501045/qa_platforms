@@ -3,8 +3,7 @@
 .env.*
 !.env.example
 
-# ---- MasterGo 登录态（含 cookie）+ 迁移工具备份（绝不提交）----
-.mastergo_session/
+# ---- 本地备份（不提交）----
 backup_*.content.md
 
 # ---- Python ----
