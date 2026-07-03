@@ -24,7 +24,7 @@
 - 透传链：interrupt_node（graph.py:31-39 包 `{"open_questions": [...]}`）→ `_extract_open_questions_from_snapshot`（pipeline_task.py，取 `val["open_questions"]`）→ `on_pipeline_suspended`（callbacks.py，存 StageArtifact.open_questions JSONB）→ `get_batch_status`（generation_service.py:78-100，原样透传）→ `get_batch_detail`（batches.py:198）。
 - 前端：`types/index.ts` `OpenQuestion={id,question,context,priority}`、`ClarifyAnswer={question_id,answer}`；`pages/Workbench/index.tsx` 弹窗渲染（行 415-448）+ `handleClarifySubmit`（行 170-180，用 `q.id`）。
 - **mock LLM 模式**：`monkeypatch.setattr(node, "get_llm_client", lambda: fake)`，fake 实现 `async def generate_structured(self, system_prompt, user_content, output_schema, temperature=...)`。
-- **⚠️ 提交隔离**：工作树有大量其他未提交改动（MasterGo / feature-seg 等）。每次提交**只 `git add` 本计划列出的文件**，严禁 `git add -A/.`。
+- **⚠️ 提交隔离**：工作树有大量其他未提交改动。每次提交**只 `git add` 本计划列出的文件**，严禁 `git add -A/.`。
 
 ## File Structure
 
