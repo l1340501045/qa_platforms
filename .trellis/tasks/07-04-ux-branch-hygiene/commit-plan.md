@@ -8,6 +8,39 @@
 - UI/UX 大工程分支只能从 checkpoint 拉。
 - 每个 commit 前后都执行 `git status --short`，确认只 staged 目标文件。
 
+## 执行结果（2026-07-04）
+
+阶段 A 已执行完成。实际提交与原计划并非逐条同名，但按风险边界完成了固化：
+
+- Trellis/基建/生成质量/模块树等阶段成果已分组提交。
+- 已废弃的特定设计工具原型链路已移除，不进入 checkpoint。
+- 离线审查脚本已补齐新版模块树审查包读取能力。
+- 质量路线图与设计方案已归档到 `docs/`。
+- 工作区已清干净后创建 `checkpoint/architecture-migration-pre-ux`。
+- 已从 checkpoint 拉出 `feat/qa-platform-ux-modernization`。
+
+当前基线：
+
+```text
+checkpoint/architecture-migration-pre-ux = 7ccbc7a21b21518743073ed8890db6af090791fa
+feat/qa-platform-ux-modernization        = 7ccbc7a21b21518743073ed8890db6af090791fa
+```
+
+关键提交：
+
+```text
+7ccbc7a docs: 归档用例质量路线图与设计方案
+60df527 test(llm): 覆盖网关 JSON 容错抢救
+1684324 fix(audit): read module-tree cases in offline evaluators
+ada2227 feat(case-tree): align case assets to business module tree
+b91be2b chore(parse): remove MasterGo prototype tooling
+```
+
+纠偏记录：
+
+- `a2040a6` 曾误把通用 Git 工作流规范写入项目 `AGENTS.md`。
+- `07eafc3` 已撤回该项目级改动。通用规则应放入 Codex 全局自定义指令。
+
 ## 推荐提交顺序
 
 ### Commit 1：Trellis 项目流程与当前任务规划
