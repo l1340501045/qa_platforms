@@ -73,19 +73,17 @@
 
 ## 4. 评估器
 
-### 4.1 取数 + 候选集快照（可复现）
+### 4.1 取数（复用 `retrieval_diff.py` 路径）
 
-- **冻结候选集快照**：一次性脚本复跑 `parse_node`（读 DB + 便宜的 section_kind 分类，不碰生成/视觉），把候选章节（source_ref/heading/content/section_kind/trust_level）+ 全局章节键 + 每功能点 source_refs **dump 到 `eval/retrieval/candidates.json`**。
-- 理由：`section_kind` 分类走 LLM、非完全确定；冻结后「标注、评估、复测」对齐**同一份候选**，可复现，且评估只剩 embedding 开销（不必每次复跑 parse）。PRD 变更时才显式重生成快照。
-- 评估器只读 `candidates.json` 重建 duck-typed `parsed_context`，按 `feature_id` 还原生产 exclude_keys（自身 + 全局），与生产口径一致。
+- 复跑 `parse_node`（读 DB + 便宜的 section_kind 分类，不碰生成/视觉）拿忠实 `parsed_context`。
+- 按 `feature_id` 还原生产 exclude_keys（自身 + 全局），与生产口径一致。
 
 ### 4.2 流程
 
 对每条 golden query：
-1. **先校验** `expected_refs` 均存在于候选集（不存在→报错列出，防标注笔误/章节漂移被静默算漏召回）。
-2. 关开关 → `CrossFeatureIndex.query(..., top_k=10)`（纯关键词）→ 召回排序列表。
-3. 开开关 → `CrossFeatureIndex.query(..., top_k=10)`（hybrid）→ 召回排序列表（候选向量 build 时算一次缓存）。
-4. 从同一条 top_k=10 排序切 @3 / @10 算指标（生产 top_k=3 即该排序前缀，口径一致）。
+1. 关开关 → `CrossFeatureIndex.query`（纯关键词）→ 召回列表。
+2. 开开关 → `CrossFeatureIndex.query`（hybrid）→ 召回列表（候选向量 build 时算一次缓存）。
+3. 比对 `expected_refs` 算指标。
 
 ### 4.3 指标
 
@@ -106,14 +104,10 @@
 
 ```
 eval/retrieval/
-  snapshot_candidates.py  # 一次性：复跑 parse_node 冻结候选集 → candidates.json
-  candidates.json         # 冻结的候选集快照（标注与评估的共同基准）
-  golden_set.yaml         # 金标准数据集（~60）
-  evaluate.py             # 评估器（离线，CLI，读 candidates.json + golden_set.yaml）
-  report.md               # 评估产出（实施时定是否纳入版本库）
+  golden_set.yaml     # 金标准数据集（~60）
+  evaluate.py         # 评估器（离线，CLI）
+  report.md           # 评估产出（gitignore 或保留快照，实施时定）
 ```
-
-> `evaluate.py` / `snapshot_candidates.py` 沿用 `.qa_probe` 脚本的 sys.path 引导（把仓库根加进 path），可直接 `uv run python` 跑。
 
 ## 5. 决策口径（尺子怎么用）
 
@@ -131,8 +125,7 @@ eval/retrieval/
 
 ## 7. 验收标准
 
-- [ ] `eval/retrieval/candidates.json` 已冻结（来自真实大批次 PRD 的候选集快照）。
-- [ ] `eval/retrieval/golden_set.yaml` ~60 条，`expected_refs` 全部能在候选集中校验通过，经用户审核定稿。
+- [ ] `eval/retrieval/golden_set.yaml` ~60 条，经用户审核定稿。
 - [ ] `uv run python eval/retrieval/evaluate.py` 一条命令出指标对照 + `report.md`。
 - [ ] 报告区分正/负样本，给出关键词 vs hybrid 的 Recall@3/@10、NDCG@10、MRR、噪声率。
 - [ ] 据此能给出「放量 / 调参 / 不放量」的明确建议。
