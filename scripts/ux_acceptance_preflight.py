@@ -26,6 +26,8 @@ EXPECTED_ENV = {
 ACCEPTANCE_FILES = [
     "docs/acceptance/README.md",
     "docs/acceptance/runbook.md",
+    "docs/acceptance/evidence-ledger.md",
+    "docs/acceptance/first-use-observation.md",
     "docs/acceptance/post-batch-report-template.md",
     "docs/acceptance/ux-small-batch-prd.md",
 ]
@@ -128,7 +130,7 @@ def check_acceptance_files() -> CheckResult:
         "验收资料",
         False,
         "缺失: " + ", ".join(missing),
-        "先补齐 README、runbook、回填模板和小规模 PRD 样例。",
+        "先补齐 README、runbook、证据台账、观察表、回填模板和小规模 PRD 样例。",
     )
 
 

@@ -28,7 +28,7 @@ git diff checkpoint/architecture-migration-pre-ux...HEAD --name-only -- src/test
 
 - 当前分支是 `feat/qa-platform-ux-modernization`。
 - 工作区干净。
-- 最近提交包含 `补齐当前HEAD运行态验收` 和 `归档当前HEAD运行态验收任务`。
+- 最近提交能追溯到当前要验收的固定 HEAD；不用要求某条历史验收提交必须出现在 `git log -5` 内。
 - 最后一条 diff 命令无输出，表示 UI/UX 分支没有动生成核心。
 
 ## 1. 启动环境
