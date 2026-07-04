@@ -6,9 +6,17 @@ interface SplitPaneProps {
   leftWidth?: number;
   rightMinWidth?: number;
   gap?: number;
+  leftCollapsed?: boolean;
 }
 
-function SplitPane({ left, right, leftWidth = 280, rightMinWidth = 360, gap = 20 }: SplitPaneProps) {
+function SplitPane({
+  left,
+  right,
+  leftWidth = 280,
+  rightMinWidth = 360,
+  gap = 20,
+  leftCollapsed = false,
+}: SplitPaneProps) {
   return (
     <div
       style={{
@@ -19,16 +27,18 @@ function SplitPane({ left, right, leftWidth = 280, rightMinWidth = 360, gap = 20
         minWidth: 0,
       }}
     >
-      <aside
-        style={{
-          width: leftWidth,
-          maxWidth: '100%',
-          flex: `0 1 ${leftWidth}px`,
-          minWidth: 0,
-        }}
-      >
-        {left}
-      </aside>
+      {!leftCollapsed && (
+        <aside
+          style={{
+            width: leftWidth,
+            maxWidth: '100%',
+            flex: `0 1 ${leftWidth}px`,
+            minWidth: 0,
+          }}
+        >
+          {left}
+        </aside>
+      )}
       <section style={{ flex: `1 1 ${rightMinWidth}px`, minWidth: 0 }}>{right}</section>
     </div>
   );

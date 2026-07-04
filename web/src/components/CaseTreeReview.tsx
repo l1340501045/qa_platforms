@@ -9,6 +9,10 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+} from '@ant-design/icons';
+import {
   Alert,
   Button,
   Input,
@@ -124,6 +128,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
   const [treeLoading, setTreeLoading] = useState(false);
   const [selectedNodeKey, setSelectedNodeKey] = useState('root');
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+  const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
 
   const [modifyOpen, setModifyOpen] = useState(false);
   const [modifyCaseId, setModifyCaseId] = useState<string | null>(null);
@@ -174,6 +179,10 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
       setSelectedNodeKey(caseAssetTree.root.key);
     }
   }, [caseAssetTree, selectedNodeKey]);
+  const selectedNode = useMemo(
+    () => findCaseAssetNode(caseAssetTree.root, selectedNodeKey),
+    [caseAssetTree, selectedNodeKey],
+  );
 
   useEffect(() => {
     if (!normalizedHighlightedCaseId) return;
@@ -199,9 +208,8 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
 
   const listTitle = useMemo(() => {
     if ((searchKeyword || '').trim()) return `搜索「${searchKeyword!.trim()}」`;
-    const selectedNode = findCaseAssetNode(caseAssetTree.root, selectedNodeKey);
     return selectedNode?.title || '全部用例';
-  }, [caseAssetTree, selectedNodeKey, searchKeyword]);
+  }, [searchKeyword, selectedNode]);
 
   // ─── 审核（落库 + 局部更新树） ───
   const applyReview = useCallback(
@@ -297,6 +305,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
         leftWidth={320}
         rightMinWidth={560}
         gap={16}
+        leftCollapsed={directoryCollapsed}
         left={
           <div style={sectionStyle}>
             <div style={sectionHeaderStyle}>
@@ -306,7 +315,16 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
                   选择范围后审查右侧用例
                 </Text>
               </div>
-              <Text type="secondary">{caseAssetTree.root.count} 条</Text>
+              <Space size={8} wrap style={{ justifyContent: 'flex-end' }}>
+                <Text type="secondary">{caseAssetTree.root.count} 条</Text>
+                <Button
+                  size="small"
+                  icon={<MenuFoldOutlined />}
+                  onClick={() => setDirectoryCollapsed(true)}
+                >
+                  收起目录
+                </Button>
+              </Space>
             </div>
             <CaseAssetTree
               tree={caseAssetTree}
@@ -324,10 +342,23 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
               <div style={{ minWidth: 0 }}>
                 <Text strong>{listTitle}</Text>
                 <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
-                  点击标题查看证据、步骤和期望结果
+                  {directoryCollapsed
+                    ? '目录已收起，当前范围仍会保留；需要切换模块时可重新展开目录。'
+                    : '点击标题查看证据、步骤和期望结果'}
                 </Text>
               </div>
-              <Text type="secondary" style={{ flexShrink: 0 }}>{selectedCases.length} 条</Text>
+              <Space size={8} wrap style={{ flexShrink: 0, justifyContent: 'flex-end' }}>
+                <Text type="secondary">{selectedCases.length} 条</Text>
+                {directoryCollapsed && (
+                  <Button
+                    size="small"
+                    icon={<MenuUnfoldOutlined />}
+                    onClick={() => setDirectoryCollapsed(false)}
+                  >
+                    展开目录
+                  </Button>
+                )}
+              </Space>
             </div>
             {normalizedHighlightedCaseId && (
               <Alert
