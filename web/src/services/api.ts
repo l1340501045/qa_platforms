@@ -10,6 +10,20 @@ import { message } from 'antd';
 import type { ApiResponse, ApiError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
+const TOAST_DEDUPE_WINDOW_MS = 2000;
+const recentToastAt = new Map<string, number>();
+
+function showMessageOnce(kind: 'error' | 'warning', content: string) {
+  const key = `${kind}:${content}`;
+  const now = Date.now();
+  const lastShownAt = recentToastAt.get(key) ?? 0;
+  if (now - lastShownAt < TOAST_DEDUPE_WINDOW_MS) {
+    return;
+  }
+  recentToastAt.set(key, now);
+  message[kind](content);
+}
+
 const api = axios.create({
   baseURL: '/api/v1',
   timeout: 30000,
@@ -54,31 +68,31 @@ api.interceptors.response.use(
 
       switch (status) {
         case 400:
-          message.error(errorMsg || '请求参数无效');
+          showMessageOnce('error', errorMsg || '请求参数无效');
           break;
         case 404:
           // 页面级处理，不弹 toast
           break;
         case 409:
-          message.error(errorMsg || '资源冲突');
+          showMessageOnce('error', errorMsg || '资源冲突');
           break;
         case 413:
-          message.error('文件超过 100MB 限制');
+          showMessageOnce('error', '文件超过 100MB 限制');
           break;
         case 422:
-          message.error(errorMsg || '请求格式错误');
+          showMessageOnce('error', errorMsg || '请求格式错误');
           break;
         case 429:
-          message.warning('请求过于频繁，请稍后重试');
+          showMessageOnce('warning', '请求过于频繁，请稍后重试');
           break;
         case 500:
-          message.error('服务器错误，请稍后重试');
+          showMessageOnce('error', '服务器错误，请稍后重试');
           break;
         case 503:
-          message.error('服务暂时不可用');
+          showMessageOnce('error', '服务暂时不可用');
           break;
         default:
-          message.error(errorMsg || '请求失败');
+          showMessageOnce('error', errorMsg || '请求失败');
       }
 
       console.error(`[API Error] ${error_code}: ${errorMsg} (request_id: ${errorData.request_id})`);
@@ -87,7 +101,7 @@ api.interceptors.response.use(
 
     // 网络错误
     if (!error.response) {
-      message.error('网络连接失败，请检查网络');
+      showMessageOnce('error', '网络连接失败，请检查网络');
     }
 
     return Promise.reject(error);

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Card, Select, Spin, Table, Typography } from 'antd';
+import { Alert, Button, Card, Select, Spin, Table, Typography } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 
@@ -96,6 +96,16 @@ function createInitialLaneData(): Record<WorkbenchLaneStatus, PaginatedData<Revi
   };
 }
 
+function getErrorMessage(err: unknown, fallback: string): string {
+  if (typeof err === 'object' && err !== null && 'message' in err) {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === 'string' && message.trim()) {
+      return message;
+    }
+  }
+  return fallback;
+}
+
 function getBatchActionLabel(status: BatchStatus): string {
   switch (status) {
     case 'suspended':
@@ -121,6 +131,8 @@ const ReviewCenter: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [laneLoading, setLaneLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [laneError, setLaneError] = useState<string | null>(null);
   const [status, setStatus] = useState<string>('');
   const [laneData, setLaneData] = useState<Record<WorkbenchLaneStatus, PaginatedData<ReviewBatch>>>(
     () => createInitialLaneData(),
@@ -135,6 +147,7 @@ const ReviewCenter: React.FC = () => {
 
   const fetchList = useCallback(async (page = 1, perPage = 20, filterStatus?: string) => {
     setLoading(true);
+    setListError(null);
     try {
       const result = await listBatches({
         status: filterStatus,
@@ -142,7 +155,8 @@ const ReviewCenter: React.FC = () => {
         per_page: perPage,
       });
       setData(result);
-    } catch {
+    } catch (err) {
+      setListError(getErrorMessage(err, '批次列表暂时无法加载，请重试。'));
       setData({
         items: [],
         total: 0,
@@ -157,6 +171,7 @@ const ReviewCenter: React.FC = () => {
 
   const fetchWorkbenchLanes = useCallback(async () => {
     setLaneLoading(true);
+    setLaneError(null);
     try {
       const results = await Promise.all(
         WORKBENCH_LANES.map(async (lane) => ({
@@ -173,7 +188,8 @@ const ReviewCenter: React.FC = () => {
         next[result.status] = result.data;
       });
       setLaneData(next);
-    } catch {
+    } catch (err) {
+      setLaneError(getErrorMessage(err, '待办队列暂时无法加载，请重试。'));
       setLaneData(createInitialLaneData());
     } finally {
       setLaneLoading(false);
@@ -194,6 +210,10 @@ const ReviewCenter: React.FC = () => {
     },
     [fetchList, status],
   );
+
+  const retryList = useCallback(() => {
+    fetchList(data.page || 1, data.per_page || 20, status || undefined);
+  }, [data.page, data.per_page, fetchList, status]);
 
   const columns: ColumnsType<ReviewBatch> = [
     {
@@ -277,6 +297,21 @@ const ReviewCenter: React.FC = () => {
           },
         ]}
       />
+
+      {laneError && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="待办队列加载失败"
+          description={laneError}
+          action={
+            <Button size="small" onClick={fetchWorkbenchLanes}>
+              重试队列
+            </Button>
+          }
+        />
+      )}
 
       <Spin spinning={laneLoading}>
         <div
@@ -403,7 +438,14 @@ const ReviewCenter: React.FC = () => {
       </FilterBar>
 
       <Spin spinning={loading}>
-        {data.items.length === 0 && !loading ? (
+        {listError && !loading ? (
+          <EmptyState
+            role="alert"
+            title="批次列表加载失败"
+            description={`无法确认当前是否有待处理批次。${listError}`}
+            action={<Button onClick={retryList}>重试加载</Button>}
+          />
+        ) : data.items.length === 0 && !loading ? (
           <EmptyState
             title="当前筛选下没有批次"
             description="可切换状态查看审核中、已完成或已落库的批次。"
@@ -422,6 +464,7 @@ const ReviewCenter: React.FC = () => {
               onChange: handlePageChange,
             }}
             size="middle"
+            scroll={{ x: 720 }}
           />
         )}
       </Spin>

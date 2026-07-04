@@ -8,11 +8,13 @@ interface EmptyStateProps {
   title: ReactNode;
   description?: ReactNode;
   action?: ReactNode;
+  role?: 'status' | 'alert';
 }
 
-function EmptyState({ title, description, action }: EmptyStateProps) {
+function EmptyState({ title, description, action, role }: EmptyStateProps) {
   return (
     <div
+      role={role}
       style={{
         padding: '48px 24px',
         border: `1px dashed ${layoutTokens.border}`,
@@ -41,4 +43,3 @@ function EmptyState({ title, description, action }: EmptyStateProps) {
 }
 
 export default EmptyState;
-
