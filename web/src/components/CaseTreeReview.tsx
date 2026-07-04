@@ -157,7 +157,6 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
 
   useEffect(() => {
     loadTree();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadTree, reloadSignal]);
 
   const caseAssetTree = useMemo(
@@ -171,7 +170,6 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
 
   useEffect(() => {
     onAllCasesChange?.(getCasesForNode(caseAssetTree.root.key, caseAssetTree));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseAssetTree, onAllCasesChange]);
 
   useEffect(() => {

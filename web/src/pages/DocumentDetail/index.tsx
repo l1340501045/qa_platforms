@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   Button,
@@ -147,13 +147,7 @@ const DocumentDetailPage: React.FC = () => {
   const returnUrl = fromSearch ? searchReturnUrl : buildKnowledgeReturnUrl(knowledgeSystemId);
   const returnLabel = fromSearch ? '返回搜索结果' : knowledgeSystemId ? '返回知识库' : '返回项目/系统';
 
-  useEffect(() => {
-    if (!documentId) return;
-    loadDocument();
-    loadAssociations();
-  }, [documentId]);
-
-  const loadDocument = async () => {
+  const loadDocument = useCallback(async () => {
     if (!documentId) return;
     setLoading(true);
     setLoadError(false);
@@ -165,9 +159,9 @@ const DocumentDetailPage: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
+  }, [documentId, fetchDocument]);
 
-  const loadAssociations = async () => {
+  const loadAssociations = useCallback(async () => {
     if (!documentId) return;
     setAssocLoading(true);
     setAssociations(null);
@@ -179,7 +173,12 @@ const DocumentDetailPage: React.FC = () => {
     } finally {
       setAssocLoading(false);
     }
-  };
+  }, [documentId]);
+
+  useEffect(() => {
+    loadDocument();
+    loadAssociations();
+  }, [loadAssociations, loadDocument]);
 
   const handleGenerate = () => {
     if (!documentId) return;

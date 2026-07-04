@@ -212,7 +212,7 @@ const Workbench: React.FC = () => {
     const init = async () => {
       try {
         await fetchBatchDetail(batchId);
-      } catch (err: unknown) {
+      } catch {
         message.error('加载批次详情失败');
       }
     };

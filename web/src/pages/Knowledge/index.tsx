@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -165,11 +165,15 @@ const KnowledgePage: React.FC = () => {
   const pendingFilesRef = useRef<File[]>([]);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
+  const loadInitialKnowledge = useCallback(() => {
     if (!systemId) return;
     fetchCurrentSystem(systemId);
     fetchDocuments(systemId, { page: 1, per_page: documentsPerPage });
-  }, [systemId]);
+  }, [documentsPerPage, fetchCurrentSystem, fetchDocuments, systemId]);
+
+  useEffect(() => {
+    loadInitialKnowledge();
+  }, [loadInitialKnowledge]);
 
   useEffect(() => {
     if (uploadResult) {

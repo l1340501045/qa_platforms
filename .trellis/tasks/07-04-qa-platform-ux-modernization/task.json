@@ -23,7 +23,8 @@
     "07-04-ux-critical-flow-safety-fixes",
     "07-04-ux-case-asset-browser",
     "07-04-ux-information-architecture-visual",
-    "07-04-ux-runtime-verification-release"
+    "07-04-ux-runtime-verification-release",
+    "07-04-07-04-ux-frontend-lint-gate"
   ],
   "parent": null,
   "relatedFiles": [],
