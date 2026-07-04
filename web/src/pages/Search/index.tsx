@@ -5,6 +5,7 @@
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Input,
@@ -76,12 +77,28 @@ const SearchPage: React.FC = () => {
 
   // 系统选项
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [systemOptionsLoading, setSystemOptionsLoading] = useState(false);
+  const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
+
+  const loadSystemOptions = useCallback(async () => {
+    setSystemOptionsLoading(true);
+    setSystemOptionsError(null);
+    try {
+      const options = await listSystemOptions();
+      setSystemOptions(options);
+    } catch (err) {
+      setSystemOptionsError(getErrorMessage(err, '系统筛选列表暂时无法加载，请重试。'));
+      setSystemOptions([]);
+    } finally {
+      setSystemOptionsLoading(false);
+    }
+  }, []);
 
   // 加载系统选项
   useEffect(() => {
-    listSystemOptions().then(setSystemOptions).catch(() => {});
-  }, []);
+    loadSystemOptions();
+  }, [loadSystemOptions]);
 
   // 搜索逻辑
   const doSearch = useCallback(
@@ -314,6 +331,9 @@ const SearchPage: React.FC = () => {
             style={{ width: 180 }}
             value={systemId}
             onChange={(val) => handleFilterChange(val, priority, reviewStatus)}
+            loading={systemOptionsLoading}
+            status={systemOptionsError ? 'warning' : undefined}
+            notFoundContent={systemOptionsError ? '系统筛选列表加载失败' : '暂无系统'}
             options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
           />
         </Space>
@@ -353,11 +373,26 @@ const SearchPage: React.FC = () => {
           />
         </Space>
         {searched && (
-          <Text type="secondary">
-            共找到 {total} 条结果
+          <Text type={searchError ? 'warning' : 'secondary'}>
+            {searchError ? '搜索结果不可确认' : `共找到 ${total} 条结果`}
           </Text>
         )}
       </FilterBar>
+
+      {systemOptionsError && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="系统筛选列表加载失败"
+          description={`搜索仍可按当前关键词和其他筛选执行；不能据此判断没有系统可筛选。${systemOptionsError}`}
+          action={
+            <Button size="small" loading={systemOptionsLoading} onClick={loadSystemOptions}>
+              重试系统筛选
+            </Button>
+          }
+        />
+      )}
 
       {/* ─── 搜索结果 ─── */}
       <Spin spinning={loading}>
