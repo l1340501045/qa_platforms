@@ -39,6 +39,7 @@ import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
 import { buildDocumentReturnUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
+import { getFailedStageDetail } from '../../utils/stageFailure';
 import type {
   BatchStatus,
   CaseBucket,
@@ -415,6 +416,10 @@ const Workbench: React.FC = () => {
       progressStatus: failed ? 'exception' as const : suspended ? 'exception' as const : 'active' as const,
     };
   }, [batch?.current_stage, stages]);
+  const failedStageDetail = useMemo(
+    () => (batch?.status === 'failed' ? getFailedStageDetail(stages, batch.current_stage) : null),
+    [batch?.current_stage, batch?.status, stages],
+  );
 
   const caseReviewStats = useMemo(() => {
     const stats: Record<ReviewStatus, number> = {
@@ -637,6 +642,25 @@ const Workbench: React.FC = () => {
           style={{ marginBottom: 16 }}
         />
         <Steps size="small" items={stepsItems} />
+        {failedStageDetail && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginTop: 16 }}
+            message={`失败阶段：${getStageLabel(failedStageDetail.stageName)}`}
+            description={
+              <Space direction="vertical" size={4}>
+                <Text>
+                  {failedStageDetail.errorMessage ||
+                    '后端没有返回详细错误；重试前建议检查 Worker、Redis 和模型网关日志。'}
+                </Text>
+                <Text type="secondary">
+                  重新入队会优先尝试从失败阶段恢复；如果缺少检查点，系统会降级为整批重跑。
+                </Text>
+              </Space>
+            }
+          />
+        )}
       </div>
 
       {/* ─── 筛选栏 ─── */}

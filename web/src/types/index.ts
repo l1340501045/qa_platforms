@@ -243,6 +243,9 @@ export interface StageInfo {
   progress?: number;
   duration_ms?: number;
   gate_result?: GateResult;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
 }
 
 export interface StageProgress {
