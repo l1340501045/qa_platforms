@@ -78,7 +78,9 @@ rg "BEST_PRACTICE_GENERATION_CONFIG|cases_per_tp_cap|p0_quota_enabled" web/src/s
 
 资料选择建议：
 
-- 优先使用一份 1-3 个模块的小 PRD 或从大 PRD 中复制一个闭环模块。
+- 默认使用 `docs/acceptance/ux-small-batch-prd.md`。
+- 这份样例覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、筛选分页和导出，适合验证 UI/UX 主链路。
+- 如果不用默认样例，也应选择一份 1-3 个模块的小 PRD 或从大 PRD 中复制一个闭环模块。
 - 如果必须使用大 PRD，先接受耗时较长，不要把这一步当作 UI 分支最小合并门槛。
 - 如果资料含图片，保留图片，验证视觉模型链路。
 
@@ -89,7 +91,7 @@ rg "BEST_PRACTICE_GENERATION_CONFIG|cases_per_tp_cap|p0_quota_enabled" web/src/s
 3. 进入“项目/系统”，创建验收系统。
 4. 进入该系统知识库。
 5. 上传前选择资料类型，例如 `PRD`。
-6. 上传资料，确认列表里的类型不是误落 `other`。
+6. 上传 `docs/acceptance/ux-small-batch-prd.md`，确认列表里的类型不是误落 `other`。
 7. 点击“生成用例”，确认弹窗文案能让人理解这是一个真实生成任务。
 8. 触发生成后记录跳转到的 `batch_id`。
 9. 观察批次页：
