@@ -1,10 +1,10 @@
-export const CASE_ASSET_VISIBLE_BATCH_STATUSES = ['pending_review', 'completed', 'archived'] as const;
+import {
+  VIEWABLE_BATCH_STATUSES,
+  formatViewableBatchStatus,
+  isViewableBatchStatus,
+} from './batchVisibility.ts';
 
-const BATCH_STATUS_LABELS: Record<string, string> = {
-  pending_review: '待审阅',
-  completed: '已完成',
-  archived: '已落库',
-};
+export const CASE_ASSET_VISIBLE_BATCH_STATUSES = VIEWABLE_BATCH_STATUSES;
 
 export interface CaseAssetBatchScopeItem {
   document_title: string;
@@ -20,13 +20,11 @@ interface CaseAssetBatchScopeInput {
 }
 
 export function isCaseAssetVisibleBatch(status: string): boolean {
-  return CASE_ASSET_VISIBLE_BATCH_STATUSES.includes(
-    status as (typeof CASE_ASSET_VISIBLE_BATCH_STATUSES)[number],
-  );
+  return isViewableBatchStatus(status);
 }
 
 export function formatCaseAssetBatchStatus(status: string): string {
-  return BATCH_STATUS_LABELS[status] || status;
+  return formatViewableBatchStatus(status);
 }
 
 export function buildCaseAssetBatchScopeLabel({

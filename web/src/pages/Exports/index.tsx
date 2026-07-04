@@ -29,6 +29,10 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import {
+  formatViewableBatchStatus,
+  isViewableBatchStatus,
+} from '../../utils/batchVisibility';
 import { getErrorMessage } from '../../utils/errorMessage';
 import type {
   CreateExportRequest,
@@ -86,6 +90,9 @@ const Exports: React.FC = () => {
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [batchOptions, setBatchOptions] = useState<SystemBatchItem[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [systemOptionsLoading, setSystemOptionsLoading] = useState(false);
+  const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<ExportStatus | undefined>();
   const [listError, setListError] = useState<string | null>(null);
 
@@ -222,13 +229,28 @@ const Exports: React.FC = () => {
     setFormBatchId('');
     setFormSystemId('');
     setBatchOptions([]);
+    setBatchError(null);
   };
+
+  const loadSystemOptions = useCallback(async () => {
+    setSystemOptionsLoading(true);
+    setSystemOptionsError(null);
+    try {
+      const options = await listSystemOptions();
+      setSystemOptions(options);
+    } catch (err) {
+      setSystemOptionsError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      setSystemOptions([]);
+    } finally {
+      setSystemOptionsLoading(false);
+    }
+  }, []);
 
   // 打开新建弹窗时懒加载系统选项
   const openCreateModal = () => {
     setModalOpen(true);
     if (systemOptions.length === 0) {
-      listSystemOptions().then(setSystemOptions).catch(() => {});
+      loadSystemOptions();
     }
   };
 
@@ -237,20 +259,38 @@ const Exports: React.FC = () => {
     setFormSystemId(sysId);
     setFormBatchId('');
     setBatchOptions([]);
+    setBatchError(null);
     if (sysId) {
       setBatchLoading(true);
       listSystemBatches(sysId, { per_page: 100 })
         .then((res) =>
           setBatchOptions(
-            res.items.filter((b) =>
-              ['pending_review', 'completed', 'archived'].includes(b.status),
-            ),
+            res.items.filter((b) => isViewableBatchStatus(b.status)),
           ),
         )
-        .catch(() => setBatchOptions([]))
+        .catch((err) => {
+          setBatchError(getErrorMessage(err, '批次列表暂时无法加载，请重试。'));
+          setBatchOptions([]);
+        })
         .finally(() => setBatchLoading(false));
     }
   };
+
+  const retrySystemOptions = () => {
+    loadSystemOptions();
+  };
+
+  const retryBatchOptions = () => {
+    if (formSystemId) handleSystemChange(formSystemId);
+  };
+
+  const batchSelectHelp = (() => {
+    if (!formSystemId) return '先选择系统，再选择该系统下待审阅/已完成/已落库批次。';
+    if (batchLoading) return '正在加载该系统可导出的批次。';
+    if (batchError) return '批次列表加载失败，不能据此判断该系统没有可导出批次。';
+    if (batchOptions.length === 0) return '该系统当前没有待审阅/已完成/已落库的可导出批次。';
+    return `当前可选择 ${batchOptions.length} 个待审阅/已完成/已落库批次。`;
+  })();
 
   // ─── 表格列 ───
   const columns: ColumnsType<ExportTask> = [
@@ -510,8 +550,25 @@ const Exports: React.FC = () => {
                 style={{ width: '100%' }}
                 value={formSystemId || undefined}
                 onChange={handleSystemChange}
+                loading={systemOptionsLoading}
+                status={systemOptionsError ? 'warning' : undefined}
+                notFoundContent={systemOptionsError ? '系统列表加载失败' : '暂无系统'}
                 options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
               />
+              {systemOptionsError && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  message="系统列表加载失败"
+                  description={`不能据此判断没有系统可导出。${systemOptionsError}`}
+                  action={
+                    <Button size="small" loading={systemOptionsLoading} onClick={retrySystemOptions}>
+                      重试
+                    </Button>
+                  }
+                />
+              )}
             </div>
             <div style={{ marginBottom: 16 }}>
               <div style={{ marginBottom: 8 }}>批次：</div>
@@ -523,19 +580,35 @@ const Exports: React.FC = () => {
                 value={formBatchId || undefined}
                 onChange={setFormBatchId}
                 loading={batchLoading}
-                disabled={!formSystemId}
+                disabled={!formSystemId || Boolean(batchError && !batchLoading)}
+                status={batchError ? 'warning' : undefined}
+                notFoundContent={batchError ? '批次列表加载失败' : '暂无可导出批次'}
                 options={batchOptions.map((b) => {
-                  const statusLabel =
-                    b.status === 'pending_review' ? '待审阅' :
-                    b.status === 'completed' ? '已完成' :
-                    b.status === 'archived' ? '已落库' : b.status;
                   const date = new Date(b.created_at).toLocaleDateString('zh-CN');
                   return {
                     value: b.id,
-                    label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${statusLabel}`,
+                    label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${formatViewableBatchStatus(b.status)}`,
                   };
                 })}
               />
+              {batchError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  message="批次列表加载失败"
+                  description={`${batchSelectHelp}${batchError}`}
+                  action={
+                    <Button size="small" loading={batchLoading} onClick={retryBatchOptions}>
+                      重试批次
+                    </Button>
+                  }
+                />
+              ) : (
+                <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                  {batchSelectHelp}
+                </Text>
+              )}
             </div>
           </>
         ) : (
@@ -548,8 +621,25 @@ const Exports: React.FC = () => {
               style={{ width: '100%' }}
               value={formSystemId || undefined}
               onChange={setFormSystemId}
+              loading={systemOptionsLoading}
+              status={systemOptionsError ? 'warning' : undefined}
+              notFoundContent={systemOptionsError ? '系统列表加载失败' : '暂无系统'}
               options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
             />
+            {systemOptionsError && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 8 }}
+                message="系统列表加载失败"
+                description={`不能据此判断没有系统可导出。${systemOptionsError}`}
+                action={
+                  <Button size="small" loading={systemOptionsLoading} onClick={retrySystemOptions}>
+                    重试
+                  </Button>
+                }
+              />
+            )}
           </div>
         )}
       </Modal>
