@@ -42,7 +42,8 @@
     "07-04-ux-acceptance-preflight-tests",
     "07-04-ux-acceptance-pytest-warning-cleanup",
     "07-04-ux-parent-implement-status-note",
-    "07-04-ux-final-review-commit-scope-note"
+    "07-04-ux-final-review-commit-scope-note",
+    "07-04-ux-post-reboot-no-llm-smoke"
   ],
   "parent": null,
   "relatedFiles": [],

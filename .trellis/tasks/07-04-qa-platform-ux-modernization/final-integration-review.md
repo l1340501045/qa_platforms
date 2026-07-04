@@ -65,6 +65,7 @@
 | UI 验收预检覆盖生成配置 | 已补齐静态配置检查 | `scripts/ux_acceptance_preflight.py` 检查 `existence_merge_enabled=True`、`split_cap_enabled=True`、`cases_per_tp_cap=4`、`p0_quota_enabled=False`，并校验前端、settings、pipeline 契约一致 | 只证明配置静态一致，不证明真实生成质量 |
 | UI 验收预检脚本测试补强 | 已补齐测试保护 | `tests/test_ux_acceptance_preflight.py` 覆盖配置解析和 mismatch fail fast；`pytest` 通过 | 目标单测配置告警已在后续清理任务中移除 |
 | UI 验收测试输出告警清理 | 已清理测试噪音 | 移除无效 `collect_ignore_glob` pytest ini 配置；目标单测输出不再出现配置告警 | 仅清理测试配置，不改变测试目录结构 |
+| 重启后无 LLM 页面巡检 | 已补齐环境恢复后只读证据 | `runtime-smoke-report.md` 覆盖 API / worker / frontend、8 个核心页面、1280/1024 横向溢出和 console warning/error | 未上传、未生成、未做 mutation；不替代真实小批次验收 |
 
 ## 父任务验收逐条核对
 
