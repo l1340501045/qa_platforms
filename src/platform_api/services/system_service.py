@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -91,16 +91,20 @@ class SystemService:
         return system
 
     async def delete_system(self, system_id: UUID) -> None:
-        """删除系统（存在关联文档/批次时拒绝）"""
+        """删除系统（存在有效文档/批次时拒绝；仅软删除文档不阻塞）"""
         instance = await self.repo.get_by_id(system_id)
         if instance is None:
             raise ApiError("E4041", "系统不存在")
+        blockers = await self._get_delete_blockers(system_id)
+        if blockers:
+            raise ApiError("E4091", f"该系统下仍有{'或'.join(blockers)}，无法删除。请先删除关联数据")
         try:
+            await self._delete_document_tombstones(system_id)
             await self.session.delete(instance)
             await self.session.flush()
         except IntegrityError:
             await self.session.rollback()
-            raise ApiError("E4091", "该系统下仍有文档或批次，无法删除。请先删除关联数据")
+            raise ApiError("E4091", "该系统下仍有关联数据，无法删除。请先删除关联数据")
 
     # ─── 系统关联 CRUD ───
 
@@ -164,3 +168,27 @@ class SystemService:
         result = await self.session.execute(stmt)
         if result.scalar_one_or_none() is not None:
             raise ApiError("E4091", f"系统名称 '{name}' 已存在")
+
+    async def _get_delete_blockers(self, system_id: UUID) -> list[str]:
+        """返回仍应阻止系统删除的有效业务资产。"""
+        active_doc_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.system_id == system_id, Document.deleted_at.is_(None))
+        )
+        batch_count = await self.session.scalar(
+            select(func.count()).select_from(TestBatch).where(TestBatch.system_id == system_id)
+        )
+
+        blockers: list[str] = []
+        if active_doc_count:
+            blockers.append("文档")
+        if batch_count:
+            blockers.append("批次")
+        return blockers
+
+    async def _delete_document_tombstones(self, system_id: UUID) -> None:
+        """物理清理软删除文档，避免 tombstone 外键阻止空系统删除。"""
+        await self.session.execute(
+            delete(Document).where(Document.system_id == system_id, Document.deleted_at.is_not(None))
+        )
