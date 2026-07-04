@@ -4,11 +4,13 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.database import get_session_factory
 from src.platform_api.core.exceptions import ApiError
+from src.platform_api.main import app
 from src.platform_api.services.document_service import DocumentService
 from tests.platform_api.conftest import requires_db
 
@@ -99,3 +101,91 @@ async def test_batch_upload_rejects_unknown_doc_type_before_processing(
 
     assert exc.value.error_code == "E4001"
     assert "文档类型" in exc.value.message
+
+
+@pytest.fixture
+async def seed_document_for_relabel(db_session: AsyncSession, seed_system):
+    active_doc_id = uuid.uuid4()
+    deleted_doc_id = uuid.uuid4()
+
+    await db_session.execute(
+        text(
+            "INSERT INTO knowledge.documents "
+            "(id, system_id, title, doc_type, content, storage_path, content_hash) "
+            "VALUES (:id, :sid, '历史文档', 'other', 'content', '/tmp/history.md', :hash)"
+        ),
+        {"id": active_doc_id, "sid": seed_system, "hash": uuid.uuid4().hex},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO knowledge.documents "
+            "(id, system_id, title, doc_type, content, storage_path, content_hash, deleted_at) "
+            "VALUES (:id, :sid, '已删除文档', 'other', 'content', '/tmp/deleted.md', :hash, now())"
+        ),
+        {"id": deleted_doc_id, "sid": seed_system, "hash": uuid.uuid4().hex},
+    )
+    await db_session.commit()
+    yield {"active_doc_id": active_doc_id, "deleted_doc_id": deleted_doc_id}
+
+    await db_session.execute(
+        text("DELETE FROM knowledge.documents WHERE id = ANY(:ids)"),
+        {"ids": [active_doc_id, deleted_doc_id]},
+    )
+    await db_session.commit()
+
+
+async def test_update_document_type_relabels_active_document(
+    db_session: AsyncSession,
+    seed_document_for_relabel,
+):
+    service = DocumentService(db_session)
+
+    doc = await service.update_document_type(seed_document_for_relabel["active_doc_id"], "prd")
+
+    assert doc.doc_type == "prd"
+    row = (
+        await db_session.execute(
+            text("SELECT doc_type FROM knowledge.documents WHERE id = :id"),
+            {"id": seed_document_for_relabel["active_doc_id"]},
+        )
+    ).one()
+    assert row[0] == "prd"
+
+
+async def test_update_document_type_rejects_unknown_type(
+    db_session: AsyncSession,
+    seed_document_for_relabel,
+):
+    service = DocumentService(db_session)
+
+    with pytest.raises(ApiError) as exc:
+        await service.update_document_type(seed_document_for_relabel["active_doc_id"], "unknown_type")
+
+    assert exc.value.error_code == "E4001"
+    assert "文档类型" in exc.value.message
+
+
+async def test_update_document_type_rejects_deleted_document(
+    db_session: AsyncSession,
+    seed_document_for_relabel,
+):
+    service = DocumentService(db_session)
+
+    with pytest.raises(ApiError) as exc:
+        await service.update_document_type(seed_document_for_relabel["deleted_doc_id"], "prd")
+
+    assert exc.value.error_code == "E4041"
+
+
+async def test_patch_document_type_endpoint_returns_updated_document(seed_document_for_relabel):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.patch(
+            f"/api/v1/documents/{seed_document_for_relabel['active_doc_id']}/type",
+            json={"doc_type": "tech_doc"},
+        )
+
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["code"] == 0
+    assert payload["data"]["doc_type"] == "tech_doc"

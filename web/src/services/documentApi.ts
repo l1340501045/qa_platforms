@@ -60,6 +60,15 @@ export async function getDocument(documentId: string): Promise<DocumentDetail> {
   return res.data;
 }
 
+/** 更新文档类型 PATCH /documents/:id/type */
+export async function updateDocumentType(
+  documentId: string,
+  docType: DocType,
+): Promise<DocumentDetail> {
+  const res = await api.patch(`/documents/${documentId}/type`, { doc_type: docType });
+  return res.data;
+}
+
 /** 删除文档 DELETE /documents/:id */
 export async function deleteDocument(documentId: string): Promise<void> {
   await api.delete(`/documents/${documentId}`);

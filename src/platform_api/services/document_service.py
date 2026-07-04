@@ -156,6 +156,15 @@ class DocumentService:
             raise ApiError("E4041", "文档不存在")
         return doc
 
+    async def update_document_type(self, document_id: UUID, doc_type: str) -> Document:
+        """更新文档类型（用于历史文档重标注）"""
+        if doc_type not in DOC_TYPES:
+            raise ApiError("E4001", f"无效的文档类型，允许值：{DOC_TYPES}")
+        doc = await self.get_document(document_id)
+        doc.doc_type = str(doc_type)
+        await self.session.flush()
+        return doc
+
     # ─── 文档删除（软删除） ───
 
     async def delete_document(self, document_id: UUID) -> None:

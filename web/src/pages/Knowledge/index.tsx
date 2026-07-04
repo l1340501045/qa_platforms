@@ -3,6 +3,7 @@ import {
   Alert,
   Badge,
   Button,
+  Form,
   Input,
   message,
   Modal,
@@ -147,6 +148,7 @@ const KnowledgePage: React.FC = () => {
     documentsLoading,
     fetchDocuments,
     uploadDocuments,
+    updateDocumentType,
     uploadResult,
     isUploading,
     clearUploadResult,
@@ -156,6 +158,9 @@ const KnowledgePage: React.FC = () => {
 
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [resultModalOpen, setResultModalOpen] = useState(false);
+  const [typeForm] = Form.useForm<{ doc_type: DocType }>();
+  const [relabelDoc, setRelabelDoc] = useState<Document | null>(null);
+  const [relabelSubmitting, setRelabelSubmitting] = useState(false);
   const [selectedDocType, setSelectedDocType] = useState<DocType>('prd');
   const [folderKeyword, setFolderKeyword] = useState('');
   const [expandedFolderKeys, setExpandedFolderKeys] = useState<React.Key[]>(['__all__']);
@@ -255,6 +260,28 @@ const KnowledgePage: React.FC = () => {
     clearUploadResult();
   };
 
+  const openRelabelModal = (doc: Document, event?: React.MouseEvent) => {
+    event?.stopPropagation();
+    setRelabelDoc(doc);
+    typeForm.setFieldsValue({ doc_type: doc.doc_type === 'other' ? 'prd' : doc.doc_type });
+  };
+
+  const handleRelabelDocument = async () => {
+    if (!relabelDoc) return;
+    try {
+      const values = await typeForm.validateFields();
+      setRelabelSubmitting(true);
+      await updateDocumentType(relabelDoc.id, values.doc_type);
+      message.success('文档类型已更新');
+      setRelabelDoc(null);
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(err?.message || '更新文档类型失败');
+    } finally {
+      setRelabelSubmitting(false);
+    }
+  };
+
   const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
     event?.stopPropagation();
     Modal.confirm({
@@ -298,6 +325,16 @@ const KnowledgePage: React.FC = () => {
             >
               生成用例
             </Button>
+            {record.doc_type === 'other' && (
+              <Button
+                type="link"
+                size="small"
+                onClick={(event) => openRelabelModal(record, event)}
+                style={{ paddingInline: 0 }}
+              >
+                标注类型
+              </Button>
+            )}
             <Button
               type="link"
               size="small"
@@ -662,6 +699,37 @@ const KnowledgePage: React.FC = () => {
             )}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        title="标注文档类型"
+        open={Boolean(relabelDoc)}
+        onCancel={() => setRelabelDoc(null)}
+        onOk={handleRelabelDocument}
+        confirmLoading={relabelSubmitting}
+        okText="保存"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="历史文档仍标记为「其他」"
+          description="请选择更准确的资料类型。这里只修改类型标注，不会重新解析文档，也不会自动重新生成用例。"
+        />
+        <Form form={typeForm} layout="vertical">
+          <Form.Item name="doc_type" label="文档类型" rules={[{ required: true, message: '请选择文档类型' }]}>
+            <Select
+              optionLabelProp="label"
+              options={docTypeOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+                title: option.description,
+              }))}
+            />
+          </Form.Item>
+        </Form>
       </Modal>
     </PageShell>
   );

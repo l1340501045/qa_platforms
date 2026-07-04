@@ -16,7 +16,7 @@ from src.platform_api.core.database import get_session
 from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
 from src.platform_api.models.knowledge import Document
-from src.platform_api.schemas.document import CreateDocumentAssociationRequest
+from src.platform_api.schemas.document import CreateDocumentAssociationRequest, UpdateDocumentTypeRequest
 from src.platform_api.services.batch_list_service import BatchListService
 from src.platform_api.services.document_service import DocumentService
 
@@ -75,6 +75,17 @@ async def get_document(
 ):
     """获取文档详情"""
     doc = await service.get_document(document_id)
+    return success(doc)
+
+
+@router.patch("/{document_id}/type")
+async def update_document_type(
+    document_id: UUID,
+    data: UpdateDocumentTypeRequest,
+    service: DocumentService = Depends(_get_service),
+):
+    """更新文档类型（人工重标注历史文档）"""
+    doc = await service.update_document_type(document_id, data.doc_type)
     return success(doc)
 
 

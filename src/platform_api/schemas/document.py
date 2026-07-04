@@ -66,6 +66,10 @@ class DocumentListResponse(BaseModel):
     limit: int
 
 
+class UpdateDocumentTypeRequest(BaseModel):
+    doc_type: str = Field(..., description="文档类型")
+
+
 # ─── Document Association Schemas ───
 
 

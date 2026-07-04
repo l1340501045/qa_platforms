@@ -14,6 +14,7 @@ import {
 } from 'antd';
 import {
   ArrowLeftOutlined,
+  EditOutlined,
   FileSearchOutlined,
   LinkOutlined,
   PlayCircleOutlined,
@@ -32,7 +33,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
-import type { DocAssociations, DocRelationType, Document } from '../../types';
+import type { DocAssociations, DocRelationType, DocType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 import { buildDocumentBatchUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
 import { getErrorMessage } from '../../utils/errorMessage';
@@ -59,6 +60,26 @@ const docTypeLabelMap: Record<string, string> = {
   prototype: '原型/图片',
   other: '其他',
 };
+
+const docTypeHelpMap: Record<DocType, string> = {
+  prd: '产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。',
+  tech_doc: '接口、架构、状态机、缓存、权限等技术实现资料，用于补充测试依据。',
+  test_rule: '团队测试规范、通用准入规则、专项 checklist，用于约束生成质量。',
+  test_case: '已有测试用例或回归资产，用于迁移、比对和沉淀。',
+  bug_record: '历史缺陷、线上问题或复盘记录，用于补充风险场景。',
+  prototype: '原型截图、流程图、交互图片或含图片的 PRD 目录。',
+  other: '无法归类的资料。系统不会把它当作主 PRD、技术文档或测试规则使用。',
+};
+
+const docTypeOptions: Array<{ label: string; value: DocType; description: string }> = [
+  { label: docTypeLabelMap.prd, value: 'prd', description: docTypeHelpMap.prd },
+  { label: docTypeLabelMap.tech_doc, value: 'tech_doc', description: docTypeHelpMap.tech_doc },
+  { label: docTypeLabelMap.test_rule, value: 'test_rule', description: docTypeHelpMap.test_rule },
+  { label: docTypeLabelMap.prototype, value: 'prototype', description: docTypeHelpMap.prototype },
+  { label: docTypeLabelMap.bug_record, value: 'bug_record', description: docTypeHelpMap.bug_record },
+  { label: docTypeLabelMap.test_case, value: 'test_case', description: docTypeHelpMap.test_case },
+  { label: docTypeLabelMap.other, value: 'other', description: docTypeHelpMap.other },
+];
 
 const docStatusMap: Record<string, { label: string; tone: StatusTone }> = {
   uploading: { label: '上传中', tone: 'processing' },
@@ -120,7 +141,7 @@ const DocumentDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
-  const { currentDocument, fetchDocument } = useKnowledgeStore();
+  const { currentDocument, fetchDocument, updateDocumentType } = useKnowledgeStore();
 
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -130,6 +151,9 @@ const DocumentDetailPage: React.FC = () => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addForm] = Form.useForm();
   const [addSubmitting, setAddSubmitting] = useState(false);
+  const [typeForm] = Form.useForm<{ doc_type: DocType }>();
+  const [typeModalOpen, setTypeModalOpen] = useState(false);
+  const [typeSubmitting, setTypeSubmitting] = useState(false);
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [systemOptionsLoading, setSystemOptionsLoading] = useState(false);
   const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
@@ -210,6 +234,28 @@ const DocumentDetailPage: React.FC = () => {
     setAddModalOpen(true);
     if (systemOptions.length === 0) {
       loadSystemOptions();
+    }
+  };
+
+  const openTypeModal = () => {
+    if (!currentDocument) return;
+    typeForm.setFieldsValue({ doc_type: currentDocument.doc_type });
+    setTypeModalOpen(true);
+  };
+
+  const handleUpdateDocumentType = async () => {
+    if (!documentId) return;
+    try {
+      const values = await typeForm.validateFields();
+      setTypeSubmitting(true);
+      await updateDocumentType(documentId, values.doc_type);
+      message.success('文档类型已更新');
+      setTypeModalOpen(false);
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(err?.message || '更新文档类型失败');
+    } finally {
+      setTypeSubmitting(false);
     }
   };
 
@@ -391,6 +437,9 @@ const DocumentDetailPage: React.FC = () => {
             <Button key="parse" icon={<FileSearchOutlined />} onClick={() => setParseOpen(true)}>
               解析详情
             </Button>,
+            <Button key="type" icon={<EditOutlined />} onClick={openTypeModal}>
+              修改类型
+            </Button>,
             <Button key="cheat-sheet" icon={<ProfileOutlined />} onClick={() => setCheatSheetOpen(true)}>
               知识速查表
             </Button>,
@@ -487,6 +536,20 @@ const DocumentDetailPage: React.FC = () => {
             <Text type="secondary">用于判断这份资料是否已经具备生成用例的基础上下文。</Text>
           </div>
         </div>
+        {currentDocument.doc_type === 'other' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="这份历史资料仍标记为「其他」"
+            description="如果它是 PRD、技术文档、测试规则或原型资料，请先修改类型，再用于生成或关联。"
+            action={
+              <Button size="small" icon={<EditOutlined />} onClick={openTypeModal}>
+                标注类型
+              </Button>
+            }
+          />
+        )}
         <div style={fieldGridStyle}>
           <div>
             <Text type="secondary">标题</Text>
@@ -500,6 +563,9 @@ const DocumentDetailPage: React.FC = () => {
               <Tag color={docTypeColorMap[currentDocument.doc_type]}>
                 {docTypeLabelMap[currentDocument.doc_type] || currentDocument.doc_type}
               </Tag>
+              <Button type="link" size="small" onClick={openTypeModal} style={{ paddingInline: 8 }}>
+                修改
+              </Button>
             </div>
           </div>
           <div>
@@ -634,6 +700,37 @@ const DocumentDetailPage: React.FC = () => {
                 </Select.Option>
               ))}
             </Select>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="修改文档类型"
+        open={typeModalOpen}
+        onCancel={() => setTypeModalOpen(false)}
+        onOk={handleUpdateDocumentType}
+        confirmLoading={typeSubmitting}
+        okText="保存"
+        cancelText="取消"
+        destroyOnHidden
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="文档类型会影响资料追溯和生成前判断"
+          description="这里只修改类型标注，不会重新解析文档，也不会自动重新生成用例。"
+        />
+        <Form form={typeForm} layout="vertical">
+          <Form.Item name="doc_type" label="文档类型" rules={[{ required: true, message: '请选择文档类型' }]}>
+            <Select
+              optionLabelProp="label"
+              options={docTypeOptions.map((option) => ({
+                value: option.value,
+                label: option.label,
+                title: option.description,
+              }))}
+            />
           </Form.Item>
         </Form>
       </Modal>

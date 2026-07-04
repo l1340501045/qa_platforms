@@ -187,6 +187,69 @@ class SystemService:
 
 ---
 
+## 场景：历史文档类型重标注
+
+### 1. Scope / Trigger
+
+- Trigger: 前端需要修正历史 `other` 文档的业务类型，新增跨层接口 `PATCH /api/v1/documents/{document_id}/type`。
+- 范围只允许更新 `knowledge.documents.doc_type`；不得重跑解析、重建向量、触发生成批次或改写文档内容。
+
+### 2. Signatures
+
+- Request schema: `UpdateDocumentTypeRequest.doc_type: str`（`src/platform_api/schemas/document.py:69`）。
+- Route: `@router.patch("/{document_id}/type")`（`src/platform_api/api/v1/documents.py:81`）。
+- Service: `DocumentService.update_document_type(document_id: UUID, doc_type: str) -> Document`（`src/platform_api/services/document_service.py:157`）。
+
+### 3. Contracts
+
+- URL: `PATCH /api/v1/documents/{document_id}/type`
+- Body: `{"doc_type": "<DOC_TYPES value>"}`
+- Allowed values: `DOC_TYPES = tuple(item.value for item in DocType)`（`src/platform_api/schemas/document.py:12`）
+- Success: 统一信封 `{"code":0,"message":"success","data":<Document>}`，其中 `data.doc_type` 为更新后的值。
+- Commit: 路由不手动 commit；仍由 `get_session` 生命周期统一提交。
+
+### 4. Validation & Error Matrix
+
+| 条件 | 行为 |
+|------|------|
+| `doc_type not in DOC_TYPES` | `ApiError("E4001", "无效的文档类型...")` |
+| `document_id` 不存在 | 复用 `get_document`，返回 `E4041` |
+| 文档已软删除 | 复用 `get_document`，返回 `E4041` |
+
+### 5. Good/Base/Bad Cases
+
+- Good: 历史 `other` 文档重标注为 `prd` / `tech_doc` / `test_rule`，返回更新后的文档详情。
+- Base: 已是非 `other` 的文档也允许重标注，便于人工纠错。
+- Bad: 不要根据标题、路径或正文自动猜类型并批量迁移；误分类会污染生成依据。
+
+### 6. Tests Required
+
+- Service 成功用例：断言返回对象和数据库里的 `doc_type` 都已更新。
+- Service 错误用例：非法类型返回 `E4001`；软删除或不存在返回 `E4041`。
+- HTTP 契约用例：用 `httpx.ASGITransport` 调 `PATCH /api/v1/documents/{id}/type`，断言响应信封和 `data.doc_type`。
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```python
+# 不要做自动推断或连带重解析
+doc.doc_type = infer_type_from_title_or_content(doc)
+trigger_kb_parsing([doc])
+```
+
+#### Correct
+
+```python
+if doc_type not in DOC_TYPES:
+    raise ApiError("E4001", f"无效的文档类型，允许值：{DOC_TYPES}")
+doc = await self.get_document(document_id)
+doc.doc_type = str(doc_type)
+await self.session.flush()
+```
+
+---
+
 ## ⚠️ 已知空白：无鉴权层
 
 当前 `src/platform_api` **没有任何认证/授权**：所有 `Depends(...)` 只有 `get_session` 与 `_get_*_service`，无 `current_user` / JWT / `Security`，`pyproject.toml` 无鉴权依赖，`settings.py` 无 `SECRET_KEY`。
