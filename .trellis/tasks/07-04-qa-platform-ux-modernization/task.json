@@ -26,7 +26,8 @@
     "07-04-ux-runtime-verification-release",
     "07-04-07-04-ux-frontend-lint-gate",
     "07-04-ux-system-delete-soft-doc-cleanup",
-    "07-04-ux-document-type-relabel"
+    "07-04-ux-document-type-relabel",
+    "07-04-07-04-ux-current-head-runtime-acceptance"
   ],
   "parent": null,
   "relatedFiles": [],

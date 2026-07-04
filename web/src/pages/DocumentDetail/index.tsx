@@ -239,7 +239,6 @@ const DocumentDetailPage: React.FC = () => {
 
   const openTypeModal = () => {
     if (!currentDocument) return;
-    typeForm.setFieldsValue({ doc_type: currentDocument.doc_type });
     setTypeModalOpen(true);
   };
 
@@ -721,7 +720,12 @@ const DocumentDetailPage: React.FC = () => {
           message="文档类型会影响资料追溯和生成前判断"
           description="这里只修改类型标注，不会重新解析文档，也不会自动重新生成用例。"
         />
-        <Form form={typeForm} layout="vertical">
+        <Form
+          key={`${currentDocument.id}-${currentDocument.doc_type}`}
+          form={typeForm}
+          initialValues={{ doc_type: currentDocument.doc_type }}
+          layout="vertical"
+        >
           <Form.Item name="doc_type" label="文档类型" rules={[{ required: true, message: '请选择文档类型' }]}>
             <Select
               optionLabelProp="label"

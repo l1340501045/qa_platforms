@@ -263,7 +263,6 @@ const KnowledgePage: React.FC = () => {
   const openRelabelModal = (doc: Document, event?: React.MouseEvent) => {
     event?.stopPropagation();
     setRelabelDoc(doc);
-    typeForm.setFieldsValue({ doc_type: doc.doc_type === 'other' ? 'prd' : doc.doc_type });
   };
 
   const handleRelabelDocument = async () => {
@@ -718,7 +717,12 @@ const KnowledgePage: React.FC = () => {
           message="历史文档仍标记为「其他」"
           description="请选择更准确的资料类型。这里只修改类型标注，不会重新解析文档，也不会自动重新生成用例。"
         />
-        <Form form={typeForm} layout="vertical">
+        <Form
+          key={relabelDoc ? `${relabelDoc.id}-${relabelDoc.doc_type}` : 'relabel-doc-type'}
+          form={typeForm}
+          initialValues={{ doc_type: relabelDoc?.doc_type === 'other' ? 'prd' : relabelDoc?.doc_type }}
+          layout="vertical"
+        >
           <Form.Item name="doc_type" label="文档类型" rules={[{ required: true, message: '请选择文档类型' }]}>
             <Select
               optionLabelProp="label"
