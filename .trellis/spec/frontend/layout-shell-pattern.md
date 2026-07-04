@@ -24,6 +24,8 @@
 
 首页 `/` 默认跳转工作台，旧路由必须保持可访问。
 
+全局顶栏使用 Ant Design `Layout.Header` 时，标题/副标题容器必须显式重置 `line-height`。Ant Design Header 默认 `line-height: 64px` 会被子元素继承，导致双行标题块在 1024 宽等场景上移裁切。
+
 ## 共享组件职责
 
 | 组件 | 职责 | 不应承担 |

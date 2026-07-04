@@ -122,11 +122,11 @@ function MainLayout() {
             justifyContent: 'space-between',
           }}
         >
-          <div>
+          <div style={{ minWidth: 0, lineHeight: 1.4 }}>
             <h2 style={{ margin: 0, fontSize: 16, lineHeight: 1.4 }}>
               {currentItem?.label || 'QA 智能测试平台'}
             </h2>
-            <div style={{ color: layoutTokens.textSecondary, fontSize: 12 }}>
+            <div style={{ color: layoutTokens.textSecondary, fontSize: 12, lineHeight: 1.5 }}>
               需求资料、生成批次、审查与用例资产的统一工作台
             </div>
           </div>
