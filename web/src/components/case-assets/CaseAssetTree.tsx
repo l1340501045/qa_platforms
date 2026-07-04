@@ -32,9 +32,27 @@ function toAntTreeNode(node: CaseAssetNode): DataNode {
   return {
     key: node.key,
     title: (
-      <span>
+      <span
+        title={node.title}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          maxWidth: '100%',
+          verticalAlign: 'middle',
+        }}
+      >
         {iconForNode(node)}
-        {node.title}
+        <span
+          style={{
+            maxWidth: node.type === 'root' ? 220 : 260,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            verticalAlign: 'middle',
+          }}
+        >
+          {node.title}
+        </span>
         <Tag style={{ marginLeft: 8 }} color={node.type === 'document' ? 'blue' : 'default'}>
           {node.type === 'root' ? `${node.count} 用例` : node.count}
         </Tag>

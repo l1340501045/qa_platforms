@@ -22,6 +22,17 @@ interface CaseAssetTableProps {
   rowClickToOpen?: boolean;
 }
 
+function getTitleClampStyle(maxLines = 2): React.CSSProperties {
+  return {
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: maxLines,
+    overflow: 'hidden',
+    whiteSpace: 'normal',
+    lineHeight: 1.45,
+  };
+}
+
 const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
   cases,
   titleColumnLabel = '用例标题',
@@ -39,20 +50,31 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: titleColumnLabel,
         dataIndex: 'title',
         key: 'title',
-        ellipsis: !titleAsLink,
+        width: renderActions ? 320 : 360,
         render: (text: string, record) => {
+          const titleStyle = getTitleClampStyle();
           const titleNode = titleAsLink ? (
-            <a onClick={() => onOpenCase?.(record.id)}>{text}</a>
+            <a
+              title={text}
+              onClick={() => onOpenCase?.(record.id)}
+              style={titleStyle}
+            >
+              {text}
+            </a>
           ) : (
-            text
+            <span title={text} style={titleStyle}>
+              {text}
+            </span>
           );
           if (!showIterationTag || record.iteration <= 1) return titleNode;
           return (
-            <Space size={4} align="start">
+            <Space size={4} align="start" style={{ width: '100%' }}>
               <Tag color="purple" style={{ margin: 0, flexShrink: 0 }}>
                 已重写
               </Tag>
-              {titleNode}
+              <span style={{ minWidth: 0, flex: 1 }}>
+                {titleNode}
+              </span>
             </Space>
           );
         },
@@ -111,7 +133,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
       dataSource={cases}
       pagination={pagination}
       size="small"
-      scroll={{ x: renderActions ? 680 : 620 }}
+      scroll={{ x: 760 }}
       onRow={(record) => ({
         onClick: rowClickToOpen ? () => onOpenCase?.(record.id) : undefined,
         style: rowClickToOpen ? { cursor: 'pointer' } : undefined,

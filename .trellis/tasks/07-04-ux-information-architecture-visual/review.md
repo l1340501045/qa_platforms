@@ -75,6 +75,8 @@
 - 用例资产指标条新增当前视图用例、选中范围、分支节点、待处理、重复标记等资产判断信息。
 - 左侧树保留搜索、展开全部、收起全部，但容器固定为局部滚动；默认不展开所有分支，降低大模块树下滚动找目录的成本。
 - 右侧表格显示选中范围、范围类型、批次范围和资产视图标签；空态提供重置筛选或去知识库上传/生成的恢复路径。
+- 用例资产树节点增加单行省略和完整 `title`，长文档名/模块名不会挤掉数量标签，也不会撑开页面。
+- 用例资产表格标题限制为 2 行并保留完整 `title`/详情抽屉通路，避免 20 条分页因为超长标题变成多屏滚动墙。
 - 导出中心 `/exports` 从导出任务表改为“用例交付导出”工作台。
 - 导出中心顶部说明 Markdown / Excel 的交付场景，并新增刷新、状态筛选、可下载文件指标。
 - 导出任务主列直接展示范围、格式、短 ID、创建时间、下载入口和失败恢复提示，1024 宽度下下载动作可见。
@@ -98,8 +100,8 @@
 - 批次工作台的阶段进度目前仍是前端展示层增强，没有提供失败阶段的具体错误详情展开；后续如果后端暴露 stage error，可补“错误原因 + 重试建议”。
 - 1024 宽度下批次页为保证表格可操作，树表改为上下堆叠，页面会比桌面布局更长；这是可接受取舍，但后续可考虑可折叠树面板进一步降低滚动长度。
 - 系统列表搜索/排序目前只作用于当前页；如果系统数量继续增多，需要后端支持全局搜索、排序和状态过滤，否则用户跨页找系统仍会费劲。
-- 用例资产页的批次下拉仍依赖后端默认批次列表，没有在前端解释“默认最新可见批次”的后端选择规则；如果真实用户困惑，需要后端返回当前生效批次元信息。
 - 用例资产页没有做虚拟树/虚拟表；当前通过局部滚动和分页降低滚动成本，但真实 2000+ 用例资产仍需继续做性能验证。
+- 长标题目前采用 2 行截断 + 完整 `title`/详情抽屉的后台表格实践；如果未来标题本身承载关键差异，需要补“展开标题”或“密度切换”，不能只依赖 hover。
 - 导出列表接口当前不返回 `total_cases`、`completed_at`、`error_message` 的完整列表字段；前端已兼容缺省值，但真实环境下失败原因可能仍不如详情接口完整。
 - 用例资产页的批次下拉仍依赖后端默认批次列表，没有在前端解释“默认最新可见批次”的具体选择规则；如果真实用户困惑，需要后端返回当前生效批次元信息或选择依据。
 
@@ -255,6 +257,18 @@
   - 截图产物：
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-batch-error-narrow.png`
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-batch-success-narrow.png`
+- 用例资产大数据密度补充验证：
+  - Playwright mock 3 份文档、42 个模块、504 个分支节点、840 条用例，包含超长模块名和超长用例标题，不触发真实后端生成。
+  - 修复前无页面级横向溢出，但 20 条分页因超长标题导致页面高度过长：1440 宽 `bodyHeight=3973`，1024 宽 `bodyHeight=4694`。
+  - 修复后树节点单行省略、表格标题 2 行截断且保留完整 `title`；1440 宽 `bodyHeight=2353`，1024 宽 `bodyHeight=2986`。
+  - 修复后 1440/1024 宽均无页面级横向溢出；`firstTitleBoxHeight=40.59375`，树节点存在完整原生 `title`，分页显示“共 840 条”。
+  - 批次工作台 `/batches/:batchId` 同步冒烟：1024 宽下长标题不会挤掉“确认、需修改、删除”，无页面级横向溢出。
+  - 截图产物：
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-large-clamped-desktop.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-large-clamped-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-large-clamped-search-desktop.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-large-clamped-search-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/workbench-clamped-narrow.png`
 
 ## 当前结论
 
