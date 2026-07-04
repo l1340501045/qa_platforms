@@ -88,6 +88,7 @@
 - API interceptor 对短时间内完全相同的错误 toast 做去重，避免工作台 4 个队列 + 1 个列表并发失败时刷屏。
 - 搜索 `/search` 区分“无匹配结果”和“搜索请求失败”：失败时显示“搜索结果加载失败”“重试搜索”，指标条显示 `- / 加载失败`，不再用 0 条误导用户。
 - 用例资产 `/case-library` 区分“暂无资产”和“资产树/系统列表加载失败”：系统列表失败显示页面级错误态；资产树失败时顶部提示、左树、右表都明确“不能据此判断当前系统没有资产”。
+- 用例资产批次范围列表加载失败时不再静默变成空下拉：页面保留默认资产浏览，同时显示“批次范围暂时无法加载”“重试批次”，并明确不能据此判断该系统没有历史批次。
 - 导出中心 `/exports` 区分“没有导出任务”和“导出列表加载失败”：失败时顶部提示变为 warning，指标条显示 `- / 加载失败`，列表区提供“重试加载”和“新建导出”。
 
 仍然不足：
@@ -100,7 +101,7 @@
 - 用例资产页的批次下拉仍依赖后端默认批次列表，没有在前端解释“默认最新可见批次”的后端选择规则；如果真实用户困惑，需要后端返回当前生效批次元信息。
 - 用例资产页没有做虚拟树/虚拟表；当前通过局部滚动和分页降低滚动成本，但真实 2000+ 用例资产仍需继续做性能验证。
 - 导出列表接口当前不返回 `total_cases`、`completed_at`、`error_message` 的完整列表字段；前端已兼容缺省值，但真实环境下失败原因可能仍不如详情接口完整。
-- 用例资产页的批次范围下拉加载失败仍是静默降级为空列表；虽然不阻断默认资产浏览，但后续应补一个局部 warning 或重试入口，避免用户误以为没有可选批次。
+- 用例资产页的批次下拉仍依赖后端默认批次列表，没有在前端解释“默认最新可见批次”的具体选择规则；如果真实用户困惑，需要后端返回当前生效批次元信息或选择依据。
 
 ### 2. 是否误伤完整生成测试用例主流程
 
@@ -247,6 +248,13 @@
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-success-narrow.png`
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/exports-error-narrow.png`
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/exports-success-narrow.png`
+- 用例资产批次范围补充验证：
+  - Playwright mock `/systems/:id/batches` 返回 503 时，页面仍展示资产树和用例表，且能看到“批次范围暂时无法加载”“不能据此判断该系统没有历史批次”“重试批次”。
+  - 正常 mock 数据下，批次范围下拉可展开并看到“账号授权 PRD · 已完成”批次选项，且没有失败 warning。
+  - 两条路径 1024 宽均无页面级横向溢出。
+  - 截图产物：
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-batch-error-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-batch-success-narrow.png`
 
 ## 当前结论
 
@@ -256,4 +264,4 @@
 
 - 审查中心 `/review` 和批次页之间继续增强上下文衔接，例如从待办队列进入后保留来源筛选。
 - 针对真实大批次数据继续验证性能、树折叠策略和表格分页体验。
-- 继续补用例资产批次范围下拉等局部失败态，并推进真实大批量数据下的性能与交互验证。
+- 继续推进真实大批量数据下的性能与交互验证，并评估是否需要后端返回“默认最新可见批次”的选择依据。

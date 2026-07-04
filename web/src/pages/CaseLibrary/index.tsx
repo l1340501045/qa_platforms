@@ -112,6 +112,8 @@ const CaseLibraryPage: React.FC = () => {
 
   // 可见批次列表（用于批次切换器）
   const [viewableBatches, setViewableBatches] = useState<SystemBatchItem[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   const loadSystems = useCallback(async () => {
     setSystemLoading(true);
@@ -124,12 +126,16 @@ const CaseLibraryPage: React.FC = () => {
       } else {
         setSelectedSystemId(undefined);
         setTreeData([]);
+        setViewableBatches([]);
+        setBatchError(null);
       }
     } catch (err) {
       setSystemError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
       setSystemOptions([]);
       setSelectedSystemId(undefined);
       setTreeData([]);
+      setViewableBatches([]);
+      setBatchError(null);
     } finally {
       setSystemLoading(false);
     }
@@ -140,22 +146,34 @@ const CaseLibraryPage: React.FC = () => {
     loadSystems();
   }, [loadSystems]);
 
-  // 当系统变更时，加载该系统的可见批次列表
-  useEffect(() => {
+  const loadViewableBatches = useCallback(async () => {
     if (!selectedSystemId) {
       setViewableBatches([]);
+      setBatchError(null);
       return;
     }
-    listSystemBatches(selectedSystemId, { per_page: 100 })
-      .then((res) => {
-        // 只保留可见状态的批次
-        const visible = res.items.filter((b) =>
-          ['pending_review', 'completed', 'archived'].includes(b.status),
-        );
-        setViewableBatches(visible);
-      })
-      .catch(() => setViewableBatches([]));
+    setBatchLoading(true);
+    setBatchError(null);
+    try {
+      const res = await listSystemBatches(selectedSystemId, { per_page: 100 });
+      // 只保留可见状态的批次
+      const visible = res.items.filter((b) =>
+        ['pending_review', 'completed', 'archived'].includes(b.status),
+      );
+      setViewableBatches(visible);
+    } catch (err) {
+      setBatchError(getErrorMessage(err, '批次范围暂时无法加载，请重试。'));
+      setViewableBatches([]);
+      setSelectedBatchId(undefined);
+    } finally {
+      setBatchLoading(false);
+    }
   }, [selectedSystemId]);
+
+  // 当系统变更时，加载该系统的可见批次列表
+  useEffect(() => {
+    loadViewableBatches();
+  }, [loadViewableBatches]);
 
   // 加载用例树
   const loadTree = useCallback(async () => {
@@ -241,7 +259,9 @@ const CaseLibraryPage: React.FC = () => {
   );
   const selectedBatchLabel = selectedBatch
     ? `${selectedBatch.document_title} · ${formatBatchStatus(selectedBatch.status)}`
-    : '默认最新可见批次';
+    : batchError
+      ? '默认最新可见批次（批次列表未加载）'
+      : '默认最新可见批次';
   const activeView = VIEW_COPY[caseTreeView];
   const hasFilters = Boolean(
     selectedBatchId || priority || reviewStatus || bucket || verdict || reviewIssueType || caseTreeView !== 'stable',
@@ -353,6 +373,8 @@ const CaseLibraryPage: React.FC = () => {
               setSelectedNodeKey('root');
               setTreeData([]);
               setTreeError(null);
+              setViewableBatches([]);
+              setBatchError(null);
             }}
             options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
           />
@@ -385,6 +407,9 @@ const CaseLibraryPage: React.FC = () => {
             style={{ width: 340 }}
             value={selectedBatchId}
             onChange={setSelectedBatchId}
+            loading={batchLoading}
+            status={batchError ? 'warning' : undefined}
+            notFoundContent={batchError ? '批次范围加载失败' : undefined}
             options={viewableBatches.map((b) => {
               const date = new Date(b.created_at).toLocaleDateString('zh-CN');
               return {
@@ -488,6 +513,21 @@ const CaseLibraryPage: React.FC = () => {
           </Button>
         </Space>
       </FilterBar>
+
+      {batchError && !batchLoading && !treeError && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="批次范围暂时无法加载"
+          description={`当前仍按默认最新可见批次展示资产；不能据此判断该系统没有历史批次。${batchError}`}
+          action={
+            <Button size="small" onClick={loadViewableBatches}>
+              重试批次
+            </Button>
+          }
+        />
+      )}
 
       {/* ─── 统计卡片 ─── */}
       <MetricStrip
