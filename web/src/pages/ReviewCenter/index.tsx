@@ -31,6 +31,8 @@ const STATUS_OPTIONS = [
 ];
 
 const VALID_STATUS_VALUES = new Set(STATUS_OPTIONS.map((item) => item.value));
+const LANE_COLLAPSED_LIMIT = 3;
+const LANE_FETCH_LIMIT = 8;
 
 const STATUS_TAG: Record<string, { tone: StatusTone; text: string }> = {
   pending_review: { tone: 'warning', text: '待审核' },
@@ -65,18 +67,18 @@ const WORKBENCH_LANES: Array<{
     tone: 'danger',
   },
   {
+    status: 'pending_review',
+    title: '待审核',
+    description: '用例已生成，等待 QA 审查确认。',
+    emptyText: '暂无待审核批次',
+    tone: 'warning',
+  },
+  {
     status: 'running',
     title: '生成中',
     description: '流水线正在执行，可进入查看阶段进度。',
     emptyText: '暂无运行中批次',
     tone: 'processing',
-  },
-  {
-    status: 'pending_review',
-    title: '待审核',
-    description: '用例已生成，等待 QA 审查确认。',
-    emptyText: '暂无待审核批次',
-    tone: 'info',
   },
 ];
 
@@ -85,7 +87,7 @@ function createEmptyBatchPage(): PaginatedData<ReviewBatch> {
     items: [],
     total: 0,
     page: 1,
-    per_page: 3,
+    per_page: LANE_FETCH_LIMIT,
     total_pages: 0,
   };
 }
@@ -128,6 +130,12 @@ function getStatusLabel(status: string): string {
   return STATUS_OPTIONS.find((item) => item.value === status)?.label || '全部';
 }
 
+function formatBatchCreatedAt(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '-';
+  return date.toLocaleString('zh-CN');
+}
+
 const ReviewCenter: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -139,6 +147,7 @@ const ReviewCenter: React.FC = () => {
   const [laneData, setLaneData] = useState<Record<WorkbenchLaneStatus, PaginatedData<ReviewBatch>>>(
     () => createInitialLaneData(),
   );
+  const [expandedLanes, setExpandedLanes] = useState<Partial<Record<WorkbenchLaneStatus, boolean>>>({});
   const [data, setData] = useState<PaginatedData<ReviewBatch>>({
     items: [],
     total: 0,
@@ -181,7 +190,7 @@ const ReviewCenter: React.FC = () => {
           data: await listBatches({
             status: lane.status,
             page: 1,
-            per_page: 3,
+            per_page: LANE_FETCH_LIMIT,
           }),
         })),
       );
@@ -239,6 +248,13 @@ const ReviewCenter: React.FC = () => {
     [setSearchParams],
   );
 
+  const toggleLaneExpanded = useCallback((laneStatus: WorkbenchLaneStatus) => {
+    setExpandedLanes((current) => ({
+      ...current,
+      [laneStatus]: !current[laneStatus],
+    }));
+  }, []);
+
   const buildBatchUrl = useCallback(
     (batchId: string, sourceStatus = status) => {
       const params = new URLSearchParams({ from: 'review' });
@@ -284,7 +300,7 @@ const ReviewCenter: React.FC = () => {
       dataIndex: 'created_at',
       key: 'created_at',
       width: 180,
-      render: (val: string) => new Date(val).toLocaleString('zh-CN'),
+      render: formatBatchCreatedAt,
     },
     {
       title: '操作',
@@ -347,6 +363,14 @@ const ReviewCenter: React.FC = () => {
         />
       )}
 
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 16 }}
+        message="推荐处理顺序：待澄清 -> 失败 -> 待审核 -> 生成中"
+        description="每个队列按创建时间倒序展示最近批次；默认露出 3 条，展开可看最近 8 条，完整列表用下方状态筛选分页查看。"
+      />
+
       <Spin spinning={laneLoading}>
         <div
           style={{
@@ -358,6 +382,10 @@ const ReviewCenter: React.FC = () => {
         >
           {WORKBENCH_LANES.map((lane) => {
             const lanePage = laneData[lane.status];
+            const expanded = Boolean(expandedLanes[lane.status]);
+            const visibleLimit = expanded ? LANE_FETCH_LIMIT : LANE_COLLAPSED_LIMIT;
+            const visibleItems = lanePage.items.slice(0, visibleLimit);
+            const canExpand = lanePage.items.length > LANE_COLLAPSED_LIMIT;
             return (
               <Card
                 key={lane.status}
@@ -395,7 +423,7 @@ const ReviewCenter: React.FC = () => {
                   </div>
                 ) : (
                   <div style={{ display: 'grid', gap: 8 }}>
-                    {lanePage.items.map((batch) => (
+                    {visibleItems.map((batch) => (
                       <button
                         key={batch.id}
                         type="button"
@@ -447,8 +475,45 @@ const ReviewCenter: React.FC = () => {
                             {batch.total_cases ?? 0} 例
                           </span>
                         </div>
+                        <div style={{ marginTop: 4, color: layoutTokens.textMuted, fontSize: 12 }}>
+                          创建：{formatBatchCreatedAt(batch.created_at)}
+                        </div>
                       </button>
                     ))}
+                    {(canExpand || lanePage.total > visibleItems.length) && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          gap: 8,
+                          paddingTop: 4,
+                        }}
+                      >
+                        {canExpand ? (
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => toggleLaneExpanded(lane.status)}
+                            style={{ paddingInline: 0 }}
+                          >
+                            {expanded ? '收起' : `展开最近 ${Math.min(lanePage.items.length, LANE_FETCH_LIMIT)} 条`}
+                          </Button>
+                        ) : (
+                          <span />
+                        )}
+                        {lanePage.total > visibleItems.length && (
+                          <Button
+                            type="link"
+                            size="small"
+                            onClick={() => applyStatusFilter(lane.status)}
+                            style={{ paddingInline: 0 }}
+                          >
+                            查看全部 {lanePage.total} 条
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </Card>
