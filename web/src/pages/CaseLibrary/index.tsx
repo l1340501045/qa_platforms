@@ -309,6 +309,9 @@ const CaseLibraryPage: React.FC = () => {
   );
   const hasSystem = Boolean(selectedSystemId);
   const assetMetricUnavailable = Boolean(treeError && !treeLoading);
+  const pendingAssetCount = stats.pending + stats.needsModification;
+  const shouldShowReviewDebtNotice =
+    hasSystem && caseTreeView === 'stable' && !assetMetricUnavailable && pendingAssetCount > 0;
 
   const clearFilters = () => {
     setCaseTreeView('stable');
@@ -324,6 +327,12 @@ const CaseLibraryPage: React.FC = () => {
     if (selectedSystemId) {
       navigate(`/systems/${selectedSystemId}/documents`);
     }
+  };
+
+  const showReviewRequiredAssets = () => {
+    setCaseTreeView('review_required');
+    setBucket(undefined);
+    setSelectedNodeKey('root');
   };
 
   return (
@@ -595,6 +604,26 @@ const CaseLibraryPage: React.FC = () => {
           { key: 'duplicates', label: '重复标记', value: assetMetricUnavailable ? '-' : stats.duplicate },
         ]}
       />
+
+      {shouldShowReviewDebtNotice && (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="主集候选仍有待处理用例"
+          description={`当前主集候选中有 ${pendingAssetCount} 条待审或需修改用例。确认后再用于复用、搜索或导出会更稳。`}
+          action={
+            <Space wrap>
+              <Button size="small" onClick={showReviewRequiredAssets}>
+                查看待处理资产
+              </Button>
+              <Button size="small" onClick={() => navigate('/review?status=pending_review')}>
+                去工作台审查
+              </Button>
+            </Space>
+          }
+        />
+      )}
 
       {/* ─── 主体：左树右表 ─── */}
       <SplitPane
