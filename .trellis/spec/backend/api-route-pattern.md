@@ -86,6 +86,7 @@ async def list_systems(
 - 分页：`page: int = Query(1, ge=1)`、`per_page: int = Query(20, ge=1, le=100)`。
 - 可选过滤：`status: str | None = Query(None, description="按状态过滤")`。
 - 请求体：来自 `schemas/`，如 `body: ClarificationRequest`；可选体用 `Body | None = None`。
+- 分页列表必须在 Service 查询里写确定性 `order_by(...)`，不要依赖数据库默认顺序。常规后台列表优先 `created_at.desc()`，并用 `id.desc()` 做同时间兜底；否则同一页内容可能漂移，测试夹具也可能被真实历史数据挤出当前页。
 
 ```python
 # src/platform_api/api/v1/batches.py:82
@@ -95,6 +96,17 @@ async def list_batches(
     per_page: int = Query(20, ge=1, le=100),
     service: BatchListService = Depends(_get_batch_list_service),
 ):
+```
+
+```python
+# src/platform_api/services/system_service.py:70
+stmt = (
+    select(...)
+    .outerjoin(...)
+    .order_by(System.created_at.desc(), System.id.desc())
+    .offset(offset)
+    .limit(limit)
+)
 ```
 
 ---

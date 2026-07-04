@@ -67,6 +67,7 @@ class SystemService:
             )
             .outerjoin(doc_counts, doc_counts.c.system_id == System.id)
             .outerjoin(batch_counts, batch_counts.c.system_id == System.id)
+            .order_by(System.created_at.desc(), System.id.desc())
             .offset(offset)
             .limit(limit)
         )
