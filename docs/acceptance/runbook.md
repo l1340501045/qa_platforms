@@ -8,7 +8,13 @@
 
 ## 0. 先确认代码状态
 
-在仓库根目录执行：
+在仓库根目录先跑静态预检。如果 API / frontend / worker 还没启动，用这个命令即可：
+
+```bash
+uv run python scripts/ux_acceptance_preflight.py --skip-runtime
+```
+
+也可以手工核对：
 
 ```bash
 git status --short --branch
@@ -44,6 +50,12 @@ npm run dev -- --host 0.0.0.0 --port 3000
 curl http://127.0.0.1:8000/health
 curl -I http://127.0.0.1:3000
 uv run celery -A src.platform_api.core.celery_app.celery_app inspect ping --timeout=5
+```
+
+服务启动后，推荐直接跑完整预检：
+
+```bash
+uv run python scripts/ux_acceptance_preflight.py
 ```
 
 期望：
