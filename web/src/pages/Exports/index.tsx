@@ -4,24 +4,31 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Modal,
   Radio,
   Select,
+  Space,
   Spin,
   Table,
+  Tag,
+  Typography,
   message,
 } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
 import { createExport, listExports } from '../../services/exportApi';
 import { listSystemOptions, listSystemBatches } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
+import EmptyState from '../../components/common/EmptyState';
+import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
 import type {
   CreateExportRequest,
   ExportFormat,
@@ -31,11 +38,28 @@ import type {
   PaginatedData,
 } from '../../types';
 
+const { Text } = Typography;
+
 // ─── 状态 Badge 映射 ───
 const STATUS_MAP: Record<ExportStatus, { status: 'processing' | 'success' | 'error'; text: string }> = {
   processing: { status: 'processing', text: '处理中' },
   completed: { status: 'success', text: '已完成' },
   failed: { status: 'error', text: '失败' },
+};
+
+const SCOPE_LABEL: Record<ExportScope, string> = {
+  batch: '批次',
+  system: '系统',
+};
+
+const FORMAT_LABEL: Record<ExportFormat, string> = {
+  markdown: 'Markdown',
+  excel: 'Excel',
+};
+
+const FORMAT_HELP: Record<ExportFormat, string> = {
+  markdown: '适合评审、归档和人工阅读。',
+  excel: '适合导入外部测试管理工具或继续二次处理。',
 };
 
 const POLL_INTERVAL = 3000;
@@ -61,15 +85,18 @@ const Exports: React.FC = () => {
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [batchOptions, setBatchOptions] = useState<SystemBatchItem[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<ExportStatus | undefined>();
 
   // ─── 轮询 ───
   const pollTimerRef = useRef<number | null>(null);
+  const statusFilterRef = useRef<ExportStatus | undefined>(statusFilter);
+  statusFilterRef.current = statusFilter;
 
   // ─── 加载列表 ───
-  const fetchList = useCallback(async (page = 1, perPage = 20) => {
+  const fetchList = useCallback(async (page = 1, perPage = 20, status?: ExportStatus) => {
     setLoading(true);
     try {
-      const result = await listExports({ page, per_page: perPage });
+      const result = await listExports({ page, per_page: perPage, status });
       setData(result);
     } catch {
       message.error('加载导出列表失败');
@@ -90,7 +117,11 @@ const Exports: React.FC = () => {
         pollTimerRef.current = window.setInterval(async () => {
           try {
             const current = dataRef.current;
-            const result = await listExports({ page: current.page, per_page: current.per_page });
+            const result = await listExports({
+              page: current.page,
+              per_page: current.per_page,
+              status: statusFilterRef.current,
+            });
             setData(result);
             // 如果没有 processing 任务了，停止轮询
             if (!result.items.some((t) => t.status === 'processing')) {
@@ -133,10 +164,15 @@ const Exports: React.FC = () => {
   // ─── 分页变化 ───
   const handlePageChange = useCallback(
     (page: number, pageSize: number) => {
-      fetchList(page, pageSize);
+      fetchList(page, pageSize, statusFilter);
     },
-    [fetchList],
+    [fetchList, statusFilter],
   );
+
+  const handleStatusFilterChange = (value?: ExportStatus) => {
+    setStatusFilter(value);
+    fetchList(1, data.per_page, value);
+  };
 
   // ─── 创建导出 ───
   const handleCreate = useCallback(async () => {
@@ -162,13 +198,13 @@ const Exports: React.FC = () => {
       setModalOpen(false);
       resetForm();
       // 刷新列表
-      await fetchList(1, data.per_page);
+      await fetchList(1, data.per_page, statusFilter);
     } catch {
       message.error('创建导出任务失败');
     } finally {
       setCreateLoading(false);
     }
-  }, [formScope, formFormat, formBatchId, formSystemId, fetchList, data.per_page]);
+  }, [formScope, formFormat, formBatchId, formSystemId, fetchList, data.per_page, statusFilter]);
 
   const resetForm = () => {
     setFormScope('batch');
@@ -209,25 +245,42 @@ const Exports: React.FC = () => {
   // ─── 表格列 ───
   const columns: ColumnsType<ExportTask> = [
     {
-      title: 'ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 100,
-      render: (val: string) => val.slice(0, 8),
-    },
-    {
-      title: '范围',
-      dataIndex: 'export_scope',
-      key: 'export_scope',
-      width: 80,
-      render: (val: ExportScope) => (val === 'batch' ? '批次' : '系统'),
-    },
-    {
-      title: '格式',
-      dataIndex: 'format',
-      key: 'format',
-      width: 100,
-      render: (val: ExportFormat) => (val === 'markdown' ? 'Markdown' : 'Excel'),
+      title: '导出任务',
+      key: 'task',
+      width: 360,
+      render: (_, record) => (
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Space size={8} wrap>
+            <Text strong>{SCOPE_LABEL[record.export_scope]}导出</Text>
+            <Tag>{FORMAT_LABEL[record.format]}</Tag>
+            <Text type="secondary">#{record.id.slice(0, 8)}</Text>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            创建于 {new Date(record.created_at).toLocaleString('zh-CN')}
+            {record.total_cases != null ? ` · ${record.total_cases} 条用例` : ''}
+          </Text>
+          <Space size={8} wrap>
+            {record.status === 'completed' && record.file_url ? (
+              <Button
+                type="link"
+                size="small"
+                icon={<DownloadOutlined />}
+                href={record.file_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ paddingInline: 0 }}
+              >
+                下载文件
+              </Button>
+            ) : null}
+            {record.status === 'failed' && (
+              <Text type="danger" style={{ fontSize: 13 }}>
+                {record.error_message || '导出失败，可重新创建任务'}
+              </Text>
+            )}
+          </Space>
+        </Space>
+      ),
     },
     {
       title: '状态',
@@ -240,83 +293,127 @@ const Exports: React.FC = () => {
       },
     },
     {
-      title: '文件',
-      dataIndex: 'file_url',
-      key: 'file_url',
-      width: 100,
-      render: (val: string | null, record: ExportTask) => {
-        if (record.status === 'completed' && val) {
-          return (
-            <a href={val} target="_blank" rel="noopener noreferrer">
-              下载
-            </a>
-          );
-        }
-        return '-';
-      },
+      title: '范围',
+      dataIndex: 'export_scope',
+      key: 'export_scope',
+      width: 90,
+      render: (val: ExportScope) => SCOPE_LABEL[val],
     },
     {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 180,
-      render: (val: string) => new Date(val).toLocaleString('zh-CN'),
+      title: '格式',
+      dataIndex: 'format',
+      key: 'format',
+      width: 120,
+      render: (val: ExportFormat) => FORMAT_LABEL[val],
+    },
+    {
+      title: '完成时间',
+      dataIndex: 'completed_at',
+      key: 'completed_at',
+      width: 170,
+      render: (val: string | null) => (val ? new Date(val).toLocaleString('zh-CN') : '-'),
     },
   ];
+
+  const processingCount = data.items.filter((item) => item.status === 'processing').length;
+  const completedCount = data.items.filter((item) => item.status === 'completed').length;
+  const failedCount = data.items.filter((item) => item.status === 'failed').length;
+  const downloadableCount = data.items.filter((item) => item.status === 'completed' && item.file_url).length;
 
   return (
     <PageShell>
       <PageHeader
         eyebrow="导出中心"
-        title="用例导出任务"
-        description="按批次或系统导出 Markdown/Excel，用于评审交付或同步到外部测试管理工具。"
+        title="用例交付导出"
+        description="从已审查批次或系统资产生成交付文件；Markdown 适合评审归档，Excel 适合同步外部测试管理工具。"
         actions={
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
-            新建导出
-          </Button>
+          <>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => fetchList(data.page, data.per_page, statusFilter)}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+              新建导出
+            </Button>
+          </>
         }
+      />
+
+      <Alert
+        type={processingCount > 0 ? 'info' : 'success'}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={processingCount > 0 ? '导出任务正在生成，页面会自动刷新状态' : '导出中心用于拿到可交付文件'}
+        description="建议先完成批次审查或落库，再从这里导出批次结果或系统资产快照。完成后直接下载文件；失败任务可按相同范围重新创建。"
       />
 
       <MetricStrip
         items={[
           { key: 'total', label: '任务总数', value: data.total },
-          {
-            key: 'processing',
-            label: '处理中',
-            value: data.items.filter((item) => item.status === 'processing').length,
-            tone: 'primary',
-          },
-          {
-            key: 'completed',
-            label: '本页已完成',
-            value: data.items.filter((item) => item.status === 'completed').length,
-            tone: 'success',
-          },
-          {
-            key: 'failed',
-            label: '本页失败',
-            value: data.items.filter((item) => item.status === 'failed').length,
-            tone: 'danger',
-          },
+          { key: 'processing', label: '本页处理中', value: processingCount, tone: 'primary' },
+          { key: 'completed', label: '本页已完成', value: completedCount, tone: 'success' },
+          { key: 'downloadable', label: '可下载文件', value: downloadableCount, tone: 'success' },
+          { key: 'failed', label: '本页失败', value: failedCount, tone: 'danger' },
         ]}
       />
 
+      <FilterBar>
+        <Text strong>任务状态</Text>
+        <Select<ExportStatus | undefined>
+          allowClear
+          placeholder="全部状态"
+          style={{ width: 160 }}
+          value={statusFilter}
+          onChange={handleStatusFilterChange}
+          options={[
+            { value: 'processing', label: '处理中' },
+            { value: 'completed', label: '已完成' },
+            { value: 'failed', label: '失败' },
+          ]}
+        />
+        <Text type="secondary">筛选会请求后端导出列表，不只是当前页过滤。</Text>
+      </FilterBar>
+
       {/* ─── 列表 ─── */}
       <Spin spinning={loading}>
-        <Table<ExportTask>
-          rowKey="id"
-          columns={columns}
-          dataSource={data.items}
-          pagination={{
-            current: data.page,
-            pageSize: data.per_page,
-            total: data.total,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条`,
-            onChange: handlePageChange,
-          }}
-          size="middle"
-        />
+        {data.items.length === 0 ? (
+          <EmptyState
+            title={statusFilter ? '当前状态下没有导出任务' : '还没有导出任务'}
+            description={statusFilter ? '可以切换状态筛选，或新建一个导出任务。' : '从已审查批次或系统资产创建一个导出任务，完成后可下载交付文件。'}
+            action={
+              <Space wrap>
+                {statusFilter && <Button onClick={() => handleStatusFilterChange(undefined)}>查看全部</Button>}
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                  新建导出
+                </Button>
+              </Space>
+            }
+          />
+        ) : (
+          <div
+            style={{
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              overflow: 'hidden',
+            }}
+          >
+            <Table<ExportTask>
+              rowKey="id"
+              columns={columns}
+              dataSource={data.items}
+              pagination={{
+                current: data.page,
+                pageSize: data.per_page,
+                total: data.total,
+                showSizeChanger: true,
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: handlePageChange,
+              }}
+              size="middle"
+              scroll={{ x: 760 }}
+            />
+          </div>
+        )}
       </Spin>
 
       {/* ─── 新建导出 Modal ─── */}
@@ -332,6 +429,13 @@ const Exports: React.FC = () => {
         okText="创建"
         cancelText="取消"
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="选择导出范围和交付格式"
+          description="批次导出适合交付单次生成和审查结果；系统导出适合拿到当前系统的资产快照。"
+        />
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 8 }}>范围：</div>
           <Radio.Group
@@ -354,6 +458,9 @@ const Exports: React.FC = () => {
             <Radio value="markdown">Markdown</Radio>
             <Radio value="excel">Excel</Radio>
           </Radio.Group>
+          <div style={{ marginTop: 8, color: layoutTokens.textSecondary }}>
+            {FORMAT_HELP[formFormat]}
+          </div>
         </div>
 
         {formScope === 'batch' ? (
