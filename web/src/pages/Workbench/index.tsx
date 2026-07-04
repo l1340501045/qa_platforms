@@ -3,7 +3,7 @@
  * 核心页面：阶段进度 + 用例 Review + Gate 澄清 + 迭代/落库
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Alert,
   Badge,
@@ -22,6 +22,7 @@ import {
   message,
 } from 'antd';
 import {
+  ArrowLeftOutlined,
   CheckOutlined,
   CloseOutlined,
   ExclamationCircleOutlined,
@@ -97,6 +98,17 @@ const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
   deleted: '已删除',
 };
 
+const REVIEW_RETURN_STATUS_LABELS: Partial<Record<BatchStatus, string>> = {
+  suspended: '待澄清',
+  failed: '失败',
+  running: '生成中',
+  pending_review: '待审核',
+  pending: '排队中',
+  reviewing: '审核中',
+  completed: '已完成',
+  archived: '已落库',
+};
+
 const GUIDANCE_BY_STATUS: Record<BatchStatus, { type: 'success' | 'info' | 'warning' | 'error'; message: string; description: string }> = {
   pending: {
     type: 'info',
@@ -145,8 +157,15 @@ function getStageLabel(stageName?: string | null): string {
   return STAGE_LABELS[stageName] || stageName;
 }
 
+function normalizeReviewReturnStatus(value: string | null): BatchStatus | undefined {
+  if (!value) return undefined;
+  return value in REVIEW_RETURN_STATUS_LABELS ? (value as BatchStatus) : undefined;
+}
+
 const Workbench: React.FC = () => {
   const { batchId } = useParams<{ batchId: string }>();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   // Store
   const {
@@ -413,6 +432,16 @@ const Workbench: React.FC = () => {
   const totalCasesForDisplay = allCasesForIterate.length || batch?.total_cases || 0;
   const openQuestionCount = openQuestions?.length ?? 0;
   const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
+  const cameFromReview = searchParams.get('from') === 'review';
+  const reviewReturnStatus = cameFromReview
+    ? normalizeReviewReturnStatus(searchParams.get('status'))
+    : undefined;
+  const reviewReturnUrl = reviewReturnStatus
+    ? `/review?status=${reviewReturnStatus}`
+    : '/review';
+  const reviewReturnLabel = reviewReturnStatus
+    ? `返回工作台（${REVIEW_RETURN_STATUS_LABELS[reviewReturnStatus]}）`
+    : '返回工作台';
 
   const metricItems = useMemo(() => {
     if (!batch) return [];
@@ -523,6 +552,16 @@ const Workbench: React.FC = () => {
       )}
     </>
   );
+  const renderHeaderActions = () => (
+    <>
+      {cameFromReview && (
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(reviewReturnUrl)}>
+          {reviewReturnLabel}
+        </Button>
+      )}
+      {renderPrimaryActions()}
+    </>
+  );
 
   return (
     <PageShell>
@@ -531,7 +570,7 @@ const Workbench: React.FC = () => {
         title={batch.document_title || '用例工作台'}
         description="集中查看批次状态、质量门澄清和候选用例审查；先处理阻塞，再按模块逐块确认、修改或落库。"
         meta={<Badge status={badgeCfg.status} text={badgeCfg.text} />}
-        actions={renderPrimaryActions()}
+        actions={renderHeaderActions()}
       />
 
       <MetricStrip items={metricItems} />

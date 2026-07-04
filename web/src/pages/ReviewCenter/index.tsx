@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Button, Card, Select, Spin, Table, Typography } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
 
 import { listBatches } from '../../services/batchApi';
@@ -29,6 +29,8 @@ const STATUS_OPTIONS = [
   { value: 'completed', label: '已完成' },
   { value: 'archived', label: '已落库' },
 ];
+
+const VALID_STATUS_VALUES = new Set(STATUS_OPTIONS.map((item) => item.value));
 
 const STATUS_TAG: Record<string, { tone: StatusTone; text: string }> = {
   pending_review: { tone: 'warning', text: '待审核' },
@@ -118,13 +120,22 @@ function getBatchActionLabel(status: BatchStatus): string {
   }
 }
 
+function normalizeStatusParam(value: string | null): string {
+  return value && VALID_STATUS_VALUES.has(value) ? value : '';
+}
+
+function getStatusLabel(status: string): string {
+  return STATUS_OPTIONS.find((item) => item.value === status)?.label || '全部';
+}
+
 const ReviewCenter: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [laneLoading, setLaneLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
   const [laneError, setLaneError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string>('');
+  const [status, setStatus] = useState<string>(() => normalizeStatusParam(searchParams.get('status')));
   const [laneData, setLaneData] = useState<Record<WorkbenchLaneStatus, PaginatedData<ReviewBatch>>>(
     () => createInitialLaneData(),
   );
@@ -192,6 +203,11 @@ const ReviewCenter: React.FC = () => {
   }, [fetchList, status]);
 
   useEffect(() => {
+    const nextStatus = normalizeStatusParam(searchParams.get('status'));
+    setStatus((current) => (current === nextStatus ? current : nextStatus));
+  }, [searchParams]);
+
+  useEffect(() => {
     fetchWorkbenchLanes();
   }, [fetchWorkbenchLanes]);
 
@@ -205,6 +221,33 @@ const ReviewCenter: React.FC = () => {
   const retryList = useCallback(() => {
     fetchList(data.page || 1, data.per_page || 20, status || undefined);
   }, [data.page, data.per_page, fetchList, status]);
+
+  const applyStatusFilter = useCallback(
+    (nextStatus: string) => {
+      const normalized = normalizeStatusParam(nextStatus);
+      setStatus(normalized);
+      setSearchParams((current) => {
+        const next = new URLSearchParams(current);
+        if (normalized) {
+          next.set('status', normalized);
+        } else {
+          next.delete('status');
+        }
+        return next;
+      }, { replace: true });
+    },
+    [setSearchParams],
+  );
+
+  const buildBatchUrl = useCallback(
+    (batchId: string, sourceStatus = status) => {
+      const params = new URLSearchParams({ from: 'review' });
+      const normalized = normalizeStatusParam(sourceStatus);
+      if (normalized) params.set('status', normalized);
+      return `/batches/${batchId}?${params.toString()}`;
+    },
+    [status],
+  );
 
   const columns: ColumnsType<ReviewBatch> = [
     {
@@ -248,7 +291,7 @@ const ReviewCenter: React.FC = () => {
       key: 'action',
       width: 100,
       render: (_, record) => (
-        <Button type="link" size="small" onClick={() => navigate(`/batches/${record.id}`)}>
+        <Button type="link" size="small" onClick={() => navigate(buildBatchUrl(record.id))}>
           {getBatchActionLabel(record.status)}
         </Button>
       ),
@@ -329,7 +372,7 @@ const ReviewCenter: React.FC = () => {
                   <Button
                     type="link"
                     size="small"
-                    onClick={() => setStatus(lane.status)}
+                    onClick={() => applyStatusFilter(lane.status)}
                     style={{ paddingInline: 0 }}
                   >
                     筛选
@@ -356,7 +399,7 @@ const ReviewCenter: React.FC = () => {
                       <button
                         key={batch.id}
                         type="button"
-                        onClick={() => navigate(`/batches/${batch.id}`)}
+                        onClick={() => navigate(buildBatchUrl(batch.id, lane.status))}
                         style={{
                           width: '100%',
                           minHeight: 52,
@@ -423,7 +466,7 @@ const ReviewCenter: React.FC = () => {
           placeholder="按状态筛选"
           style={{ width: 160 }}
           value={status || undefined}
-          onChange={(val) => setStatus(val || '')}
+          onChange={(val) => applyStatusFilter(val || '')}
           options={STATUS_OPTIONS}
         />
       </FilterBar>
@@ -439,7 +482,7 @@ const ReviewCenter: React.FC = () => {
         ) : data.items.length === 0 && !loading ? (
           <EmptyState
             title="当前筛选下没有批次"
-            description="可切换状态查看审核中、已完成或已落库的批次。"
+            description={`当前状态：${getStatusLabel(status)}。可切换状态查看审核中、已完成或已落库的批次。`}
           />
         ) : (
           <Table<ReviewBatch>
