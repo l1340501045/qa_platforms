@@ -137,6 +137,7 @@
 - 队列卡片的“筛选”按钮只改变下方表格状态筛选，不跳走页面。
 - 批次动作文案必须匹配状态，不要所有状态都叫“去审核”。
 - 从待办队列或批次表进入 `/batches/:batchId` 时，应带上 `from=review&status=<batch_status>`；批次页顶部需要提供“返回工作台（待澄清/失败/生成中/待审核）”这类上下文返回入口。
+- 从通知中心进入批次页时，也必须带上工作台上下文：`batch_suspended -> status=suspended`、`batch_failed -> status=failed`、`batch_completed -> status=pending_review`。这里的 `batch_completed` 表示流水线完成并进入 QA 待审，不是批次已归档完成。
 
 ```tsx
 switch (batch.status) {
@@ -155,6 +156,7 @@ switch (batch.status) {
 
 - 具备 QA 背景但首次使用本平台的人需要先知道“今天该处理什么”，而不是先理解所有批次状态。
 - 生成中/失败/待澄清/待审核是不同工作动作，统一成“去审核”会误导。
+- 通知是工作台待办的被动入口；如果裸跳批次页，QA 处理完后无法回到对应队列继续下一条。
 - 这种聚合只使用现有 API 查询能力，不影响生成 pipeline。
 
 ## 知识库主流程入口

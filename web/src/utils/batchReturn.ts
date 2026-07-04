@@ -1,4 +1,12 @@
+import type { BatchStatus, NotificationType } from '../types';
+
 const SEARCH_CONTEXT_KEYS = ['q', 'system_id', 'priority', 'review_status', 'page'] as const;
+
+const NOTIFICATION_REVIEW_STATUS: Record<NotificationType, BatchStatus> = {
+  batch_completed: 'pending_review',
+  batch_failed: 'failed',
+  batch_suspended: 'suspended',
+};
 
 function appendIfPresent(params: URLSearchParams, key: string, value: string | null | undefined) {
   if (!value) return;
@@ -37,6 +45,18 @@ export function buildDocumentBatchUrl(
     appendSearchContext(params, sourceParams);
   }
 
+  return `/batches/${encodeURIComponent(batchId)}?${params.toString()}`;
+}
+
+export function getNotificationReviewStatus(type: NotificationType): BatchStatus {
+  return NOTIFICATION_REVIEW_STATUS[type];
+}
+
+export function buildNotificationBatchUrl(batchId: string, type: NotificationType): string {
+  const params = new URLSearchParams({
+    from: 'review',
+    status: getNotificationReviewStatus(type),
+  });
   return `/batches/${encodeURIComponent(batchId)}?${params.toString()}`;
 }
 

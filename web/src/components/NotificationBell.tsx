@@ -25,6 +25,7 @@ import {
   markNotificationRead,
 } from '../services/notificationApi';
 import type { Notification, PaginatedData } from '../types';
+import { buildNotificationBatchUrl } from '../utils/batchReturn';
 
 const { Text } = Typography;
 
@@ -145,7 +146,7 @@ const NotificationBell: React.FC = () => {
     }
     if (notification.target_type === 'batch' && notification.target_id) {
       setDrawerOpen(false);
-      navigate(`/batches/${notification.target_id}`);
+      navigate(buildNotificationBatchUrl(notification.target_id, notification.type));
     }
   };
 
