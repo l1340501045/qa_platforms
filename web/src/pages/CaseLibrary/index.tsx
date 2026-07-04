@@ -5,17 +5,24 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Card,
+  Alert,
+  Button,
   Select,
+  Segmented,
+  Space,
   Spin,
+  Tag,
   Typography,
 } from 'antd';
-import { ApartmentOutlined } from '@ant-design/icons';
+import { ApartmentOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 
 import { getCaseTree, listSystemBatches, listSystemOptions } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
 import CaseDetailDrawer from '../../components/CaseDetailDrawer';
+import EmptyState from '../../components/common/EmptyState';
 import {
+  type CaseAssetNode,
   findCaseAssetNode,
   getCasesForNode,
   normalizeCaseTreeDocuments,
@@ -36,10 +43,52 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import SplitPane from '../../components/layout/SplitPane';
+import { layoutTokens } from '../../components/layout/tokens';
 
 const { Text } = Typography;
 
+const VIEW_COPY: Record<CaseTreeView, { label: string; message: string; description: string }> = {
+  stable: {
+    label: '稳定主集',
+    message: '当前展示可复用、可落库的稳定资产',
+    description: '适合回归选择、导出复用和查看已沉淀的主集用例；需要排查重复或异常时切到全部资产。',
+  },
+  all: {
+    label: '全部资产',
+    message: '当前展示完整资产池',
+    description: '包含重复、待处理和稳定资产，适合做全量追溯、质量排查或核对生成结果。',
+  },
+  review_required: {
+    label: '待处理资产',
+    message: '当前聚焦需要 QA 处理的资产',
+    description: '优先处理待审、需修改、待澄清或核验不确定的用例，再进入落库和复用。',
+  },
+};
+
+const NODE_TYPE_LABEL: Record<CaseAssetNode['type'], string> = {
+  root: '系统',
+  document: '文档',
+  module: '模块',
+  branch: '分支',
+};
+
+function countBranchNodes(nodes: CaseAssetNode[]): number {
+  return nodes.reduce((sum, node) => {
+    const self = node.type === 'branch' ? 1 : 0;
+    return sum + self + countBranchNodes(node.children);
+  }, 0);
+}
+
+function formatBatchStatus(status: string): string {
+  if (status === 'pending_review') return '待审阅';
+  if (status === 'completed') return '已完成';
+  if (status === 'archived') return '已落库';
+  return status;
+}
+
 const CaseLibraryPage: React.FC = () => {
+  const navigate = useNavigate();
+
   // ─── State ───
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<string | undefined>();
@@ -67,6 +116,9 @@ const CaseLibraryPage: React.FC = () => {
         setSystemOptions(opts);
         if (opts.length > 0) {
           setSelectedSystemId(opts[0].id);
+        } else {
+          setSelectedSystemId(undefined);
+          setTreeData([]);
         }
       })
       .catch(() => {});
@@ -106,6 +158,8 @@ const CaseLibraryPage: React.FC = () => {
       });
       setTreeData(data);
       setSelectedNodeKey('root');
+    } catch {
+      setTreeData([]);
     } finally {
       setTreeLoading(false);
     }
@@ -142,6 +196,11 @@ const CaseLibraryPage: React.FC = () => {
     return selectedNode?.title || '全部用例';
   }, [caseAssetTree, selectedNodeKey]);
 
+  const selectedNode = useMemo(
+    () => findCaseAssetNode(caseAssetTree.root, selectedNodeKey),
+    [caseAssetTree, selectedNodeKey],
+  );
+
   // ─── 统计 ───
   const stats = useMemo(() => {
     const all = getCasesForNode(caseAssetTree.root.key, caseAssetTree);
@@ -150,10 +209,42 @@ const CaseLibraryPage: React.FC = () => {
       p0: all.filter((c) => c.priority === 'P0').length,
       confirmed: all.filter((c) => c.review_status === 'confirmed').length,
       pending: all.filter((c) => c.review_status === 'pending').length,
+      needsModification: all.filter((c) => c.review_status === 'needs_modification').length,
+      duplicate: all.filter((c) => c.is_duplicate || c.duplicate_of).length,
       docCount: caseAssetTree.root.children.length,
       moduleCount: caseAssetTree.root.children.reduce((sum, doc) => sum + doc.children.length, 0),
+      branchCount: countBranchNodes(caseAssetTree.root.children),
     };
   }, [caseAssetTree]);
+
+  const selectedBatch = useMemo(
+    () => viewableBatches.find((b) => b.id === selectedBatchId),
+    [selectedBatchId, viewableBatches],
+  );
+  const selectedBatchLabel = selectedBatch
+    ? `${selectedBatch.document_title} · ${formatBatchStatus(selectedBatch.status)}`
+    : '默认最新可见批次';
+  const activeView = VIEW_COPY[caseTreeView];
+  const hasFilters = Boolean(
+    selectedBatchId || priority || reviewStatus || bucket || verdict || reviewIssueType || caseTreeView !== 'stable',
+  );
+  const hasSystem = Boolean(selectedSystemId);
+
+  const clearFilters = () => {
+    setCaseTreeView('stable');
+    setSelectedBatchId(undefined);
+    setPriority(undefined);
+    setReviewStatus(undefined);
+    setBucket(undefined);
+    setVerdict(undefined);
+    setReviewIssueType(undefined);
+  };
+
+  const openKnowledgeBase = () => {
+    if (selectedSystemId) {
+      navigate(`/systems/${selectedSystemId}/documents`);
+    }
+  };
 
   return (
     <PageShell>
@@ -165,173 +256,320 @@ const CaseLibraryPage: React.FC = () => {
             用例资产
           </>
         }
-        description="按系统、批次、资产视图和质量状态浏览沉淀后的用例，模块树支持多级分支。"
+        description="先选系统，再按稳定主集、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。"
+        actions={
+          <>
+            <Button icon={<ReloadOutlined />} loading={treeLoading} disabled={!hasSystem} onClick={loadTree}>
+              刷新资产
+            </Button>
+            <Button type="primary" icon={<FolderOpenOutlined />} disabled={!hasSystem} onClick={openKnowledgeBase}>
+              上传/生成
+            </Button>
+          </>
+        }
       />
 
-      {/* ─── 筛选栏 ─── */}
-      <FilterBar>
-        <Select
-          showSearch
-          optionFilterProp="label"
-          placeholder="选择系统"
-          style={{ width: 200 }}
-          value={selectedSystemId}
-          onChange={(val) => {
-            setSelectedSystemId(val);
-            setSelectedBatchId(undefined); // 切系统时重置批次
-          }}
-          options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
-        />
-        <Select
-          placeholder="资产视图"
-          style={{ width: 160 }}
-          value={caseTreeView}
-          onChange={(value: CaseTreeView) => {
-            setCaseTreeView(value);
-            if (value === 'stable') {
-              setBucket(undefined);
-            }
-          }}
-          options={[
-            { value: 'stable', label: '稳定主集' },
-            { value: 'all', label: '全部资产' },
-            { value: 'review_required', label: '待分类' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="批次（默认=最新）"
-          style={{ width: 340 }}
-          value={selectedBatchId}
-          onChange={setSelectedBatchId}
-          options={viewableBatches.map((b) => {
-            const statusLabel =
-              b.status === 'pending_review' ? '待审阅' :
-              b.status === 'completed' ? '已完成' :
-              b.status === 'archived' ? '已落库' : b.status;
-            const date = new Date(b.created_at).toLocaleDateString('zh-CN');
-            return {
-              value: b.id,
-              label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${statusLabel}`,
-            };
-          })}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="优先级"
-          style={{ width: 120 }}
-          value={priority}
-          onChange={setPriority}
-          options={[
-            { value: 'P0', label: 'P0' },
-            { value: 'P1', label: 'P1' },
-            { value: 'P2', label: 'P2' },
-            { value: 'P3', label: 'P3' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="Review 状态"
-          style={{ width: 140 }}
-          value={reviewStatus}
-          onChange={setReviewStatus}
-          options={[
-            { value: 'pending', label: '待审' },
-            { value: 'confirmed', label: '已确认' },
-            { value: 'needs_modification', label: '需修改' },
-          ]}
-        />
-        <Select
-          allowClear
-          placeholder="质量桶"
-          style={{ width: 140 }}
-          value={bucket}
-          onChange={setBucket}
-          disabled={caseTreeView === 'stable'}
-          options={[
-            { value: 'main', label: '主集' },
-            { value: 'needs_spec', label: '待澄清' },
-            { value: 'to_fix', label: '待修正' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="核验结论"
-          style={{ width: 160 }}
-          value={verdict}
-          onChange={setVerdict}
-          options={[
-            { value: 'grounded', label: 'grounded' },
-            { value: 'ungrounded', label: 'ungrounded' },
-            { value: 'undefined', label: 'undefined' },
-            { value: 'conflict', label: 'conflict' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="审查诊断"
-          style={{ width: 160 }}
-          value={reviewIssueType}
-          onChange={setReviewIssueType}
-          options={[
-            { value: 'case_wrong', label: '用例错' },
-            { value: 'prd_conflict', label: 'PRD冲突' },
-            { value: 'verify_uncertain', label: '核验不确定' },
-          ]}
-        />
+      <Alert
+        type={hasSystem ? 'info' : 'warning'}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={hasSystem ? activeView.message : '先选择一个系统，再查看它沉淀下来的用例资产'}
+        description={
+          hasSystem
+            ? `${activeView.description} 当前批次范围：${selectedBatchLabel}。`
+            : '系统列表为空或尚未选中系统时，用例树不会加载；可以先去系统管理创建系统并上传 PRD。'
+        }
+        action={
+          hasSystem ? (
+            <Button size="small" onClick={openKnowledgeBase}>
+              去知识库
+            </Button>
+          ) : (
+            <Button size="small" onClick={() => navigate('/systems')}>
+              去系统管理
+            </Button>
+          )
+        }
+      />
+
+      <FilterBar align="start">
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">系统</Text>
+          <Select
+            showSearch
+            optionFilterProp="label"
+            placeholder="选择系统"
+            style={{ width: 220 }}
+            value={selectedSystemId}
+            onChange={(val) => {
+              setSelectedSystemId(val);
+              setSelectedBatchId(undefined);
+              setSelectedNodeKey('root');
+              setTreeData([]);
+            }}
+            options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">资产视图</Text>
+          <Segmented
+            value={caseTreeView}
+            onChange={(value) => {
+              const next = value as CaseTreeView;
+              setCaseTreeView(next);
+              if (next === 'stable') {
+                setBucket(undefined);
+              }
+            }}
+            options={[
+              { value: 'stable', label: '稳定主集' },
+              { value: 'all', label: '全部资产' },
+              { value: 'review_required', label: '待处理资产' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">批次范围</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="默认最新可见批次"
+            style={{ width: 340 }}
+            value={selectedBatchId}
+            onChange={setSelectedBatchId}
+            options={viewableBatches.map((b) => {
+              const date = new Date(b.created_at).toLocaleDateString('zh-CN');
+              return {
+                value: b.id,
+                label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${formatBatchStatus(b.status)}`,
+              };
+            })}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">优先级</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部"
+            style={{ width: 110 }}
+            value={priority}
+            onChange={setPriority}
+            options={[
+              { value: 'P0', label: 'P0' },
+              { value: 'P1', label: 'P1' },
+              { value: 'P2', label: 'P2' },
+              { value: 'P3', label: 'P3' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">审查状态</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部"
+            style={{ width: 130 }}
+            value={reviewStatus}
+            onChange={setReviewStatus}
+            options={[
+              { value: 'pending', label: '待审' },
+              { value: 'confirmed', label: '已确认' },
+              { value: 'needs_modification', label: '需修改' },
+              { value: 'deleted', label: '已删除' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">质量桶</Text>
+          <Select
+            allowClear
+            placeholder="全部"
+            style={{ width: 120 }}
+            value={bucket}
+            onChange={setBucket}
+            disabled={caseTreeView === 'stable'}
+            options={[
+              { value: 'main', label: '主集' },
+              { value: 'needs_spec', label: '待澄清' },
+              { value: 'to_fix', label: '待修正' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">核验结论</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部"
+            style={{ width: 140 }}
+            value={verdict}
+            onChange={setVerdict}
+            options={[
+              { value: 'grounded', label: 'grounded' },
+              { value: 'ungrounded', label: 'ungrounded' },
+              { value: 'undefined', label: 'undefined' },
+              { value: 'conflict', label: 'conflict' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">审查诊断</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部"
+            style={{ width: 130 }}
+            value={reviewIssueType}
+            onChange={setReviewIssueType}
+            options={[
+              { value: 'case_wrong', label: '用例错' },
+              { value: 'prd_conflict', label: 'PRD冲突' },
+              { value: 'verify_uncertain', label: '核验不确定' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={6}>
+          <Text type="secondary">筛选</Text>
+          <Button disabled={!hasFilters} onClick={clearFilters}>
+            重置
+          </Button>
+        </Space>
       </FilterBar>
 
       {/* ─── 统计卡片 ─── */}
       <MetricStrip
         items={[
-          { key: 'total', label: '总用例', value: stats.total, tone: 'primary' },
+          { key: 'total', label: '当前视图用例', value: stats.total, tone: 'primary', hint: activeView.label },
+          { key: 'selected', label: '选中范围', value: selectedCases.length },
           { key: 'docs', label: '文档数', value: stats.docCount },
           { key: 'modules', label: '模块数', value: stats.moduleCount },
+          { key: 'branches', label: '分支节点', value: stats.branchCount },
           { key: 'p0', label: 'P0 用例', value: stats.p0, tone: 'danger' },
           { key: 'confirmed', label: '已确认', value: stats.confirmed, tone: 'success' },
-          { key: 'pending', label: '待审', value: stats.pending, tone: 'warning' },
+          { key: 'pending', label: '待处理', value: stats.pending + stats.needsModification, tone: 'warning' },
+          { key: 'duplicates', label: '重复标记', value: stats.duplicate },
         ]}
       />
 
       {/* ─── 主体：左树右表 ─── */}
       <SplitPane
         left={
-          <Card title="文档 / 模块结构" size="small" style={{ height: '100%' }}>
-            <Spin spinning={treeLoading}>
-              <CaseAssetTree
-                tree={caseAssetTree}
-                selectedKey={selectedNodeKey}
-                onSelect={setSelectedNodeKey}
-                emptyDescription="暂无数据"
-              />
-            </Spin>
-          </Card>
+          <div
+            style={{
+              height: '100%',
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              overflow: 'hidden',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 8,
+                padding: '12px 14px',
+                borderBottom: `1px solid ${layoutTokens.borderSubtle}`,
+              }}
+            >
+              <Text strong>文档 / 模块结构</Text>
+              <Tag color="blue">{stats.total} 条</Tag>
+            </div>
+            <div style={{ padding: 12 }}>
+              <Spin spinning={treeLoading}>
+                <CaseAssetTree
+                  tree={caseAssetTree}
+                  selectedKey={selectedNodeKey}
+                  onSelect={setSelectedNodeKey}
+                  emptyDescription={hasSystem ? '当前视图暂无资产' : '请选择系统'}
+                  height={500}
+                  maxHeight="calc(100vh - 440px)"
+                />
+              </Spin>
+            </div>
+          </div>
         }
         right={
-          <Card
-            title={selectedTitle}
-            size="small"
-            extra={<Text type="secondary">{selectedCases.length} 条</Text>}
+          <div
+            style={{
+              minWidth: 0,
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              overflow: 'hidden',
+            }}
           >
-            <CaseAssetTable
-              cases={selectedCases}
-              pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
-              rowClickToOpen
-              onOpenCase={setDetailCaseId}
-            />
-          </Card>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 12,
+                alignItems: 'flex-start',
+                padding: '12px 14px',
+                borderBottom: `1px solid ${layoutTokens.borderSubtle}`,
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <Space size={8} wrap>
+                  <Text strong>{selectedTitle}</Text>
+                  <Tag>{NODE_TYPE_LABEL[selectedNode?.type || 'root'] || '范围'}</Tag>
+                </Space>
+                <Text
+                  style={{
+                    display: 'block',
+                    marginTop: 4,
+                    color: layoutTokens.textSecondary,
+                    fontSize: 13,
+                  }}
+                >
+                  {selectedCases.length} 条用例 · {selectedBatchLabel}
+                </Text>
+              </div>
+              <Tag color={caseTreeView === 'review_required' ? 'orange' : 'green'}>{activeView.label}</Tag>
+            </div>
+            <div style={{ padding: 12, minWidth: 0 }}>
+              {!hasSystem ? (
+                <EmptyState
+                  title="请选择系统"
+                  description="选择系统后会加载该系统已沉淀的用例资产。"
+                  action={<Button onClick={() => navigate('/systems')}>去系统管理</Button>}
+                />
+              ) : selectedCases.length === 0 && !treeLoading ? (
+                <EmptyState
+                  title="当前范围暂无用例资产"
+                  description="可以切换资产视图或批次；如果系统还没有资产，先去知识库上传资料并发起生成。"
+                  action={
+                    <Space wrap>
+                      <Button onClick={clearFilters} disabled={!hasFilters}>
+                        重置筛选
+                      </Button>
+                      <Button type="primary" onClick={openKnowledgeBase}>
+                        上传/生成
+                      </Button>
+                    </Space>
+                  }
+                />
+              ) : (
+                <CaseAssetTable
+                  cases={selectedCases}
+                  pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条` }}
+                  rowClickToOpen
+                  titleAsLink
+                  showIterationTag
+                  onOpenCase={setDetailCaseId}
+                />
+              )}
+            </div>
+          </div>
         }
-        leftWidth={340}
+        leftWidth={360}
+        rightMinWidth={640}
       />
 
       {/* ─── 用例详情 Drawer ─── */}
