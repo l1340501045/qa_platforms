@@ -45,6 +45,12 @@ import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import SplitPane from '../../components/layout/SplitPane';
 import { layoutTokens } from '../../components/layout/tokens';
+import {
+  buildCaseAssetBatchScopeHelp,
+  buildCaseAssetBatchScopeLabel,
+  formatCaseAssetBatchStatus,
+  isCaseAssetVisibleBatch,
+} from '../../utils/caseAssetBatchScope';
 import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text } = Typography;
@@ -85,10 +91,7 @@ function countBranchNodes(nodes: CaseAssetNode[]): number {
 }
 
 function formatBatchStatus(status: string): string {
-  if (status === 'pending_review') return '待审阅';
-  if (status === 'completed') return '已完成';
-  if (status === 'archived') return '已落库';
-  return status;
+  return formatCaseAssetBatchStatus(status);
 }
 
 function getSystemActivityScore(system: CaseLibrarySystemOption): number {
@@ -198,9 +201,7 @@ const CaseLibraryPage: React.FC = () => {
     try {
       const res = await listSystemBatches(selectedSystemId, { per_page: 100 });
       // 只保留可见状态的批次
-      const visible = res.items.filter((b) =>
-        ['pending_review', 'completed', 'archived'].includes(b.status),
-      );
+      const visible = res.items.filter((b) => isCaseAssetVisibleBatch(b.status));
       setViewableBatches(visible);
     } catch (err) {
       setBatchError(getErrorMessage(err, '批次范围暂时无法加载，请重试。'));
@@ -298,11 +299,16 @@ const CaseLibraryPage: React.FC = () => {
     () => viewableBatches.find((b) => b.id === selectedBatchId),
     [selectedBatchId, viewableBatches],
   );
-  const selectedBatchLabel = selectedBatch
-    ? `${selectedBatch.document_title} · ${formatBatchStatus(selectedBatch.status)}`
-    : batchError
-      ? '默认最新可见批次（批次列表未加载）'
-      : '默认最新可见批次';
+  const selectedBatchLabel = buildCaseAssetBatchScopeLabel({
+    selectedBatch,
+    batchError,
+    visibleBatchCount: viewableBatches.length,
+  });
+  const selectedBatchHelp = buildCaseAssetBatchScopeHelp({
+    selectedBatch,
+    batchError,
+    visibleBatchCount: viewableBatches.length,
+  });
   const activeView = VIEW_COPY[caseTreeView];
   const hasFilters = Boolean(
     selectedBatchId || priority || reviewStatus || bucket || verdict || reviewIssueType || caseTreeView !== 'stable',
@@ -453,13 +459,14 @@ const CaseLibraryPage: React.FC = () => {
             allowClear
             showSearch
             optionFilterProp="label"
-            placeholder="默认最新可见批次"
+            placeholder="默认：各文档最新可见批次"
             style={{ width: 340 }}
             value={selectedBatchId}
             onChange={setSelectedBatchId}
             loading={batchLoading}
+            disabled={!hasSystem || Boolean(batchError && !batchLoading)}
             status={batchError ? 'warning' : undefined}
-            notFoundContent={batchError ? '批次范围加载失败' : undefined}
+            notFoundContent={batchError ? '批次范围加载失败' : '暂无可见批次'}
             options={viewableBatches.map((b) => {
               const date = new Date(b.created_at).toLocaleDateString('zh-CN');
               return {
@@ -468,6 +475,9 @@ const CaseLibraryPage: React.FC = () => {
               };
             })}
           />
+          <Text type="secondary" style={{ display: 'block', maxWidth: 340, fontSize: 12, lineHeight: 1.5 }}>
+            {selectedBatchHelp}
+          </Text>
         </Space>
         <Space direction="vertical" size={6}>
           <Text type="secondary">优先级</Text>
