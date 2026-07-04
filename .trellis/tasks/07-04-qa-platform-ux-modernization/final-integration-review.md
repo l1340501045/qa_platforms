@@ -16,6 +16,7 @@
 - 已补充 UI/UX 合并前验收证据台账，明确哪些证据已成立、哪些必须等周一真实跑批和真人演练补齐。
 - 已修正 UI/UX 验收前预检与 runbook 的一致性：预检覆盖当前 6 个验收文件，runbook 不再要求固定历史提交必须出现在最近 5 条内。
 - 已增强 UI/UX 验收前预检：静态检查真实跑批关键生成配置，确认前端、settings、pipeline 契约中的 merge/cap/P0 quota 配置一致。
+- 已补充 UI/UX 验收前预检脚本测试，覆盖前端、pipeline、settings 三类配置解析和不一致失败路径。
 - 已补充 UI 验收前页面 dry-run：在不触发生成的前提下复查工作台、项目/系统、知识库、批次页、用例资产、搜索和导出入口。
 - 已补充首次使用平台的 QA 演练观察表，明确任务话术、逐步观察项、目标级/操作级提示规则和 P0/P1/P2 判级。
 
@@ -70,6 +71,7 @@
 | UI 验收证据台账 | 已补齐合并前证据总账 | `docs/acceptance/evidence-ledger.md` 列出分支、环境、小批次、首次使用平台 QA 演练和 `.audit` 审查证据 | 台账不是验收结果；仍需周一逐项回填 |
 | UI 验收预检与 runbook 一致性 | 已补齐执行一致性修正 | `scripts/ux_acceptance_preflight.py` 覆盖 6 个验收文件；runbook 改为检查固定 HEAD 可追溯，不依赖固定提交出现在最近 5 条 | 仍需周一在公司网络下跑完整预检 |
 | UI 验收预检覆盖生成配置 | 已补齐静态配置检查 | `scripts/ux_acceptance_preflight.py` 检查 `existence_merge_enabled=True`、`split_cap_enabled=True`、`cases_per_tp_cap=4`、`p0_quota_enabled=False`，并校验前端、settings、pipeline 契约一致 | 只证明配置静态一致，不证明真实生成质量 |
+| UI 验收预检脚本测试补强 | 已补齐测试保护 | `tests/test_ux_acceptance_preflight.py` 覆盖配置解析和 mismatch fail fast；`pytest` 通过 | pytest 仍有既有 `collect_ignore_glob` 配置告警，不影响该测试结果 |
 
 ## 父任务验收逐条核对
 
