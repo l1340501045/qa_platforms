@@ -13,6 +13,7 @@
 - 已产出真实跑批与首次使用平台验收脚本，明确周一公司网络可用后如何判定可合 main、需修后合、或不可合。
 - 已补充固定小规模验收 PRD 样例 `docs/acceptance/ux-small-batch-prd.md`，避免周一临时裁剪大 PRD 带来不可控变量。
 - 已把真实验收入口收口到 `docs/acceptance/`，执行者不用进入 `.trellis/tasks/archive` 才能找到 runbook、回填模板和样例 PRD。
+- 已补充 UI 验收前页面 dry-run：在不触发生成的前提下复查工作台、项目/系统、知识库、批次页、用例资产、搜索和导出入口。
 
 不能夸大的结论：
 
@@ -36,6 +37,8 @@
   - `c418c94 归档小规模跑批验收PRD样例任务`
   - `8cb395d 补充UI验收入口说明`
   - `e01d5a4 归档UI验收入口说明任务`
+  - `c2355d9 补齐UI验收前预检脚本`
+  - `e45c3d2 归档UI验收前预检脚本任务`
 - 主流程保护证据：`git diff checkpoint/architecture-migration-pre-ux...HEAD --name-only -- src/testcase_generator` 无输出。
 
 这证明本轮 UI/UX 分支没有把测试用例生成核心逻辑混进来。平台 API 和前端有改动，是本任务范围内的系统统计、文档类型、页面动线、资产树和错误态改造。
@@ -57,6 +60,7 @@
 | 小规模真实跑批 PRD 样例 | 已补齐固定验收输入 | `docs/acceptance/ux-small-batch-prd.md` 覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、分页和导出 | 不含图片，不能替代视觉模型链路验收；不能替代完整大 PRD 质量回归 |
 | UI 验收入口说明 | 已补齐周一执行入口 | `docs/acceptance/README.md` 明确执行顺序、GO / NO-GO 和回填入口 | 仍需真实批次结果回填 |
 | UI 验收资料自包含化 | 已补齐可迁移验收包 | `docs/acceptance/runbook.md`、`post-batch-report-template.md`、`ux-small-batch-prd.md` 在同目录内自包含 | runbook 与 Trellis 归档存在副本，后续流程变化要同步 |
+| UI 验收前页面 dry-run | 已补齐不触发生成的页面复查 | `dry-run-report.md` 覆盖工作台、项目/系统、知识库、生成弹窗、批次页、用例资产、搜索、导出和 1024 宽度溢出检查 | 未创建真实新批次；不能证明生成质量或真人首次使用表现 |
 
 ## 父任务验收逐条核对
 
@@ -67,7 +71,7 @@
 | 上传前可选文档类型，上传后列表展示所选类型 | 通过 | `documentApi.batchUploadDocuments(..., docType)` 携带 `doc_type`；后端校验 `DOC_TYPES`；历史 `other` 可重标注 |
 | 知识库、工作台、用例库树默认不全展开，支持滚动/搜索 | 通过 | 阶段 B/C review；`CaseAssetTree` 受控展开、内部滚动、搜索、展开/收起 |
 | 用例树支持模块下多级分支表达 | 通过 | 阶段 C review：真实路径 `标题包 -> 新建编辑 -> 字数算法` 可递归展示 |
-| QA 可从系统进入知识库、触发生成、处理澄清/失败、审查、资产、导出 | 阶段性通过 | 当前 HEAD 浏览器验收覆盖入口和只读页面；真实新批次和 mutation 仍需用户验收 |
+| QA 可从系统进入知识库、触发生成、处理澄清/失败、审查、资产、导出 | 阶段性通过 | 当前 HEAD 浏览器验收覆盖入口和只读页面；dry-run 已复查生成弹窗、批次页、资产、搜索和导出；真实新批次和 mutation 仍需用户验收 |
 | 前端 lint/type/build 通过，后端相关测试通过 | 通过 | 当前 HEAD 验收任务运行 `npm run lint`、`npm run typecheck`、`npm run build`；父任务此前运行 `tests/platform_api`、`test:ui-models` |
 | 主流程保护结果明确 | 通过 | `src/testcase_generator` 相对 checkpoint 无 diff |
 | 每个子任务有独立 review | 通过 | 已完成的 UI/UX 子任务均有 `review.md`；验收资料收口任务也补了自审 |
@@ -173,6 +177,12 @@
 - 对新批次用例质量和模块树的 `.audit` 审查没有发现 P0/P1 回归。
 
 目前只满足第一项，第二到第四项等待公司网络下执行。
+
+### 5. dry-run 是否改变合 main 结论
+
+不改变。
+
+dry-run 证明页面入口和 runbook 一致性更强，但没有创建真实批次，也没有真人首次使用平台演练。它只支持“可以进入真实小规模验收”，不支持“可以直接合 main”。
 
 ## 建议状态
 

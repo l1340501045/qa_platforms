@@ -32,7 +32,8 @@
     "07-04-ux-small-batch-prd-fixture",
     "07-04-ux-acceptance-entrypoint",
     "07-04-ux-acceptance-self-contained-docs",
-    "07-04-ux-acceptance-preflight"
+    "07-04-ux-acceptance-preflight",
+    "07-04-ux-acceptance-dry-run-review"
   ],
   "parent": null,
   "relatedFiles": [],
