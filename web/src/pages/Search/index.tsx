@@ -6,9 +6,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   Badge,
+  Button,
   Input,
   Pagination,
   Select,
+  Space,
   Spin,
   Table,
   Tag,
@@ -148,16 +150,46 @@ const SearchPage: React.FC = () => {
     }
   };
 
+  const resetFilters = () => {
+    setSystemId(undefined);
+    setPriority(undefined);
+    setReviewStatus(undefined);
+    if (query.trim()) {
+      doSearch(query, { page: 1 });
+    }
+  };
+
   // ─── 表格列 ───
   const columns: ColumnsType<SearchResultItem> = [
     {
       title: '标题',
       dataIndex: 'title',
       key: 'title',
-      ellipsis: true,
-      width: '30%',
+      width: 340,
       render: (text: string, record) => (
-        <a onClick={() => setDetailCaseId(record.id)}>{text}</a>
+        <div style={{ display: 'grid', gap: 4 }}>
+          <a onClick={() => setDetailCaseId(record.id)} style={{ fontWeight: 600 }}>
+            {text}
+          </a>
+          <Space size={10} wrap>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => navigate(`/batches/${record.batch_id}`)}
+              style={{ paddingInline: 0 }}
+            >
+              打开批次
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              onClick={() => navigate(`/documents/${record.document_id}`)}
+              style={{ paddingInline: 0 }}
+            >
+              来源文档
+            </Button>
+          </Space>
+        </div>
       ),
     },
     {
@@ -220,7 +252,7 @@ const SearchPage: React.FC = () => {
       <PageHeader
         eyebrow="全局搜索"
         title="用例搜索"
-        description="按关键词跨系统检索用例，可继续用系统、优先级和审核状态缩小范围。"
+        description="跨系统检索已生成用例，定位重复断言、历史覆盖和可追溯的来源批次。"
       />
 
       {searched && (
@@ -235,9 +267,12 @@ const SearchPage: React.FC = () => {
 
       {/* ─── 搜索栏 ─── */}
       <div style={{ marginBottom: 16 }}>
+        <Text strong style={{ display: 'block', marginBottom: 8 }}>
+          搜索关键词
+        </Text>
         <Input.Search
           size="large"
-          placeholder="输入关键词搜索用例（支持中文模糊匹配）"
+          placeholder="输入业务功能、断言关键词或边界条件"
           enterButton={<><SearchOutlined /> 搜索</>}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
@@ -249,45 +284,54 @@ const SearchPage: React.FC = () => {
 
       {/* ─── 筛选栏 ─── */}
       <FilterBar>
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="系统筛选"
-          style={{ width: 180 }}
-          value={systemId}
-          onChange={(val) => handleFilterChange(val, priority, reviewStatus)}
-          options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="优先级"
-          style={{ width: 120 }}
-          value={priority}
-          onChange={(val) => handleFilterChange(systemId, val, reviewStatus)}
-          options={[
-            { value: 'P0', label: 'P0' },
-            { value: 'P1', label: 'P1' },
-            { value: 'P2', label: 'P2' },
-            { value: 'P3', label: 'P3' },
-          ]}
-        />
-        <Select
-          allowClear
-          showSearch
-          optionFilterProp="label"
-          placeholder="Review 状态"
-          style={{ width: 140 }}
-          value={reviewStatus}
-          onChange={(val) => handleFilterChange(systemId, priority, val)}
-          options={[
-            { value: 'pending', label: '待审' },
-            { value: 'confirmed', label: '已确认' },
-            { value: 'needs_modification', label: '需修改' },
-          ]}
-        />
+        <Space direction="vertical" size={4}>
+          <Text type="secondary">系统</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部系统"
+            style={{ width: 180 }}
+            value={systemId}
+            onChange={(val) => handleFilterChange(val, priority, reviewStatus)}
+            options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+          />
+        </Space>
+        <Space direction="vertical" size={4}>
+          <Text type="secondary">优先级</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部优先级"
+            style={{ width: 120 }}
+            value={priority}
+            onChange={(val) => handleFilterChange(systemId, val, reviewStatus)}
+            options={[
+              { value: 'P0', label: 'P0' },
+              { value: 'P1', label: 'P1' },
+              { value: 'P2', label: 'P2' },
+              { value: 'P3', label: 'P3' },
+            ]}
+          />
+        </Space>
+        <Space direction="vertical" size={4}>
+          <Text type="secondary">审核状态</Text>
+          <Select
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="全部状态"
+            style={{ width: 140 }}
+            value={reviewStatus}
+            onChange={(val) => handleFilterChange(systemId, priority, val)}
+            options={[
+              { value: 'pending', label: '待审' },
+              { value: 'confirmed', label: '已确认' },
+              { value: 'needs_modification', label: '需修改' },
+            ]}
+          />
+        </Space>
         {searched && (
           <Text type="secondary">
             共找到 {total} 条结果
@@ -297,10 +341,21 @@ const SearchPage: React.FC = () => {
 
       {/* ─── 搜索结果 ─── */}
       <Spin spinning={loading}>
-        {searched && items.length === 0 && !loading ? (
+        {!searched ? (
+          <EmptyState
+            title="输入关键词开始检索用例资产"
+            description="适合查找某个业务点是否已有覆盖、定位相似断言，或从结果回到来源批次继续审查。"
+            action={
+              <Button type="primary" onClick={() => navigate('/case-library')}>
+                浏览用例资产
+              </Button>
+            }
+          />
+        ) : items.length === 0 && !loading ? (
           <EmptyState
             title="没有找到匹配的用例"
             description="可以换一个业务关键词，或放宽系统、优先级和审核状态筛选。"
+            action={<Button onClick={resetFilters}>重置筛选</Button>}
           />
         ) : (
           <Table<SearchResultItem>
@@ -309,6 +364,7 @@ const SearchPage: React.FC = () => {
             dataSource={items}
             pagination={false}
             size="middle"
+            scroll={{ x: 1080 }}
           />
         )}
       </Spin>
