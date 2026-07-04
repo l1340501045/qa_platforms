@@ -17,7 +17,7 @@ import {
 import { ApartmentOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 
-import { getCaseTree, listSystemBatches, listSystemOptions } from '../../services/systemApi';
+import { getCaseTree, listSystemBatches, listSystemOptions, listSystems } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
 import CaseDetailDrawer from '../../components/CaseDetailDrawer';
 import EmptyState from '../../components/common/EmptyState';
@@ -37,6 +37,7 @@ import type {
   Priority,
   ReviewIssueType,
   ReviewStatus,
+  System,
 } from '../../types';
 import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
@@ -73,6 +74,9 @@ const NODE_TYPE_LABEL: Record<CaseAssetNode['type'], string> = {
   branch: '分支',
 };
 
+type CaseLibrarySystemOption = Pick<System, 'id' | 'name'> &
+  Partial<Pick<System, 'document_count' | 'batch_count' | 'updated_at'>>;
+
 function countBranchNodes(nodes: CaseAssetNode[]): number {
   return nodes.reduce((sum, node) => {
     const self = node.type === 'branch' ? 1 : 0;
@@ -87,11 +91,30 @@ function formatBatchStatus(status: string): string {
   return status;
 }
 
+function getSystemActivityScore(system: CaseLibrarySystemOption): number {
+  return (system.batch_count ?? 0) * 1000 + (system.document_count ?? 0);
+}
+
+function chooseDefaultAssetSystem(systems: CaseLibrarySystemOption[]): string | undefined {
+  return systems
+    .map((system, index) => ({ system, index }))
+    .sort((a, b) => {
+      const scoreDelta = getSystemActivityScore(b.system) - getSystemActivityScore(a.system);
+      if (scoreDelta !== 0) return scoreDelta;
+
+      const updatedDelta =
+        new Date(b.system.updated_at ?? 0).getTime() - new Date(a.system.updated_at ?? 0).getTime();
+      if (updatedDelta !== 0) return updatedDelta;
+
+      return a.index - b.index;
+    })[0]?.system.id;
+}
+
 const CaseLibraryPage: React.FC = () => {
   const navigate = useNavigate();
 
   // ─── State ───
-  const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [systemOptions, setSystemOptions] = useState<CaseLibrarySystemOption[]>([]);
   const [selectedSystemId, setSelectedSystemId] = useState<string | undefined>();
   const [priority, setPriority] = useState<Priority | undefined>();
   const [reviewStatus, setReviewStatus] = useState<ReviewStatus | undefined>();
@@ -120,9 +143,27 @@ const CaseLibraryPage: React.FC = () => {
     setSystemError(null);
     try {
       const opts = await listSystemOptions();
-      setSystemOptions(opts);
-      if (opts.length > 0) {
-        setSelectedSystemId((current) => current || opts[0].id);
+      let systemPage: Awaited<ReturnType<typeof listSystems>> | null = null;
+      try {
+        systemPage = await listSystems({ page: 1, per_page: 100 });
+      } catch {
+        systemPage = null;
+      }
+      const systemStatsById = new Map((systemPage?.items ?? []).map((system) => [system.id, system]));
+      const optionsWithStats = opts.map((option) => ({
+        ...option,
+        document_count: systemStatsById.get(option.id)?.document_count,
+        batch_count: systemStatsById.get(option.id)?.batch_count,
+        updated_at: systemStatsById.get(option.id)?.updated_at,
+      }));
+      setSystemOptions(optionsWithStats);
+      if (optionsWithStats.length > 0) {
+        setSelectedSystemId((current) => {
+          if (current && optionsWithStats.some((option) => option.id === current)) {
+            return current;
+          }
+          return chooseDefaultAssetSystem(optionsWithStats);
+        });
       } else {
         setSelectedSystemId(undefined);
         setTreeData([]);
