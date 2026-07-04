@@ -40,10 +40,16 @@ uv run celery -A src.platform_api.core.celery_app.celery_app inspect ping --time
 
 ### 2. 小规模真实批次
 
+推荐资料：
+
+- 默认使用 [ux-small-batch-prd.md](/Users/echo_lacey/workspace/qa_platforms/docs/acceptance/ux-small-batch-prd.md)。
+- 这份样例覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、筛选分页和导出，适合作为 UI/UX 主链路验收输入。
+- 如果要验证图片链路，再额外补一份含图片的小 PRD；不要直接用完整大 PRD 替代最小验收。
+
 执行：
 
 - 新建验收系统。
-- 上传 1-3 个模块的小 PRD。
+- 上传 `docs/acceptance/ux-small-batch-prd.md`，或同等规模的 1-3 个模块小 PRD。
 - 上传前选择 `PRD` 类型。
 - 触发生成。
 - 跑到待审核或归档。
