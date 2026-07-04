@@ -34,7 +34,7 @@ import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text, Link } = Typography;
 
-type SystemStage = 'empty' | 'with_docs' | 'with_batches';
+type SystemStage = 'empty' | 'with_docs' | 'with_batches' | 'unknown';
 type SystemStageFilter = 'all' | SystemStage;
 type SystemSort = 'updated_desc' | 'name_asc' | 'documents_desc' | 'batches_desc';
 
@@ -42,6 +42,7 @@ const SYSTEM_STAGE_META: Record<SystemStage, { label: string; color: string; nex
   empty: { label: '待上传资料', color: 'default', nextAction: '上传资料' },
   with_docs: { label: '已有资料', color: 'blue', nextAction: '发起生成' },
   with_batches: { label: '已有批次', color: 'green', nextAction: '进入知识库' },
+  unknown: { label: '统计不可用', color: 'orange', nextAction: '进入知识库' },
 };
 
 function renderCount(count?: number): number | string {
@@ -52,9 +53,16 @@ function numericCount(count?: number): number {
   return typeof count === 'number' ? count : 0;
 }
 
+function hasSystemCounts(
+  system: System,
+): system is System & Required<Pick<System, 'document_count' | 'batch_count'>> {
+  return typeof system.document_count === 'number' && typeof system.batch_count === 'number';
+}
+
 function getSystemStage(system: System): SystemStage {
-  if (numericCount(system.batch_count) > 0) return 'with_batches';
-  if (numericCount(system.document_count) > 0) return 'with_docs';
+  if (!hasSystemCounts(system)) return 'unknown';
+  if (system.batch_count > 0) return 'with_batches';
+  if (system.document_count > 0) return 'with_docs';
   return 'empty';
 }
 
@@ -111,11 +119,14 @@ const SystemsPage: React.FC = () => {
     (sum, system) => sum + (typeof system.batch_count === 'number' ? system.batch_count : 0),
     0,
   );
-  const activeSystems = systems.filter(
-    (system) => (system.document_count ?? 0) > 0 || (system.batch_count ?? 0) > 0,
-  ).length;
+  const statsUnavailable = systems.some((system) => !hasSystemCounts(system));
+  const activeSystems = systems.filter((system) => {
+    if (!hasSystemCounts(system)) return false;
+    return system.document_count > 0 || system.batch_count > 0;
+  }).length;
   const waitingSystems = systems.filter((system) => getSystemStage(system) === 'empty').length;
   const generatedSystems = systems.filter((system) => getSystemStage(system) === 'with_batches').length;
+  const metricUnavailable = Boolean(systemsError) || statsUnavailable;
 
   const visibleSystems = useMemo(() => {
     const normalizedKeyword = keyword.trim().toLocaleLowerCase();
@@ -328,29 +339,29 @@ const SystemsPage: React.FC = () => {
             key: 'systems',
             label: '系统总数',
             value: systemsError ? '-' : systemsTotal,
-            tone: systemsError ? 'warning' : 'default',
-            hint: systemsError ? '加载失败' : undefined,
+            tone: metricUnavailable ? 'warning' : 'default',
+            hint: systemsError ? '加载失败' : statsUnavailable ? '统计字段缺失' : undefined,
           },
           {
             key: 'active',
             label: '当前页有资料/批次',
-            value: systemsError ? '-' : activeSystems,
-            tone: systemsError ? 'warning' : 'primary',
+            value: metricUnavailable ? '-' : activeSystems,
+            tone: metricUnavailable ? 'warning' : 'primary',
           },
           {
             key: 'waiting',
             label: '当前页待上传资料',
-            value: systemsError ? '-' : waitingSystems,
-            tone: !systemsError && waitingSystems > 0 ? 'warning' : 'default',
+            value: metricUnavailable ? '-' : waitingSystems,
+            tone: !metricUnavailable && waitingSystems > 0 ? 'warning' : 'default',
           },
           {
             key: 'generated',
             label: '当前页已有批次',
-            value: systemsError ? '-' : generatedSystems,
-            tone: !systemsError && generatedSystems > 0 ? 'success' : 'default',
+            value: metricUnavailable ? '-' : generatedSystems,
+            tone: !metricUnavailable && generatedSystems > 0 ? 'success' : 'default',
           },
-          { key: 'documents', label: '当前页文档数', value: systemsError ? '-' : knownDocumentTotal },
-          { key: 'batches', label: '当前页批次数', value: systemsError ? '-' : knownBatchTotal },
+          { key: 'documents', label: '当前页文档数', value: metricUnavailable ? '-' : knownDocumentTotal },
+          { key: 'batches', label: '当前页批次数', value: metricUnavailable ? '-' : knownBatchTotal },
         ]}
       />
 
@@ -371,6 +382,7 @@ const SystemsPage: React.FC = () => {
             { value: 'empty', label: '待上传资料' },
             { value: 'with_docs', label: '已有资料' },
             { value: 'with_batches', label: '已有批次' },
+            { value: 'unknown', label: '统计不可用' },
           ]}
         />
         <Select<SystemSort>
