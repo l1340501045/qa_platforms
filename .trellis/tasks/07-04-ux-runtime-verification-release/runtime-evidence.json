@@ -1,0 +1,471 @@
+{
+  "generated_at": "2026-07-04T19:34:44+0800",
+  "api_summary": {
+    "systems_total": 91,
+    "target_system": {
+      "id": "6b0ea53c-f734-4bc9-8506-663d47107b9d",
+      "name": "漫剧批创系统",
+      "description": null,
+      "created_at": "2026-06-30T03:04:31.075789Z",
+      "updated_at": "2026-06-30T03:04:31.075789Z",
+      "document_count": 1,
+      "batch_count": 3
+    },
+    "batches_total": 87,
+    "target_batch": {
+      "id": "6f30e1bd-89ad-4e98-878c-4b48014eb1a4",
+      "document_id": "effbf86d-3719-4010-b2b9-b8a66c925b80",
+      "document_title": "漫剧批创初版功能PRD",
+      "system_id": "6b0ea53c-f734-4bc9-8506-663d47107b9d",
+      "system_name": "漫剧批创系统",
+      "status": "pending_review",
+      "total_cases": 2680,
+      "started_at": "2026-07-02T10:43:21.244901+00:00",
+      "completed_at": "2026-07-02T19:34:39.071052+00:00",
+      "created_at": "2026-07-02T10:43:20.380283+00:00"
+    },
+    "target_documents_total": 1,
+    "target_document_brief": [
+      {
+        "id": "effbf86d-3719-4010-b2b9-b8a66c925b80",
+        "title": "漫剧批创初版功能PRD",
+        "doc_type": "other",
+        "status": null,
+        "folder_path": "漫剧批创初版功能PRD"
+      }
+    ],
+    "target_batch_detail": {
+      "status": "pending_review",
+      "total_cases": 2680,
+      "current_stage": "export",
+      "stage_progress": 100,
+      "cases_page_total": 2680
+    },
+    "exports_total": 2,
+    "exports_items": [
+      {
+        "id": "50b987ab-e3d8-472a-810f-f7ab96fe7be8",
+        "scope": "batch",
+        "format": "excel",
+        "status": "completed",
+        "file_url": "/qa-documents/exports/50b987ab-e3d8-472a-810f-f7ab96fe7be8.xlsx"
+      },
+      {
+        "id": "3a5117c1-7350-4796-9f50-ca09e9b690db",
+        "scope": "batch",
+        "format": "excel",
+        "status": "completed",
+        "file_url": "/qa-documents/exports/3a5117c1-7350-4796-9f50-ca09e9b690db.xlsx"
+      }
+    ]
+  },
+  "page_results": [
+    {
+      "name": "systems-desktop",
+      "url": "http://127.0.0.1:3000/systems",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 2241,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/systems-desktop.png",
+      "must_text": {
+        "漫剧批创系统": true,
+        "文档数": true,
+        "批次数": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 2521,
+        "treeNodes": 0,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 项目/系统 | 需求资料、生成批次、审查与用例资产的统一工作台 | 项目入口 | 项目/系统 | 先选择业务系统，再进入知识库上传需求资料、发起生成或查看已有批次。 | 新建系统 | 系统总数 | 91 | 当前页有资料/批次 | 20 | 当前页待上传资料 | 0 | 当前页已有批次 | 20 | 当前页文档数 | 26 | 当前页批次数 | 22 | 全部资料状态 | 按最近活动 | 系统\t资料状态\t文档数\t批次数\t最近活动 |  | 系统 | \t | 资料状态 | \t | 文档数 | \t | 批次数 | \t | 最近活动 |  |  | cb_test_229db451 | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t7/2/2026 |  | test_sys_cbca992a | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t7/2/2026 |  | test_sys_957f33ea | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t2\t1\t7/2/2026 |  | test_sys_ffe27c9f | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t7/2/2026 |  | arch_test_a7d917ab | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t2\t1\t7/2/2026 |  | rule_test_2307e96a | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t7/2/2026 |  | cb_test_5a77ddcf | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t7/2/2026 |  | test_sys_6c4bbaa2 | 暂无描述 | 进入知识库 | 编辑 | 删除 | \t已有批次\t1\t1\t6/30/2026 |  | test_sys_"
+    },
+    {
+      "name": "knowledge-desktop",
+      "url": "http://127.0.0.1:3000/systems/6b0ea53c-f734-4bc9-8506-663d47107b9d/documents",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 2038,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/knowledge-desktop.png",
+      "must_text": {
+        "知识库": true,
+        "资料类型": true,
+        "生成用例": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 1084,
+        "treeNodes": 3,
+        "tableRows": 1,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 项目/系统 | 需求资料、生成批次、审查与用例资产的统一工作台 | 知识库 | 漫剧批创系统 | 上传 PRD、技术文档、测试规则和原型图片资产。生成前请先确认资料类型和目录结构。 | 文档总数 | 1 | 当前筛选可见 | 1 | 文件夹节点 | 1 | 本次上传类型 | PRD | 1 | 上传资料 | 选择文档类型后上传 PRD、技术文档或规则资料。 | 2 | 生成批次 | 在文档列表点击“生成用例”，系统会创建批次。 | 3 | 进入审查 | 生成后进入批次工作台，处理澄清、审核与落库。 | 上传前先选择资料类型 | 类型会影响后续自动关联、生成依据和资产追溯；同一批上传文件会统一按当前类型入库。 | 本次上传：PRD | PRD | 产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。 |  | 点击或拖拽文件到此区域上传 |  | 支持 .zip 压缩包、单个/多个 .md 文件，以及图片文件（可多选） |  | 本次将以「PRD」入库：产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。 |  | 上传文件夹（按「PRD」入库） | 文件夹内的 .md 与图片会按相对路径一并上传，图片引用可正常解析 | 文档目录 | 展开全部 | 收起全部 | 全部文档 | 漫剧批创初版功能PRD | 文档列表 | 标题\t类型\t状态\t关联数\t更新时间 |  | 标题 | \t | 类型 | \t | 状态 | \t | 关联数 | \t | 更新时间 |  |  | 漫剧批创初版功能PRD | 生成用例 | 查看详情 | \t其他\t\t0\t6/30/2026, 11:31:50 AM | 共 1 篇文档 | 1 | 20 / page"
+    },
+    {
+      "name": "knowledge-narrow",
+      "url": "http://127.0.0.1:3000/systems/6b0ea53c-f734-4bc9-8506-663d47107b9d/documents",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "http_status": 200,
+      "duration_ms": 2052,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/knowledge-narrow.png",
+      "must_text": {
+        "知识库": true,
+        "资料类型": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1024,
+        "scrollWidth": 1024,
+        "clientHeight": 900,
+        "scrollHeight": 1122,
+        "treeNodes": 3,
+        "tableRows": 1,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 项目/系统 | 需求资料、生成批次、审查与用例资产的统一工作台 | 知识库 | 漫剧批创系统 | 上传 PRD、技术文档、测试规则和原型图片资产。生成前请先确认资料类型和目录结构。 | 文档总数 | 1 | 当前筛选可见 | 1 | 文件夹节点 | 1 | 本次上传类型 | PRD | 1 | 上传资料 | 选择文档类型后上传 PRD、技术文档或规则资料。 | 2 | 生成批次 | 在文档列表点击“生成用例”，系统会创建批次。 | 3 | 进入审查 | 生成后进入批次工作台，处理澄清、审核与落库。 | 上传前先选择资料类型 | 类型会影响后续自动关联、生成依据和资产追溯；同一批上传文件会统一按当前类型入库。 | 本次上传：PRD | PRD | 产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。 |  | 点击或拖拽文件到此区域上传 |  | 支持 .zip 压缩包、单个/多个 .md 文件，以及图片文件（可多选） |  | 本次将以「PRD」入库：产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。 |  | 上传文件夹（按「PRD」入库） | 文件夹内的 .md 与图片会按相对路径一并上传，图片引用可正常解析 | 文档目录 | 展开全部 | 收起全部 | 全部文档 | 漫剧批创初版功能PRD | 文档列表 | 标题\t类型\t状态\t关联数\t更新时间 |  | 标题 | \t | 类型 | \t | 状态 | \t | 关联数 | \t | 更新时间 |  |  | 漫剧批创初版功能PRD | 生成用例 | 查看详情 | \t其他\t\t0\t6/30/2026, 11:31:50 AM | 共 1 篇文档 | 1 | 20 / page"
+    },
+    {
+      "name": "document-detail-desktop",
+      "url": "http://127.0.0.1:3000/documents/effbf86d-3719-4010-b2b9-b8a66c925b80?from=knowledge&system_id=6b0ea53c-f734-4bc9-8506-663d47107b9d",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 1973,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/document-detail-desktop.png",
+      "must_text": {
+        "生成测试用例": true,
+        "文档类型": true,
+        "关联": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 1000,
+        "treeNodes": 0,
+        "tableRows": 0,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 项目/系统 | 需求资料、生成批次、审查与用例资产的统一工作台 | 文档详情 | 漫剧批创初版功能PRD | 确认资料类型、解析状态和关联上下游后，再发起用例生成。 | 项目/系统 | / | 知识库 | / | 文档详情 | - | 已完成 | 返回知识库 | 解析详情 | 知识速查表 | 生成测试用例 | 文档类型 | 其他 | 导入状态 | - | 嵌入状态 | 已完成 | 直接关联 | 0 | 间接关联 | 0 | 1 | 确认资料状态 | 检查文档类型、导入状态和嵌入状态。 | 2 | 补齐关联资产 | 关联技术文档、原型或测试规则，提升生成上下文。 | 3 | 生成并审查 | 发起生成后进入批次工作台处理澄清、审核与落库。 | 文档概览 | 用于判断这份资料是否已经具备生成用例的基础上下文。 | 标题 | 漫剧批创初版功能PRD | 文档类型 | 其他 | 目录路径 | 漫剧批创初版功能PRD | 更新时间 | 6/30/2026, 11:31:50 AM | 存储路径 | systems/6b0ea53c-f734-4bc9-8506-663d47107b9d/documents/漫剧批创初版功能PRD/漫剧批创初版功能PRD.md | 关联文档 | 直接关联会参与资料追溯；缺少技术文档、原型或测试规则时，先补关联再生成更稳。 | 添加关联 | 文档标题\t文档类型\t关联类型\t方向 |  | 文档标题 | \t | 文档类型 | \t | 关联类型 | \t | 方向 |  |  | 暂无关联文档。可先关联技术文档、原型或测试规则，再发起生成。"
+    },
+    {
+      "name": "review-desktop",
+      "url": "http://127.0.0.1:3000/review?status=pending_review",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 1993,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/review-desktop.png",
+      "must_text": {
+        "工作台": true,
+        "待审核": true,
+        "去审核": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 1994,
+        "treeNodes": 0,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 工作台 | 需求资料、生成批次、审查与用例资产的统一工作台 | 工作台 | 待处理批次 | 优先处理待澄清、失败和待审核批次；从这里进入批次详情完成审查、迭代和落库。 | 当前筛选批次 | 31 | 待澄清/失败/待审 | 31 | 运行中批次 | 0 | 当前状态 | 待审核 | 推荐处理顺序：待澄清 -> 失败 -> 待审核 -> 生成中 | 每个队列按创建时间倒序展示最近批次；默认露出 3 条，展开可看最近 8 条，完整列表用下方状态筛选分页查看。 | 待澄清 | 0 | 筛选 | 质量门需要人工明确规则或冲突结论。 | 暂无待澄清批次 | 失败 | 0 | 筛选 | 生成链路失败，需要查看原因后重试。 | 暂无失败批次 | 待审核 | 31 | 筛选 | 用例已生成，等待 QA 审查确认。 | 规则台账测试 | rule_test_4c62316f | 1 例 | 创建：2026/7/3 19:15:19 | CB测试需求 | cb_test_cdbb381d | 3 例 | 创建：2026/7/3 19:15:19 | 漫剧批创初版功能PRD | 漫剧批创系统 | 2680 例 | 创建：2026/7/2 18:43:20 | 展开最近 8 条 | 查看全部 31 条 | 生成中 | 0 | 筛选 | 流水线正在执行，可进入查看阶段进度。 | 暂无运行中批次 | 批次状态 | 待审核 | 文档标题\t所属系统\t状态\t用例数\t创建时间\t操作 |  | 文档标题 | \t | 所属系统 | \t | 状态 | \t | 用例数 | \t | 创建时间 | \t | 操作 |  | 规则台账测试\trule_test_4c62316f\t待审核\t1\t2026/7/3 19:15:19\t | 去审核 |  | CB测试需求\tcb_test_cdbb381d\t待审核\t3\t20"
+    },
+    {
+      "name": "batch-desktop",
+      "url": "http://127.0.0.1:3000/batches/6f30e1bd-89ad-4e98-878c-4b48014eb1a4?from=review&status=pending_review",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 2621,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/batch-desktop.png",
+      "must_text": {
+        "返回工作台": true,
+        "待审核": true,
+        "确认": true,
+        "需修改": true,
+        "删除": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 2369,
+        "treeNodes": 16,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 工作台 | 需求资料、生成批次、审查与用例资产的统一工作台 | 生成与审查 | 漫剧批创初版功能PRD | 集中查看批次状态、质量门澄清和候选用例审查；先处理阻塞，再按模块逐块确认、修改或落库。 | 待审阅 | 返回工作台（待审核） | 触发迭代 | 落库归档 | 批次状态 | 待审阅 | 当前阶段：导出 | 阶段进度 | 7/7 | 100% | 用例总数 | 2680 | 来自当前用例树 | 待审 | 2679 | 需要人工判断 | 需修改 | 0 | 可触发迭代 | 待澄清 | 0 | 质量门问题 | 进入用例审查 | 按模块/分支浏览候选用例：正确的确认，有问题的标记需修改，废弃的删除。 | 触发迭代 | 落库归档 | 生成阶段 | 当前：导出 | 7/7 已完成 | 100% | 解析 | 理解 | 质量门 | 测试点 | 用例生成 | 覆盖审计 | 导出 | 用例审查通过筛选收敛待处理范围，左侧按文档/模块/分支定位，右侧逐条确认。 | Review 状态筛选 | 质量桶 | 核验结论 | 审查诊断 | 文档 / 模块 | 选择范围后审查右侧用例 | 2680 条 | 收起目录 | 展开全部 | 收起全部 | 全部模块 | 2680 用例 | 漫剧批创初版功能PRD | 2680 | 批量创建广告 | 515 | 标题包 | 495 | 账户授权 | 433 | 素材中心 | 364 | 任务中心 | 179 | 定向包 | 170 | 投放链接 | 137 | 商品库 | 110 | 漫剧库 | 83 | 全局规则与字段约束 | 77 | 监测链接 | 55 | 待分类 | 43 | 提交底层与防超限 | 19 | 全部模块 | 点击标题查看证据、步骤和期望结果 | 2680 条 | 标题\t优先级\t质量\t可信度\t状态\t操作 |  | 标题 | \t | 优先级 | \t | 质量 | \t | 可信度 | \t | 状态 | \t | 操作 |  |  | CBO付费ROI-不展示出价字段"
+    },
+    {
+      "name": "batch-narrow",
+      "url": "http://127.0.0.1:3000/batches/6f30e1bd-89ad-4e98-878c-4b48014eb1a4?from=review&status=pending_review",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "http_status": 200,
+      "duration_ms": 2639,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/batch-narrow.png",
+      "must_text": {
+        "返回工作台": true,
+        "确认": true,
+        "需修改": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1024,
+        "scrollWidth": 1024,
+        "clientHeight": 900,
+        "scrollHeight": 3196,
+        "treeNodes": 16,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 工作台 | 需求资料、生成批次、审查与用例资产的统一工作台 | 生成与审查 | 漫剧批创初版功能PRD | 集中查看批次状态、质量门澄清和候选用例审查；先处理阻塞，再按模块逐块确认、修改或落库。 | 待审阅 | 返回工作台（待审核） | 触发迭代 | 落库归档 | 批次状态 | 待审阅 | 当前阶段：导出 | 阶段进度 | 7/7 | 100% | 用例总数 | 2680 | 来自当前用例树 | 待审 | 2679 | 需要人工判断 | 需修改 | 0 | 可触发迭代 | 待澄清 | 0 | 质量门问题 | 进入用例审查 | 按模块/分支浏览候选用例：正确的确认，有问题的标记需修改，废弃的删除。 | 触发迭代 | 落库归档 | 生成阶段 | 当前：导出 | 7/7 已完成 | 100% | 解析 | 理解 | 质量门 | 测试点 | 用例生成 | 覆盖审计 | 导出 | 用例审查通过筛选收敛待处理范围，左侧按文档/模块/分支定位，右侧逐条确认。 | Review 状态筛选 | 质量桶 | 核验结论 | 审查诊断 | 文档 / 模块 | 选择范围后审查右侧用例 | 2680 条 | 收起目录 | 展开全部 | 收起全部 | 全部模块 | 2680 用例 | 漫剧批创初版功能PRD | 2680 | 批量创建广告 | 515 | 标题包 | 495 | 账户授权 | 433 | 素材中心 | 364 | 任务中心 | 179 | 定向包 | 170 | 投放链接 | 137 | 商品库 | 110 | 漫剧库 | 83 | 全局规则与字段约束 | 77 | 监测链接 | 55 | 待分类 | 43 | 提交底层与防超限 | 19 | 全部模块 | 点击标题查看证据、步骤和期望结果 | 2680 条 | 标题\t优先级\t质量\t可信度\t状态\t操作 |  | 标题 | \t | 优先级 | \t | 质量 | \t | 可信度 | \t | 状态 | \t | 操作 |  |  | CBO付费ROI-不展示出价字段"
+    },
+    {
+      "name": "case-library-desktop",
+      "url": "http://127.0.0.1:3000/case-library",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 2189,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/case-library-desktop.png",
+      "must_text": {
+        "用例资产": true,
+        "主集候选": true,
+        "展开全部": true,
+        "收起全部": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 2400,
+        "treeNodes": 15,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 用例资产 | 需求资料、生成批次、审查与用例资产的统一工作台 | 用例资产 | 用例资产 | 先选系统，再按主集候选、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。 | 刷新资产 | 上传/生成 | 当前展示主集桶内的候选用例 | 这些用例已进入主集桶，但仍要结合审查状态判断是否可复用；需要排查重复或异常时切到全部资产。 当前批次范围：默认：各文档最新可见批次。 | 去知识库 | 系统 | 漫剧批创系统 | 资产视图 | 主集候选 | 全部资产 | 待处理资产 | 批次范围 | 默认：各文档最新可见批次 | 未指定批次时，后端会按每份文档最新的待审阅/已完成/已落库批次聚合；当前可手动选择 3 个可见批次。 | 优先级 | 全部 | 审查状态 | 全部 | 质量桶 | 全部 | 核验结论 | 全部 | 审查诊断 | 全部 | 筛选 | 重 置 | 当前视图用例 | 1852 | 主集候选 | 选中范围 | 1852 | 文档数 | 1 | 模块数 | 12 | 分支节点 | 121 | P0 用例 | 862 | 已确认 | 0 | 待处理 | 1852 | 重复标记 | 0 | 主集候选仍有待处理用例 | 当前主集候选中有 1852 条待审或需修改用例。确认后再用于复用、搜索或导出会更稳。 | 查看待处理资产 | 去工作台审查 | 文档 / 模块结构 | 1852 条 | 展开全部 | 收起全部 | 漫剧批创系统 | 1852 用例 | 漫剧批创初版功能PRD | 1852 | 批量创建广告 | 367 | 账户授权 | 351 | 标题包 | 290 | 素材中心 | 232 | 任务中心 | 144 | 定向包 | 129 | 商品库 | 87 | 投放链接 | 80 | 漫剧库 | 76 | 全局规则与字段约束 | 50 | 监测链接 | 37 | 提交底层与防超限 | 9 | 漫剧批创系统"
+    },
+    {
+      "name": "case-library-narrow",
+      "url": "http://127.0.0.1:3000/case-library",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      },
+      "http_status": 200,
+      "duration_ms": 2158,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/case-library-narrow.png",
+      "must_text": {
+        "用例资产": true,
+        "主集候选": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1024,
+        "scrollWidth": 1024,
+        "clientHeight": 900,
+        "scrollHeight": 3106,
+        "treeNodes": 15,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 用例资产 | 需求资料、生成批次、审查与用例资产的统一工作台 | 用例资产 | 用例资产 | 先选系统，再按主集候选、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。 | 刷新资产 | 上传/生成 | 当前展示主集桶内的候选用例 | 这些用例已进入主集桶，但仍要结合审查状态判断是否可复用；需要排查重复或异常时切到全部资产。 当前批次范围：默认：各文档最新可见批次。 | 去知识库 | 系统 | 漫剧批创系统 | 资产视图 | 主集候选 | 全部资产 | 待处理资产 | 批次范围 | 默认：各文档最新可见批次 | 未指定批次时，后端会按每份文档最新的待审阅/已完成/已落库批次聚合；当前可手动选择 3 个可见批次。 | 优先级 | 全部 | 审查状态 | 全部 | 质量桶 | 全部 | 核验结论 | 全部 | 审查诊断 | 全部 | 筛选 | 重 置 | 当前视图用例 | 1852 | 主集候选 | 选中范围 | 1852 | 文档数 | 1 | 模块数 | 12 | 分支节点 | 121 | P0 用例 | 862 | 已确认 | 0 | 待处理 | 1852 | 重复标记 | 0 | 主集候选仍有待处理用例 | 当前主集候选中有 1852 条待审或需修改用例。确认后再用于复用、搜索或导出会更稳。 | 查看待处理资产 | 去工作台审查 | 文档 / 模块结构 | 1852 条 | 展开全部 | 收起全部 | 漫剧批创系统 | 1852 用例 | 漫剧批创初版功能PRD | 1852 | 批量创建广告 | 367 | 账户授权 | 351 | 标题包 | 290 | 素材中心 | 232 | 任务中心 | 144 | 定向包 | 129 | 商品库 | 87 | 投放链接 | 80 | 漫剧库 | 76 | 全局规则与字段约束 | 50 | 监测链接 | 37 | 提交底层与防超限 | 9 | 漫剧批创系统"
+    },
+    {
+      "name": "search-desktop",
+      "url": "http://127.0.0.1:3000/search?q=CBO&system_id=6b0ea53c-f734-4bc9-8506-663d47107b9d",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 2259,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/search-desktop.png",
+      "must_text": {
+        "全局搜索": true,
+        "定位到批次": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 2411,
+        "treeNodes": 0,
+        "tableRows": 20,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 全局搜索 | 需求资料、生成批次、审查与用例资产的统一工作台 | 全局搜索 | 用例搜索 | 跨系统检索已生成用例，定位重复断言、历史覆盖和可追溯的来源批次。 | 匹配结果 | 284 | 本页展示 | 20 | 当前关键词 | CBO | 搜索关键词 |  搜索 | 系统 | 漫剧批创系统 | 优先级 | 全部优先级 | 审核状态 | 全部状态 | 共找到 284 条结果 | 标题\t所属系统\t文档\t优先级\t状态\t匹配度\t创建时间 |  | 标题 | \t | 所属系统 | \t | 文档 | \t | 优先级 | \t | 状态 | \t | 匹配度 | \t | 创建时间 |  |  | CBO 激活与其他 CBO 系列（CBO 直投/CBO 付费 ROI）链接类型区分验证 | 定位到批次 | 来源文档 | \t漫剧批创系统\t漫剧批创初版功能PRD\tP1\t待审\t100%\t2026/6/30 14:59:37 |  | 投放方式为「CBO 直投」时，链接类型推导为 IAP，提交时自动绑定 IAP 预置链接 | 定位到批次 | 来源文档 | \t漫剧批创系统\t漫剧批创初版功能PRD\tP1\t待审\t100%\t2026/6/30 14:59:37 |  | CBO 付费 ROI 字段显隐与默认值验证 | 定位到批次 | 来源文档 | \t漫剧批创系统\t漫剧批创初版功能PRD\tP0\t待审\t100%\t2026/6/30 14:59:37 |  | CBO 激活（cbo-activation）提交时自动绑定 IAA 预置监测链接 | 定位到批次 | 来源文档 | \t漫剧批创系统\t漫剧批创初版功能PRD\tP1\t待审\t100%\t2026/6/30 14:59:37 |  | POST /api/batch/submit 接口校验 CBO 类投放方式不接受"
+    },
+    {
+      "name": "exports-desktop",
+      "url": "http://127.0.0.1:3000/exports",
+      "viewport": {
+        "width": 1440,
+        "height": 1000
+      },
+      "http_status": 200,
+      "duration_ms": 1937,
+      "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/exports-desktop.png",
+      "must_text": {
+        "导出中心": true,
+        "新建导出": true
+      },
+      "missing_text": [],
+      "console_errors": [],
+      "page_errors": [],
+      "failed_requests": [],
+      "failed_request_count": 0,
+      "layout_metrics": {
+        "clientWidth": 1440,
+        "scrollWidth": 1440,
+        "clientHeight": 1000,
+        "scrollHeight": 1000,
+        "treeNodes": 0,
+        "tableRows": 2,
+        "title": "QA Platforms"
+      },
+      "page_level_horizontal_overflow": false,
+      "text_excerpt": "QA | QA Platforms | 工作台 | 项目/系统 | 用例资产 | 全局搜索 | 导出中心 | 导出中心 | 需求资料、生成批次、审查与用例资产的统一工作台 | 导出中心 | 用例交付导出 | 从已审查批次或系统资产生成交付文件；Markdown 适合评审归档，Excel 适合同步外部测试管理工具。 | 刷新 | 新建导出 | 导出中心用于拿到可交付文件 | 建议先完成批次审查或落库，再从这里导出批次结果或系统资产快照。完成后直接下载文件；失败任务可按相同范围重新创建。 | 任务总数 | 2 | 本页处理中 | 0 | 本页已完成 | 2 | 可下载文件 | 2 | 本页失败 | 0 | 任务状态 | 全部状态 | 筛选会请求后端导出列表，不只是当前页过滤。 | 导出任务\t状态\t范围\t格式\t完成时间 |  | 导出任务 | \t | 状态 | \t | 范围 | \t | 格式 | \t | 完成时间 |  |  | 批次导出 | Excel | #50b987ab | 创建于 2026/7/4 15:49:50 | 下载文件 | \t已完成\t批次\tExcel\t- |  | 批次导出 | Excel | #3a5117c1 | 创建于 2026/7/4 07:01:59 | 下载文件 | \t已完成\t批次\tExcel\t- | 共 2 条 | 1 | 20 / page"
+    }
+  ],
+  "doc_type_upload_probe": {
+    "system_name": "stage_e_doc_type_probe_28f03ef2",
+    "created_system_id": "bbf27284-4740-46f4-bde4-a48b7b1e461d",
+    "upload_status": 201,
+    "uploaded_count": 1,
+    "uploaded_doc_types": [
+      "prd"
+    ],
+    "uploaded_titles": [
+      "stage-e-doc-type-probe"
+    ],
+    "listed_doc_types": [
+      "prd"
+    ],
+    "listed_total": 1,
+    "cleanup_error": "<HTTPError 409: 'Conflict'>",
+    "cleanup_after_document_delete": {
+      "delete_system_error": {
+        "status": 409,
+        "body": "{\"error_code\":\"E4091\",\"message\":\"该系统下仍有文档或批次，无法删除。请先删除关联数据\",\"request_id\":\"bb2a7150-be45-48c8-ac0f-dd7b483ea0ed\"}"
+      },
+      "post_cleanup_get_status": 200,
+      "post_cleanup_get_body": "{\"code\":0,\"message\":\"success\",\"data\":{\"id\":\"bbf27284-4740-46f4-bde4-a48b7b1e461d\",\"name\":\"stage_e_doc_type_probe_28f03ef2\",\"created_at\":\"2026-07-04T11:37:19.040105+00:00\",\"updated_at\":\"2026-07-04T11:37:19.040105+00:00\",\"description\":\"阶段E doc_type 临时验证，可删除\"}}"
+    },
+    "cleanup_note": "首次删除系统因仍有文档返回 409；随后删除临时文档，再删除临时系统。",
+    "hard_cleanup": {
+      "system_found_before": true,
+      "system_name_before": "stage_e_doc_type_probe_28f03ef2",
+      "hard_deleted_document_ids": [
+        "126cc4fe-b036-4fce-9032-780afe6317c0"
+      ],
+      "system_found_after": false,
+      "document_count_after": 0
+    }
+  },
+  "batch_review_controls_probe": {
+    "url": "http://127.0.0.1:3000/batches/6f30e1bd-89ad-4e98-878c-4b48014eb1a4?from=review&status=pending_review",
+    "controls": {
+      "确认": {
+        "count": 20,
+        "first_enabled": true
+      },
+      "需修改": {
+        "count": 21,
+        "first_enabled": true
+      },
+      "删除": {
+        "count": 20,
+        "first_enabled": true
+      }
+    },
+    "detail_drawer_opened": true,
+    "screenshot": ".trellis/tasks/07-04-ux-runtime-verification-release/screenshots/batch-detail-drawer-desktop.png",
+    "console_errors": [],
+    "page_errors": []
+  }
+}

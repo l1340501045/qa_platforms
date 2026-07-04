@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "typecheck": "tsc --noEmit",
     "test:case-assets": "node --test src/components/case-assets/*.test.ts",
     "test:ui-models": "node --test src/components/case-assets/*.test.ts src/services/*.test.ts src/utils/*.test.ts",
     "preview": "vite preview",
