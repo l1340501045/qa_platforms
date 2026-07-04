@@ -33,6 +33,7 @@ import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
+import { buildSearchReturnUrl } from '../../utils/searchReturn';
 
 const { Text } = Typography;
 
@@ -137,9 +138,11 @@ const DocumentDetailPage: React.FC = () => {
   const [parseOpen, setParseOpen] = useState(false);
 
   const fromKnowledge = searchParams.get('from') === 'knowledge';
+  const fromSearch = searchParams.get('from') === 'search';
   const knowledgeSystemId = fromKnowledge ? searchParams.get('system_id') : null;
-  const returnUrl = buildKnowledgeReturnUrl(knowledgeSystemId);
-  const returnLabel = knowledgeSystemId ? '返回知识库' : '返回项目/系统';
+  const searchReturnUrl = buildSearchReturnUrl(searchParams);
+  const returnUrl = fromSearch ? searchReturnUrl : buildKnowledgeReturnUrl(knowledgeSystemId);
+  const returnLabel = fromSearch ? '返回搜索结果' : knowledgeSystemId ? '返回知识库' : '返回项目/系统';
 
   useEffect(() => {
     if (!documentId) return;
@@ -329,7 +332,12 @@ const DocumentDetailPage: React.FC = () => {
           <Space size={8} wrap>
             <Link to="/systems">项目/系统</Link>
             <Text type="secondary">/</Text>
-            {knowledgeSystemId && (
+            {fromSearch ? (
+              <>
+                <Link to={searchReturnUrl}>全局搜索</Link>
+                <Text type="secondary">/</Text>
+              </>
+            ) : knowledgeSystemId && (
               <>
                 <Link to={returnUrl}>知识库</Link>
                 <Text type="secondary">/</Text>

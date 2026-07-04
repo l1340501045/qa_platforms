@@ -37,6 +37,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import { buildSearchReturnUrl } from '../../utils/searchReturn';
 import type {
   BatchStatus,
   CaseBucket,
@@ -433,6 +434,7 @@ const Workbench: React.FC = () => {
   const openQuestionCount = openQuestions?.length ?? 0;
   const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
   const cameFromReview = searchParams.get('from') === 'review';
+  const cameFromSearch = searchParams.get('from') === 'search';
   const reviewReturnStatus = cameFromReview
     ? normalizeReviewReturnStatus(searchParams.get('status'))
     : undefined;
@@ -442,6 +444,11 @@ const Workbench: React.FC = () => {
   const reviewReturnLabel = reviewReturnStatus
     ? `返回工作台（${REVIEW_RETURN_STATUS_LABELS[reviewReturnStatus]}）`
     : '返回工作台';
+  const contextualReturn = cameFromReview
+    ? { url: reviewReturnUrl, label: reviewReturnLabel }
+    : cameFromSearch
+      ? { url: buildSearchReturnUrl(searchParams), label: '返回搜索结果' }
+      : null;
 
   const metricItems = useMemo(() => {
     if (!batch) return [];
@@ -554,9 +561,9 @@ const Workbench: React.FC = () => {
   );
   const renderHeaderActions = () => (
     <>
-      {cameFromReview && (
-        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(reviewReturnUrl)}>
-          {reviewReturnLabel}
+      {contextualReturn && (
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(contextualReturn.url)}>
+          {contextualReturn.label}
         </Button>
       )}
       {renderPrimaryActions()}

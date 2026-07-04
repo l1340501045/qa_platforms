@@ -30,6 +30,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import type { Priority, ReviewStatus, SearchResultItem } from '../../types';
 import { getErrorMessage } from '../../utils/errorMessage';
+import { buildSearchBatchUrl, buildSearchDocumentUrl } from '../../utils/searchReturn';
 
 const { Text } = Typography;
 
@@ -187,7 +188,7 @@ const SearchPage: React.FC = () => {
             <Button
               type="link"
               size="small"
-              onClick={() => navigate(`/batches/${record.batch_id}`)}
+              onClick={() => navigate(buildSearchBatchUrl(record.batch_id, searchParams))}
               style={{ paddingInline: 0 }}
             >
               打开批次
@@ -195,7 +196,7 @@ const SearchPage: React.FC = () => {
             <Button
               type="link"
               size="small"
-              onClick={() => navigate(`/documents/${record.document_id}`)}
+              onClick={() => navigate(buildSearchDocumentUrl(record.document_id, searchParams))}
               style={{ paddingInline: 0 }}
             >
               来源文档
@@ -218,7 +219,7 @@ const SearchPage: React.FC = () => {
       width: 160,
       ellipsis: true,
       render: (text: string, record) => (
-        <a onClick={() => navigate(`/documents/${record.document_id}`)}>{text}</a>
+        <a onClick={() => navigate(buildSearchDocumentUrl(record.document_id, searchParams))}>{text}</a>
       ),
     },
     {
