@@ -204,6 +204,21 @@ export function getCasesForNode(nodeKey: string, tree: CaseAssetTree): CaseTreeC
   return node.caseIds.map((id) => tree.caseMap.get(id)).filter((item): item is CaseTreeCase => Boolean(item));
 }
 
+export function findCaseAssetNodeKeyForCase(root: CaseAssetNode, caseId: string): string | null {
+  let matchKey: string | null = null;
+
+  function visit(node: CaseAssetNode): void {
+    if (!node.caseIds.includes(caseId)) return;
+    matchKey = node.key;
+    for (const child of node.children) {
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return matchKey;
+}
+
 function cloneNode(node: CaseAssetNode, children: CaseAssetNode[]): CaseAssetNode {
   return {
     ...node,

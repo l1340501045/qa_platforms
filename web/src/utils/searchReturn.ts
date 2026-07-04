@@ -8,6 +8,10 @@ interface SearchReturnState {
   page?: number;
 }
 
+interface SearchBatchUrlOptions {
+  caseId?: string;
+}
+
 function appendIfPresent(params: URLSearchParams, key: string, value: string | number | undefined | null) {
   if (value === undefined || value === null || value === '') return;
   params.set(key, String(value));
@@ -44,6 +48,12 @@ export function buildSearchDocumentUrl(documentId: string, source: URLSearchPara
   return `/documents/${encodeURIComponent(documentId)}?${buildSearchReturnParams(source).toString()}`;
 }
 
-export function buildSearchBatchUrl(batchId: string, source: URLSearchParams | SearchReturnState): string {
-  return `/batches/${encodeURIComponent(batchId)}?${buildSearchReturnParams(source).toString()}`;
+export function buildSearchBatchUrl(
+  batchId: string,
+  source: URLSearchParams | SearchReturnState,
+  options: SearchBatchUrlOptions = {},
+): string {
+  const params = buildSearchReturnParams(source);
+  appendIfPresent(params, 'case_id', options.caseId);
+  return `/batches/${encodeURIComponent(batchId)}?${params.toString()}`;
 }

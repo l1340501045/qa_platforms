@@ -438,6 +438,7 @@ const Workbench: React.FC = () => {
   const cameFromSearch = searchParams.get('from') === 'search';
   const cameFromKnowledge = searchParams.get('from') === 'knowledge';
   const cameFromDocument = searchParams.get('from') === 'document';
+  const searchHighlightedCaseId = cameFromSearch ? searchParams.get('case_id') || undefined : undefined;
   const reviewReturnStatus = cameFromReview
     ? normalizeReviewReturnStatus(searchParams.get('status'))
     : undefined;
@@ -720,6 +721,7 @@ const Workbench: React.FC = () => {
         verdictFilter={verdictFilter}
         reviewIssueTypeFilter={reviewIssueTypeFilter}
         searchKeyword={searchKeyword}
+        highlightedCaseId={searchHighlightedCaseId}
         editable={showBottomActions}
         onReview={async (caseId, status, comment) => {
           await reviewCase(caseId, status, comment);

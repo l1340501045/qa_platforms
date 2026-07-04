@@ -188,10 +188,11 @@ const SearchPage: React.FC = () => {
             <Button
               type="link"
               size="small"
-              onClick={() => navigate(buildSearchBatchUrl(record.batch_id, searchParams))}
+              title="打开批次并定位此用例"
+              onClick={() => navigate(buildSearchBatchUrl(record.batch_id, searchParams, { caseId: record.id }))}
               style={{ paddingInline: 0 }}
             >
-              打开批次
+              定位到批次
             </Button>
             <Button
               type="link"

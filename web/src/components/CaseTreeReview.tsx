@@ -9,6 +9,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
   Input,
   Modal,
@@ -25,6 +26,7 @@ import SplitPane from './layout/SplitPane';
 import { layoutTokens } from './layout/tokens';
 import {
   findCaseAssetNode,
+  findCaseAssetNodeKeyForCase,
   getCasesForNode,
   normalizeCaseTreeDocuments,
 } from './case-assets/caseAssetModel';
@@ -92,6 +94,8 @@ interface CaseTreeReviewProps {
   reviewIssueTypeFilter?: ReviewIssueType;
   /** 标题关键词（前端跨模块过滤） */
   searchKeyword?: string;
+  /** 从全局搜索等入口带入的目标用例，用于自动定位和高亮 */
+  highlightedCaseId?: string;
   /** 是否启用审核/编辑/重写（pending_review / reviewing 时为 true） */
   editable?: boolean;
   /** 审核回调（父级调 store.reviewCase 落库） */
@@ -110,6 +114,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
   verdictFilter,
   reviewIssueTypeFilter,
   searchKeyword,
+  highlightedCaseId,
   editable = false,
   onReview,
   onAllCasesChange,
@@ -154,6 +159,10 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     () => normalizeCaseTreeDocuments(treeData, { rootTitle: '全部模块' }),
     [treeData],
   );
+  const normalizedHighlightedCaseId = highlightedCaseId?.trim() || undefined;
+  const highlightedCase = normalizedHighlightedCaseId
+    ? caseAssetTree.caseMap.get(normalizedHighlightedCaseId)
+    : undefined;
 
   useEffect(() => {
     onAllCasesChange?.(getCasesForNode(caseAssetTree.root.key, caseAssetTree));
@@ -166,6 +175,14 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     }
   }, [caseAssetTree, selectedNodeKey]);
 
+  useEffect(() => {
+    if (!normalizedHighlightedCaseId) return;
+    const targetNodeKey = findCaseAssetNodeKeyForCase(caseAssetTree.root, normalizedHighlightedCaseId);
+    if (targetNodeKey) {
+      setSelectedNodeKey(targetNodeKey);
+    }
+  }, [caseAssetTree, normalizedHighlightedCaseId]);
+
   // ─── 当前列表（选中节点 + 标题搜索） ───
   const selectedCases: CaseTreeCase[] = useMemo(() => {
     const kw = (searchKeyword || '').trim();
@@ -176,6 +193,9 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
     }
     return getCasesForNode(selectedNodeKey, caseAssetTree);
   }, [caseAssetTree, selectedNodeKey, searchKeyword]);
+  const highlightedCaseVisible = normalizedHighlightedCaseId
+    ? selectedCases.some((item) => item.id === normalizedHighlightedCaseId)
+    : false;
 
   const listTitle = useMemo(() => {
     if ((searchKeyword || '').trim()) return `搜索「${searchKeyword!.trim()}」`;
@@ -309,6 +329,21 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
               </div>
               <Text type="secondary" style={{ flexShrink: 0 }}>{selectedCases.length} 条</Text>
             </div>
+            {normalizedHighlightedCaseId && (
+              <Alert
+                type={highlightedCaseVisible ? 'info' : 'warning'}
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={highlightedCaseVisible ? '已定位搜索命中用例' : '当前列表未显示搜索命中用例'}
+                description={
+                  highlightedCaseVisible
+                    ? '下方高亮行就是刚才从搜索结果打开的用例，可直接点标题查看证据或继续审查。'
+                    : highlightedCase
+                      ? '该用例存在于当前批次，但可能被标题搜索或当前选中范围排除。清空标题搜索，或返回搜索结果重新定位。'
+                      : '这通常是当前 Review 状态、质量桶或核验结论筛选排除了该用例。清空筛选后再从搜索结果进入，或返回搜索结果重新定位。'
+                }
+              />
+            )}
             <CaseAssetTable
               cases={selectedCases}
               titleColumnLabel="标题"
@@ -316,6 +351,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
               showIterationTag
               onOpenCase={setDetailCaseId}
               renderActions={editable ? renderReviewActions : undefined}
+              highlightedCaseId={normalizedHighlightedCaseId}
               pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 条`, showSizeChanger: true }}
             />
           </div>

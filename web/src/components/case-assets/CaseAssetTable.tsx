@@ -20,6 +20,7 @@ interface CaseAssetTableProps {
   actionColumnWidth?: number;
   pagination?: TablePaginationConfig;
   rowClickToOpen?: boolean;
+  highlightedCaseId?: string;
 }
 
 function getTitleClampStyle(maxLines = 2): React.CSSProperties {
@@ -43,6 +44,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
   actionColumnWidth = 160,
   pagination,
   rowClickToOpen = false,
+  highlightedCaseId,
 }) => {
   const columns: ColumnsType<CaseTreeCase> = useMemo(() => {
     const tableColumns: ColumnsType<CaseTreeCase> = [
@@ -138,6 +140,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         onClick: rowClickToOpen ? () => onOpenCase?.(record.id) : undefined,
         style: rowClickToOpen ? { cursor: 'pointer' } : undefined,
       })}
+      rowClassName={(record) => (record.id === highlightedCaseId ? 'case-asset-table-row-highlight' : '')}
     />
   );
 };

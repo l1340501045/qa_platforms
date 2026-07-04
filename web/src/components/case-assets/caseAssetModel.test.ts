@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   filterCaseAssetTree,
+  findCaseAssetNodeKeyForCase,
   getCasesForNode,
   getDefaultExpandedKeys,
   normalizeCaseTreeDocuments,
@@ -103,6 +104,17 @@ test('getCasesForNode returns all cases under a module or intermediate branch', 
   assert.deepEqual(
     getCasesForNode(accountDialog.key, tree).map((item) => item.id),
     ['case-a', 'case-b', 'case-c'],
+  );
+});
+
+test('findCaseAssetNodeKeyForCase returns the deepest node that contains the case', () => {
+  const tree = normalizeCaseTreeDocuments(makeTree());
+  const nodeKey = findCaseAssetNodeKeyForCase(tree.root, 'case-c');
+
+  assert.ok(nodeKey);
+  assert.deepEqual(
+    getCasesForNode(nodeKey, tree).map((item) => item.id),
+    ['case-c'],
   );
 });
 
