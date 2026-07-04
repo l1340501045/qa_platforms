@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Form,
@@ -19,6 +19,7 @@ import {
   EditOutlined,
   FolderOpenOutlined,
   PlusOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
@@ -29,6 +30,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text, Link } = Typography;
 
@@ -86,7 +88,20 @@ const SystemsPage: React.FC = () => {
   const [keyword, setKeyword] = useState('');
   const [stageFilter, setStageFilter] = useState<SystemStageFilter>('all');
   const [sortBy, setSortBy] = useState<SystemSort>('updated_desc');
+  const [systemsError, setSystemsError] = useState<string | null>(null);
   const [form] = Form.useForm();
+
+  const loadSystems = useCallback(
+    async (page: number, pageSize: number) => {
+      setSystemsError(null);
+      try {
+        await fetchSystems({ page, per_page: pageSize });
+      } catch (err) {
+        setSystemsError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      }
+    },
+    [fetchSystems],
+  );
 
   const knownDocumentTotal = systems.reduce(
     (sum, system) => sum + (typeof system.document_count === 'number' ? system.document_count : 0),
@@ -131,11 +146,13 @@ const SystemsPage: React.FC = () => {
   }, [keyword, sortBy, stageFilter, systems]);
 
   useEffect(() => {
-    fetchSystems({ page: 1, per_page: systemsPerPage });
-  }, []);
+    loadSystems(1, systemsPerPage);
+    // 仅初始加载；分页变化由 Pagination.onChange 驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadSystems]);
 
   const handlePageChange = (page: number, pageSize: number) => {
-    fetchSystems({ page, per_page: pageSize });
+    loadSystems(page, pageSize);
   };
 
   const openKnowledgeBase = (system: System, e?: React.MouseEvent<HTMLElement>) => {
@@ -307,12 +324,33 @@ const SystemsPage: React.FC = () => {
 
       <MetricStrip
         items={[
-          { key: 'systems', label: '系统总数', value: systemsTotal },
-          { key: 'active', label: '当前页有资料/批次', value: activeSystems, tone: 'primary' },
-          { key: 'waiting', label: '当前页待上传资料', value: waitingSystems, tone: waitingSystems > 0 ? 'warning' : 'default' },
-          { key: 'generated', label: '当前页已有批次', value: generatedSystems, tone: generatedSystems > 0 ? 'success' : 'default' },
-          { key: 'documents', label: '当前页文档数', value: knownDocumentTotal },
-          { key: 'batches', label: '当前页批次数', value: knownBatchTotal },
+          {
+            key: 'systems',
+            label: '系统总数',
+            value: systemsError ? '-' : systemsTotal,
+            tone: systemsError ? 'warning' : 'default',
+            hint: systemsError ? '加载失败' : undefined,
+          },
+          {
+            key: 'active',
+            label: '当前页有资料/批次',
+            value: systemsError ? '-' : activeSystems,
+            tone: systemsError ? 'warning' : 'primary',
+          },
+          {
+            key: 'waiting',
+            label: '当前页待上传资料',
+            value: systemsError ? '-' : waitingSystems,
+            tone: !systemsError && waitingSystems > 0 ? 'warning' : 'default',
+          },
+          {
+            key: 'generated',
+            label: '当前页已有批次',
+            value: systemsError ? '-' : generatedSystems,
+            tone: !systemsError && generatedSystems > 0 ? 'success' : 'default',
+          },
+          { key: 'documents', label: '当前页文档数', value: systemsError ? '-' : knownDocumentTotal },
+          { key: 'batches', label: '当前页批次数', value: systemsError ? '-' : knownBatchTotal },
         ]}
       />
 
@@ -352,7 +390,20 @@ const SystemsPage: React.FC = () => {
       </FilterBar>
 
       <Spin spinning={systemsLoading}>
-        {systems.length > 0 && visibleSystems.length > 0 && (
+        {systemsError && !systemsLoading && (
+          <EmptyState
+            role="alert"
+            title="系统列表加载失败"
+            description={systemsError}
+            action={
+              <Button icon={<ReloadOutlined />} onClick={() => loadSystems(systemsPage || 1, systemsPerPage)}>
+                重试加载
+              </Button>
+            }
+          />
+        )}
+
+        {!systemsError && systems.length > 0 && visibleSystems.length > 0 && (
           <div
             style={{
               border: `1px solid ${layoutTokens.border}`,
@@ -376,7 +427,7 @@ const SystemsPage: React.FC = () => {
           </div>
         )}
 
-        {systems.length === 0 && !systemsLoading && (
+        {!systemsError && systems.length === 0 && !systemsLoading && (
           <EmptyState
             title="还没有项目/系统"
             description="先创建一个业务系统，再上传 PRD、技术文档或测试规则。"
@@ -388,7 +439,7 @@ const SystemsPage: React.FC = () => {
           />
         )}
 
-        {systems.length > 0 && visibleSystems.length === 0 && !systemsLoading && (
+        {!systemsError && systems.length > 0 && visibleSystems.length === 0 && !systemsLoading && (
           <EmptyState
             title="当前页没有匹配的系统"
             description="筛选只作用于当前分页；可以重置筛选或切换分页继续查找。"
@@ -397,7 +448,7 @@ const SystemsPage: React.FC = () => {
         )}
       </Spin>
 
-      {systemsTotal > 0 && (
+      {!systemsError && systemsTotal > 0 && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24 }}>
           <Pagination
             current={systemsPage}
