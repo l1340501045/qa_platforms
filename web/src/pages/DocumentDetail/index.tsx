@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Alert,
   Button,
   Form,
   message,
@@ -34,6 +35,7 @@ import { layoutTokens } from '../../components/layout/tokens';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
 import { buildDocumentBatchUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
+import { getErrorMessage } from '../../utils/errorMessage';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
 
 const { Text } = Typography;
@@ -129,8 +131,12 @@ const DocumentDetailPage: React.FC = () => {
   const [addForm] = Form.useForm();
   const [addSubmitting, setAddSubmitting] = useState(false);
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [systemOptionsLoading, setSystemOptionsLoading] = useState(false);
+  const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
   const [docOptions, setDocOptions] = useState<Document[]>([]);
   const [docLoading, setDocLoading] = useState(false);
+  const [docOptionsError, setDocOptionsError] = useState<string | null>(null);
+  const [assocSystemId, setAssocSystemId] = useState<string | undefined>();
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
   const [parseOpen, setParseOpen] = useState(false);
 
@@ -200,23 +206,56 @@ const DocumentDetailPage: React.FC = () => {
   const openAddModal = () => {
     addForm.resetFields();
     setDocOptions([]);
+    setDocOptionsError(null);
+    setAssocSystemId(undefined);
     setAddModalOpen(true);
     if (systemOptions.length === 0) {
-      listSystemOptions().then(setSystemOptions).catch(() => {});
+      loadSystemOptions();
+    }
+  };
+
+  const loadSystemOptions = async () => {
+    setSystemOptionsLoading(true);
+    setSystemOptionsError(null);
+    try {
+      const options = await listSystemOptions();
+      setSystemOptions(options);
+    } catch (err) {
+      setSystemOptionsError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      setSystemOptions([]);
+    } finally {
+      setSystemOptionsLoading(false);
     }
   };
 
   // 选目标系统后加载该系统文档（排除当前文档）
   const handleAssocSystemChange = (sysId: string) => {
+    setAssocSystemId(sysId || undefined);
     addForm.setFieldsValue({ target_document_id: undefined });
     setDocOptions([]);
+    setDocOptionsError(null);
     if (!sysId) return;
     setDocLoading(true);
     listDocuments(sysId, { per_page: 100 })
       .then((res) => setDocOptions(res.items.filter((d) => d.id !== documentId)))
-      .catch(() => setDocOptions([]))
+      .catch((err) => {
+        setDocOptionsError(getErrorMessage(err, '目标文档列表暂时无法加载，请重试。'));
+        setDocOptions([]);
+      })
       .finally(() => setDocLoading(false));
   };
+
+  const retryDocOptions = () => {
+    if (assocSystemId) handleAssocSystemChange(assocSystemId);
+  };
+
+  const docOptionsHelp = (() => {
+    if (!assocSystemId) return '先选择目标系统，再选择需要补充为上下文的目标文档。';
+    if (docLoading) return '正在加载该系统下可关联文档。';
+    if (docOptionsError) return '目标文档列表加载失败，不能据此判断该系统没有可关联文档。';
+    if (docOptions.length === 0) return '该系统当前没有其他可关联文档。';
+    return `当前可选择 ${docOptions.length} 篇可关联文档。`;
+  })();
 
   const handleAddAssociation = async () => {
     if (!documentId) return;
@@ -530,9 +569,26 @@ const DocumentDetailPage: React.FC = () => {
               optionFilterProp="label"
               placeholder="选择目标文档所属系统"
               onChange={handleAssocSystemChange}
+              loading={systemOptionsLoading}
+              status={systemOptionsError ? 'warning' : undefined}
+              notFoundContent={systemOptionsError ? '系统列表加载失败' : '暂无系统'}
               options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
             />
           </Form.Item>
+          {systemOptionsError && (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="系统列表加载失败"
+              description={`不能据此判断没有系统可关联。${systemOptionsError}`}
+              action={
+                <Button size="small" loading={systemOptionsLoading} onClick={loadSystemOptions}>
+                  重试系统
+                </Button>
+              }
+            />
+          )}
           <Form.Item
             name="target_document_id"
             label="目标文档"
@@ -543,10 +599,30 @@ const DocumentDetailPage: React.FC = () => {
               optionFilterProp="label"
               placeholder="选择要关联的文档"
               loading={docLoading}
-              disabled={docOptions.length === 0}
+              disabled={!assocSystemId || Boolean(docOptionsError && !docLoading)}
+              status={docOptionsError ? 'warning' : undefined}
+              notFoundContent={docOptionsError ? '目标文档列表加载失败' : '暂无可关联文档'}
               options={docOptions.map((d) => ({ value: d.id, label: d.title }))}
             />
           </Form.Item>
+          {docOptionsError ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              message="目标文档列表加载失败"
+              description={`${docOptionsHelp} ${docOptionsError}`}
+              action={
+                <Button size="small" loading={docLoading} onClick={retryDocOptions}>
+                  重试文档
+                </Button>
+              }
+            />
+          ) : (
+            <Text type="secondary" style={{ display: 'block', marginTop: -12, marginBottom: 16, fontSize: 12 }}>
+              {docOptionsHelp}
+            </Text>
+          )}
           <Form.Item
             name="relation_type"
             label="关联类型"

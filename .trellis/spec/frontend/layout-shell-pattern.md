@@ -212,6 +212,7 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 - 如果 URL 带 `from=knowledge&system_id=<systemId>`，顶部面包屑和返回按钮必须回到 `/systems/:systemId/documents`；直接打开、从搜索或关联文档进入时，继续返回项目/系统入口。
 - 文档关联接口以真实后端为准：`GET /documents/:id/associations` 当前返回分页结构 `{items,total,page,per_page,total_pages}`，前端需要在服务层归一化为页面消费的 `{direct, indirect}`，不能在页面里直接假设 `direct.length` 一定存在。
 - 添加文档关联时，页面可用 `target_document_id` 表达表单语义，但提交给后端必须映射为 `source_doc_id + target_doc_id + relation_type`。
+- 添加关联弹窗加载目标系统或目标文档选项失败时，不得静默显示成空下拉；必须显示 warning 和重试动作，避免 QA 误判没有可补充的上下文资料。
 - 关联文档表格需要使用 `scroll.x`，避免长标题或多列在 1024 宽度撑破页面。
 - 加载失败或文档为空时使用 `EmptyState` 给出返回路径，不能无限显示 loading。
 
@@ -219,6 +220,7 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 
 - 具备 QA 背景但首次使用本平台的人从知识库进入详情后，需要知道这份资料的状态、上下文是否齐、下一步能否生成。
 - 关联文档是测试资产追溯链的一部分，应与生成动作放在同一工作流里呈现。
+- 关联选项加载失败和真实没有可关联文档是两种业务事实；混淆会让 QA 误以为生成上下文已经无法补齐。
 - 详情页只改前端动线，不改变文档解析、知识图谱、生成 pipeline 或 worker 逻辑。
 
 ## 批次工作台审查执行面
