@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Input,
@@ -27,7 +28,6 @@ import {
   collectTreeKeysByDepth,
   filterTreeDataByKeyword,
 } from '../../components/treeUtils';
-import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
@@ -57,14 +57,24 @@ const docTypeLabelMap: Record<DocType, string> = {
   other: '其他',
 };
 
-const docTypeOptions: Array<{ label: string; value: DocType }> = [
-  { label: docTypeLabelMap.prd, value: 'prd' },
-  { label: docTypeLabelMap.tech_doc, value: 'tech_doc' },
-  { label: docTypeLabelMap.test_rule, value: 'test_rule' },
-  { label: docTypeLabelMap.prototype, value: 'prototype' },
-  { label: docTypeLabelMap.bug_record, value: 'bug_record' },
-  { label: docTypeLabelMap.test_case, value: 'test_case' },
-  { label: docTypeLabelMap.other, value: 'other' },
+const docTypeHelpMap: Record<DocType, string> = {
+  prd: '产品需求、用户故事、业务规则，通常作为生成测试用例的主资料。',
+  tech_doc: '接口、架构、状态机、缓存、权限等技术实现资料，用于补充测试依据。',
+  test_rule: '团队测试规范、通用准入规则、专项 checklist，用于约束生成质量。',
+  test_case: '已有测试用例或回归资产，用于迁移、比对和沉淀。',
+  bug_record: '历史缺陷、线上问题或复盘记录，用于补充风险场景。',
+  prototype: '原型截图、流程图、交互图片或含图片的 PRD 目录。',
+  other: '无法归类的资料。系统不会把它当作主 PRD、技术文档或测试规则使用。',
+};
+
+const docTypeOptions: Array<{ label: string; value: DocType; description: string }> = [
+  { label: docTypeLabelMap.prd, value: 'prd', description: docTypeHelpMap.prd },
+  { label: docTypeLabelMap.tech_doc, value: 'tech_doc', description: docTypeHelpMap.tech_doc },
+  { label: docTypeLabelMap.test_rule, value: 'test_rule', description: docTypeHelpMap.test_rule },
+  { label: docTypeLabelMap.prototype, value: 'prototype', description: docTypeHelpMap.prototype },
+  { label: docTypeLabelMap.bug_record, value: 'bug_record', description: docTypeHelpMap.bug_record },
+  { label: docTypeLabelMap.test_case, value: 'test_case', description: docTypeHelpMap.test_case },
+  { label: docTypeLabelMap.other, value: 'other', description: docTypeHelpMap.other },
 ];
 
 const docStatusMap: Record<DocStatus, { status: 'processing' | 'success' | 'error' | 'default'; text: string }> = {
@@ -188,15 +198,33 @@ const KnowledgePage: React.FC = () => {
     fetchDocuments(systemId, { page, per_page: pageSize });
   };
 
-  const handleUpload = async (files: File[]) => {
+  const selectedDocTypeHelp = docTypeHelpMap[selectedDocType];
+
+  const performUpload = async (files: File[], docType: DocType) => {
     if (!systemId || files.length === 0) return;
     try {
-      await uploadDocuments(systemId, files, selectedDocType);
+      await uploadDocuments(systemId, files, docType);
       // 上传成功后刷新文档列表
       fetchDocuments(systemId, { page: 1, per_page: documentsPerPage });
     } catch (err: any) {
       message.error(err?.message || '上传失败');
     }
+  };
+
+  const handleUpload = async (files: File[]) => {
+    if (!systemId || files.length === 0) return;
+    const uploadDocType = selectedDocType;
+    if (uploadDocType === 'other') {
+      Modal.confirm({
+        title: '确认以「其他」类型入库？',
+        content: '「其他」类型不会作为 PRD、技术文档或测试规则参与自动关联。若这份资料会用于生成测试用例，建议先选择更准确的类型。',
+        okText: '继续上传',
+        cancelText: '返回选择类型',
+        onOk: () => performUpload(files, uploadDocType),
+      });
+      return;
+    }
+    await performUpload(files, uploadDocType);
   };
 
   // beforeUpload 收集文件并防止 antd 自动上传；短暂去抖后合并为一个请求
@@ -243,7 +271,36 @@ const KnowledgePage: React.FC = () => {
       title: '标题',
       dataIndex: 'title',
       key: 'title',
-      ellipsis: true,
+      width: 320,
+      render: (title: string, record) => (
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Text strong style={{ lineHeight: 1.5 }}>
+            {title}
+          </Text>
+          <Space size={8} wrap>
+            <Button
+              type="link"
+              size="small"
+              loading={generatingDocId === record.id}
+              onClick={(event) => handleGenerateDocument(record, event)}
+              style={{ paddingInline: 0 }}
+            >
+              生成用例
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                navigate(`/documents/${record.id}`);
+              }}
+              style={{ paddingInline: 0 }}
+            >
+              查看详情
+            </Button>
+          </Space>
+        </Space>
+      ),
     },
     {
       title: '类型',
@@ -277,35 +334,6 @@ const KnowledgePage: React.FC = () => {
       key: 'updated_at',
       width: 160,
       render: (val: string) => new Date(val).toLocaleString(),
-    },
-    {
-      title: '下一步',
-      key: 'actions',
-      width: 180,
-      render: (_, record) => (
-        <Space size={8}>
-          <Button
-            type="link"
-            size="small"
-            loading={generatingDocId === record.id}
-            onClick={(event) => handleGenerateDocument(record, event)}
-            style={{ paddingInline: 0 }}
-          >
-            生成用例
-          </Button>
-          <Button
-            type="link"
-            size="small"
-            onClick={(event) => {
-              event.stopPropagation();
-              navigate(`/documents/${record.id}`);
-            }}
-            style={{ paddingInline: 0 }}
-          >
-            查看详情
-          </Button>
-        </Space>
-      ),
     },
   ];
 
@@ -369,17 +397,79 @@ const KnowledgePage: React.FC = () => {
         ))}
       </div>
 
-      <FilterBar>
-        <Text strong>上传文档类型</Text>
-        <Select<DocType>
-          value={selectedDocType}
-          onChange={setSelectedDocType}
-          options={docTypeOptions}
-          style={{ width: 160 }}
-          disabled={isUploading}
-        />
-        <Text type="secondary">本次上传会按所选类型入库，默认 PRD。</Text>
-      </FilterBar>
+      <div
+        style={{
+          marginBottom: 16,
+          padding: 16,
+          border: `1px solid ${layoutTokens.border}`,
+          borderRadius: layoutTokens.radius,
+          background: layoutTokens.surface,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 12,
+            alignItems: 'flex-start',
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ minWidth: 0 }}>
+            <Text strong>上传前先选择资料类型</Text>
+            <Text
+              style={{
+                display: 'block',
+                marginTop: 4,
+                color: layoutTokens.textSecondary,
+              }}
+            >
+              类型会影响后续自动关联、生成依据和资产追溯；同一批上传文件会统一按当前类型入库。
+            </Text>
+          </div>
+          <Tag color={docTypeColorMap[selectedDocType]} style={{ marginInlineEnd: 0 }}>
+            本次上传：{docTypeLabelMap[selectedDocType]}
+          </Tag>
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(220px, 280px) minmax(260px, 1fr)',
+            gap: 12,
+            alignItems: 'stretch',
+          }}
+        >
+          <Select<DocType>
+            value={selectedDocType}
+            onChange={setSelectedDocType}
+            optionFilterProp="label"
+            options={docTypeOptions}
+            disabled={isUploading}
+            aria-label="上传文档类型"
+          />
+          <div
+            style={{
+              minHeight: 40,
+              padding: '8px 12px',
+              border: `1px solid ${layoutTokens.borderSubtle}`,
+              borderRadius: layoutTokens.radius,
+              background: selectedDocType === 'other' ? layoutTokens.warningSoft : layoutTokens.surfaceMuted,
+              color: selectedDocType === 'other' ? layoutTokens.warning : layoutTokens.textSecondary,
+            }}
+          >
+            {selectedDocTypeHelp}
+          </div>
+        </div>
+        {selectedDocType === 'other' && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="仅在无法归类时使用「其他」"
+            description="如果资料是需求、技术说明、测试规则、原型或历史缺陷，请选择对应类型；错误归类会降低后续生成和追溯质量。"
+          />
+        )}
+      </div>
 
       <Dragger
         accept=".zip,.md,.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg"
@@ -399,7 +489,7 @@ const KnowledgePage: React.FC = () => {
           支持 .zip 压缩包、单个/多个 .md 文件，以及图片文件（可多选）
         </p>
         <p className="ant-upload-hint">
-          当前类型：{docTypeLabelMap[selectedDocType]}
+          本次将以「{docTypeLabelMap[selectedDocType]}」入库：{selectedDocTypeHelp}
         </p>
       </Dragger>
 
@@ -411,7 +501,7 @@ const KnowledgePage: React.FC = () => {
           disabled={isUploading}
         >
           <Button icon={<FolderOpenOutlined />} disabled={isUploading}>
-            上传文件夹（含图片的 PRD 目录）
+            上传文件夹（按「{docTypeLabelMap[selectedDocType]}」入库）
           </Button>
         </Upload>
         <Text type="secondary">
@@ -475,7 +565,7 @@ const KnowledgePage: React.FC = () => {
               dataSource={filteredDocuments}
               rowKey="id"
               pagination={false}
-              scroll={{ x: 620 }}
+              scroll={{ x: 760 }}
               onRow={(record) => ({
                 onClick: () => navigate(`/documents/${record.id}`),
                 style: { cursor: 'pointer' },
