@@ -10,7 +10,7 @@
 2. 新建验收系统，上传 [小规模验收 PRD](./ux-small-batch-prd.md)。
 3. 在前端选择资料类型为 `PRD`，触发生成，记录 `batch_id`。
 4. 批次完成后检查工作台、批次页、用例树、用例资产、搜索和导出。
-5. 找一个具备 QA 背景但首次使用本平台的人，按 runbook 做任务演练。
+5. 找一个具备 QA 背景但首次使用本平台的人，按 [观察表](./first-use-observation.md) 做任务演练。
 6. 执行 `uv run python scripts/audit_export.py <batch_id> --dump` 生成 `.audit/<batch_id>/`。
 7. 按 [跑批后回填模板](./post-batch-report-template.md) 把结果发给 Codex 继续审查。
 
@@ -30,5 +30,7 @@
 ## 样例 PRD 的边界
 
 [ux-small-batch-prd.md](./ux-small-batch-prd.md) 覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、筛选分页和导出，适合证明 UI/UX 主链路是否可用。
+
+[first-use-observation.md](./first-use-observation.md) 用于记录具备 QA 背景但首次使用平台的人是否能独立完成上传、生成、审查和导出。
 
 它不含图片，不能替代视觉模型链路验收；它也不能替代完整大 PRD 的生成质量回归。

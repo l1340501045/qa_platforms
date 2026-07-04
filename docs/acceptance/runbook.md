@@ -139,6 +139,8 @@ rg "BEST_PRACTICE_GENERATION_CONFIG|cases_per_tp_cap|p0_quota_enabled" web/src/s
 
 找一个具备 QA 背景但首次使用本平台的人。只给 TA 一个任务目标，不讲页面怎么用。
 
+建议直接使用 [首次使用平台的 QA 演练观察表](./first-use-observation.md) 记录过程。
+
 任务目标：
 
 ```text
