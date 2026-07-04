@@ -41,7 +41,8 @@
     "07-04-ux-acceptance-generation-config-preflight",
     "07-04-ux-acceptance-preflight-tests",
     "07-04-ux-acceptance-pytest-warning-cleanup",
-    "07-04-ux-parent-implement-status-note"
+    "07-04-ux-parent-implement-status-note",
+    "07-04-ux-final-review-commit-scope-note"
   ],
   "parent": null,
   "relatedFiles": [],
