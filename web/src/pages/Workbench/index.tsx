@@ -37,6 +37,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import { buildDocumentReturnUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
 import type {
   BatchStatus,
@@ -435,6 +436,8 @@ const Workbench: React.FC = () => {
   const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
   const cameFromReview = searchParams.get('from') === 'review';
   const cameFromSearch = searchParams.get('from') === 'search';
+  const cameFromKnowledge = searchParams.get('from') === 'knowledge';
+  const cameFromDocument = searchParams.get('from') === 'document';
   const reviewReturnStatus = cameFromReview
     ? normalizeReviewReturnStatus(searchParams.get('status'))
     : undefined;
@@ -444,11 +447,17 @@ const Workbench: React.FC = () => {
   const reviewReturnLabel = reviewReturnStatus
     ? `返回工作台（${REVIEW_RETURN_STATUS_LABELS[reviewReturnStatus]}）`
     : '返回工作台';
+  const knowledgeReturnUrl = cameFromKnowledge ? buildKnowledgeReturnUrl(searchParams.get('system_id')) : null;
+  const documentReturnUrl = cameFromDocument ? buildDocumentReturnUrl(searchParams) : null;
   const contextualReturn = cameFromReview
     ? { url: reviewReturnUrl, label: reviewReturnLabel }
     : cameFromSearch
       ? { url: buildSearchReturnUrl(searchParams), label: '返回搜索结果' }
-      : null;
+      : knowledgeReturnUrl
+        ? { url: knowledgeReturnUrl, label: '返回知识库' }
+        : documentReturnUrl
+          ? { url: documentReturnUrl, label: '返回文档详情' }
+          : null;
 
   const metricItems = useMemo(() => {
     if (!batch) return [];

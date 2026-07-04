@@ -33,6 +33,7 @@ import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
 import type { DocAssociations, DocRelationType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
+import { buildDocumentBatchUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
 
 const { Text } = Typography;
@@ -112,10 +113,6 @@ const metricToneFromStatus = (
   return 'default';
 };
 
-function buildKnowledgeReturnUrl(systemId: string | null): string {
-  return systemId ? `/systems/${encodeURIComponent(systemId)}/documents` : '/systems';
-}
-
 const DocumentDetailPage: React.FC = () => {
   const { documentId } = useParams<{ documentId: string }>();
   const navigate = useNavigate();
@@ -190,7 +187,7 @@ const DocumentDetailPage: React.FC = () => {
         try {
           const res = await triggerGeneration(documentId);
           message.success('生成任务已创建');
-          navigate(`/batches/${res.batch_id}`);
+          navigate(buildDocumentBatchUrl(res.batch_id, documentId, searchParams));
         } catch (err: any) {
           message.error(err?.message || '生成失败');
         } finally {

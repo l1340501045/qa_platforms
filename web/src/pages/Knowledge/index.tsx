@@ -33,6 +33,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import SplitPane from '../../components/layout/SplitPane';
 import { layoutTokens } from '../../components/layout/tokens';
+import { buildKnowledgeBatchUrl } from '../../utils/batchReturn';
 
 const { Dragger } = Upload;
 const { Title, Text } = Typography;
@@ -262,7 +263,7 @@ const KnowledgePage: React.FC = () => {
         try {
           const res = await triggerGeneration(doc.id);
           message.success('生成任务已创建');
-          navigate(`/batches/${res.batch_id}`);
+          navigate(buildKnowledgeBatchUrl(res.batch_id, systemId));
         } catch (err: any) {
           message.error(err?.message || '生成失败');
         } finally {

@@ -169,6 +169,7 @@ switch (batch.status) {
 - 窄屏下“生成用例 / 查看详情”必须跟随文档标题在主列可见；不要把主流程动作长期藏在表格横向滚动深处。
 - 从知识库进入文档详情时，详情链接必须带上 `from=knowledge&system_id=<systemId>`；详情页应据此提供“返回知识库”入口，刷新后仍能回到原系统知识库。
 - “生成用例”复用现有 `triggerGeneration(documentId)`，成功后跳转 `/batches/:batchId`。
+- 从知识库列表触发生成进入批次页时，跳转 URL 必须带上 `from=knowledge&system_id=<systemId>`；批次页应显示“返回知识库”，让 QA 能回到原系统继续补资料或查看上传结果。
 - 列表里的生成动作必须有确认弹窗，避免误触发生成任务。
 - 行点击仍可进入 `/documents/:documentId` 详情；按钮点击要 `stopPropagation()`，避免和行点击冲突。
 - 该入口只新增前端动线，不改变生成配置、worker、pipeline 或后端契约。
@@ -201,6 +202,7 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 
 - 页面必须接入 `PageShell` / `PageHeader` / `MetricStrip`，顶部直接暴露文档类型、导入状态、嵌入状态、关联数。
 - 顶部主动作必须保留“生成测试用例”，并复用现有 `triggerGeneration(documentId)`；成功后跳转 `/batches/:batchId`。
+- 从文档详情触发生成进入批次页时，跳转 URL 必须带上 `from=document&document_id=<documentId>`；如果文档详情本身来自知识库或搜索，应保留该来源上下文，批次页返回文档详情后仍能继续回到原上下文。
 - 生成动作必须有确认弹窗，避免误触发真实生成批次。
 - 保留“添加关联”“知识速查表”“解析详情”等已有能力，不改变 API 契约。
 - 如果 URL 带 `from=knowledge&system_id=<systemId>`，顶部面包屑和返回按钮必须回到 `/systems/:systemId/documents`；直接打开、从搜索或关联文档进入时，继续返回项目/系统入口。
@@ -226,6 +228,7 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 - 阶段进度需要独立成区，不能只把 `Steps` 混在筛选栏附近。
 - 待澄清状态必须有显式“处理澄清”入口；即使自动弹窗被关闭，页面内也要能重新打开。
 - 审查态必须保留“触发迭代”和“落库归档”入口；底部操作栏可 sticky，但不能遮挡表格内容。
+- 批次页需要识别 `from=review/search/knowledge/document` 等前端来源上下文，展示对应“返回工作台 / 返回搜索结果 / 返回知识库 / 返回文档详情”动作；返回按钮只改前端导航，不影响批次状态或生成流水线。
 - 左侧树只负责定位文档/模块/分支，右侧表格负责逐条审查；复用 `CaseTreeReview` + `CaseAssetTree` + `CaseAssetTable`，不得复制树构建逻辑。
 - 1024 宽度下树表应上下堆叠或保证右侧表格核心操作列可见；表格需要局部 `scroll.x`，但不能造成页面级横向滚动。
 - 加载态不要使用 Ant Design v5 不支持的独立 `Spin tip` 模式；若需要文案，用 `Spin` + 邻近文本。
