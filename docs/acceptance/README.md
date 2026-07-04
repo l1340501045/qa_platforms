@@ -6,13 +6,14 @@
 
 ## 执行顺序
 
-1. 先按 [真实跑批 Runbook](./runbook.md) 启动环境、检查分支和确认模型配置。
-2. 新建验收系统，上传 [小规模验收 PRD](./ux-small-batch-prd.md)。
-3. 在前端选择资料类型为 `PRD`，触发生成，记录 `batch_id`。
-4. 批次完成后检查工作台、批次页、用例树、用例资产、搜索和导出。
-5. 找一个具备 QA 背景但首次使用本平台的人，按 [观察表](./first-use-observation.md) 做任务演练。
-6. 执行 `uv run python scripts/audit_export.py <batch_id> --dump` 生成 `.audit/<batch_id>/`。
-7. 按 [跑批后回填模板](./post-batch-report-template.md) 把结果发给 Codex 继续审查。
+1. 先打开 [验收证据台账](./evidence-ledger.md)，确认这次要补哪些硬证据。
+2. 按 [真实跑批 Runbook](./runbook.md) 启动环境、检查分支和确认模型配置。
+3. 新建验收系统，上传 [小规模验收 PRD](./ux-small-batch-prd.md)。
+4. 在前端选择资料类型为 `PRD`，触发生成，记录 `batch_id`。
+5. 批次完成后检查工作台、批次页、用例树、用例资产、搜索和导出。
+6. 找一个具备 QA 背景但首次使用本平台的人，按 [观察表](./first-use-observation.md) 做任务演练。
+7. 执行 `uv run python scripts/audit_export.py <batch_id> --dump` 生成 `.audit/<batch_id>/`。
+8. 按 [跑批后回填模板](./post-batch-report-template.md) 或 [验收证据台账](./evidence-ledger.md) 的最小交付包，把结果发给 Codex 继续审查。
 
 ## 判断标准
 
@@ -33,4 +34,6 @@
 
 [first-use-observation.md](./first-use-observation.md) 用于记录具备 QA 背景但首次使用平台的人，是否能在没有平台操作讲解的情况下独立完成上传、生成、审查和导出。
 
-它不含图片，不能替代视觉模型链路验收；它也不能替代完整大 PRD 的生成质量回归。
+[evidence-ledger.md](./evidence-ledger.md) 用于区分“已有文档/脚本”和“真正完成的验收证据”，避免把待执行事项误判成已通过。
+
+小规模验收 PRD 不含图片，不能替代视觉模型链路验收；它也不能替代完整大 PRD 的生成质量回归。

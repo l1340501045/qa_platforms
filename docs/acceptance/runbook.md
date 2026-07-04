@@ -8,6 +8,8 @@
 
 ## 0. 先确认代码状态
 
+开始前先打开 [验收证据台账](./evidence-ledger.md)。这份台账用于记录哪些证据已经成立，哪些还缺，不替代下面的操作步骤。
+
 在仓库根目录先跑静态预检。如果 API / frontend / worker 还没启动，用这个命令即可：
 
 ```bash
@@ -193,6 +195,8 @@ uv run python scripts/audit_export.py <batch_id> --dump
 ```
 
 把 `<batch_id>` 和 `.audit/<batch_id>/REPORT.md` 的前几段发给 Codex，我会继续按之前 `.audit` 多视图审查方式看用例质量。
+
+如果不确定该贴哪些信息，按 [验收证据台账](./evidence-ledger.md) 的“给 Codex 的最小交付包”回填即可。
 
 ## 6. 合 main 判定
 
