@@ -1,5 +1,17 @@
 # QA 平台 UI/UX 重构执行计划
 
+## 当前状态说明
+
+本文件是父任务早期的阶段化执行计划稿，保留用于追溯原始拆解思路。实际执行已经拆分为子任务完成并归档，当前进度不要以本文件未勾选的历史 checkbox 判断。
+
+当前合并前状态以以下文件为准：
+
+- `main-merge-readiness.md`
+- `final-integration-review.md`
+- `.trellis/tasks/archive/2026-07/` 下的 UI/UX 子任务归档
+
+截至当前 HEAD，父任务处于“UI/UX 候选交付，等待真实小批次、首次使用平台 QA 演练和新 `.audit` 审查”状态。
+
 ## 执行前门禁
 
 - [ ] 不进入实现，直到用户审过 `prd.md`、`design.md`、`implement.md` 并明确同意开始。

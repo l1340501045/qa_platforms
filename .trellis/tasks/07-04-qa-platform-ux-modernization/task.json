@@ -40,7 +40,8 @@
     "07-04-ux-acceptance-preflight-runbook-consistency",
     "07-04-ux-acceptance-generation-config-preflight",
     "07-04-ux-acceptance-preflight-tests",
-    "07-04-ux-acceptance-pytest-warning-cleanup"
+    "07-04-ux-acceptance-pytest-warning-cleanup",
+    "07-04-ux-parent-implement-status-note"
   ],
   "parent": null,
   "relatedFiles": [],
