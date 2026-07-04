@@ -24,7 +24,7 @@
 | 分支正确 | `git status --short --branch` | 当前分支是 `feat/qa-platform-ux-modernization`，工作区干净 | 待周一复核 | 不通过则暂停验收 |
 | 生成核心未被 UI 分支污染 | `git diff checkpoint/architecture-migration-pre-ux...HEAD --name-only -- src/testcase_generator` | 无输出 | 本地已多次验证，仍需跑前复核 | 有输出则暂停合并 |
 | API / worker / 前端在线 | `uv run python scripts/ux_acceptance_preflight.py` | API、worker、frontend 均通过 | 待周一复核 | 不通过则先修环境 |
-| 模型与生成配置正确 | 按 runbook 第 2 节检查 `.env` 和生成配置 | 模型、并发、case cap 配置符合 runbook | 待周一复核 | 配置不符会污染跑批结论 |
+| 模型与生成配置正确 | `uv run python scripts/ux_acceptance_preflight.py --skip-runtime` 或完整预检 | 模型、并发、case cap、merge、P0 quota 配置符合 runbook | 待周一复核 | 配置不符会污染跑批结论 |
 | 小规模真实批次完成 | 使用 `ux-small-batch-prd.md` 触发生成 | 批次到 `pending_review` 或可归档状态；上传、生成、批次页、审查、资产、搜索、导出主链路不断 | 未完成 | 缺失时不能 GO |
 | 文档类型不误落 `other` | 上传前选 `PRD`，上传后看列表和详情 | 上传后显示为 `PRD`，历史 `other` 可人工重标注 | 未完成 | 失败则 NO-GO |
 | 用例树可操作 | 新批次页查看左侧树 | 不是 PRD 章节平铺；模块下允许分支；默认不展开到难以操作 | 未完成 | 失败则 NO-GO 或 FIX THEN GO |

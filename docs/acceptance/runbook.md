@@ -54,7 +54,7 @@ curl -I http://127.0.0.1:3000
 uv run celery -A src.platform_api.core.celery_app.celery_app inspect ping --timeout=5
 ```
 
-服务启动后，推荐直接跑完整预检：
+服务启动后，推荐直接跑完整预检。完整预检会同时检查模型配置和真实跑批关键生成配置：
 
 ```bash
 uv run python scripts/ux_acceptance_preflight.py
@@ -67,6 +67,8 @@ uv run python scripts/ux_acceptance_preflight.py
 - worker 返回 `pong`。
 
 ## 2. 确认真实跑批配置
+
+通常直接看预检结果即可；如果预检失败或需要排查，再手工执行：
 
 ```bash
 grep -E '^(LLM_PRIMARY_MODEL|LLM_VISION_MODEL|LLM_VERIFY_MODEL|LLM_CONCURRENCY)=' .env

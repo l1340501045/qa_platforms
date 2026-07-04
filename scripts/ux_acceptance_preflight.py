@@ -7,7 +7,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -22,6 +24,12 @@ EXPECTED_ENV = {
     "LLM_VISION_MODEL": "claude-opus-4-6",
     "LLM_VERIFY_MODEL": "deepseek-v4-pro-office",
     "LLM_CONCURRENCY": "8",
+}
+EXPECTED_GENERATION_CONFIG = {
+    "existence_merge_enabled": True,
+    "split_cap_enabled": True,
+    "cases_per_tp_cap": 4,
+    "p0_quota_enabled": False,
 }
 ACCEPTANCE_FILES = [
     "docs/acceptance/README.md",
@@ -63,6 +71,57 @@ def _read_env_file(path: Path) -> dict[str, str]:
         key, value = line.split("=", 1)
         values[key.strip()] = value.strip().strip('"').strip("'")
     return values
+
+
+def _parse_frontend_generation_config(path: Path) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8")
+    marker = "export const BEST_PRACTICE_GENERATION_CONFIG = {"
+    start = text.index(marker)
+    body = text[start : text.index("};", start)]
+    parsed: dict[str, object] = {}
+    for raw_line in body.splitlines()[1:]:
+        line = raw_line.strip().rstrip(",")
+        if not line:
+            continue
+        key, raw_value = line.split(":", 1)
+        value = raw_value.strip()
+        if value == "true":
+            parsed[key] = True
+        elif value == "false":
+            parsed[key] = False
+        elif value.startswith("'") and value.endswith("'"):
+            parsed[key] = value.strip("'")
+        else:
+            parsed[key] = int(value) if value.isdigit() else float(value)
+    return parsed
+
+
+def _parse_pipeline_generation_config(path: Path) -> dict[str, object]:
+    module = ast.parse(path.read_text(encoding="utf-8"))
+    for node in module.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.target.id == "BEST_PRACTICE_GENERATION_CONFIG":
+                value = ast.literal_eval(node.value)
+                if isinstance(value, dict):
+                    return value
+    raise ValueError("未找到 BEST_PRACTICE_GENERATION_CONFIG")
+
+
+def _parse_settings_generation_defaults(path: Path) -> dict[str, object]:
+    text = path.read_text(encoding="utf-8")
+    parsed: dict[str, object] = {}
+    for key in EXPECTED_GENERATION_CONFIG:
+        match = re.search(rf"^\s*{re.escape(key)}:\s*[^=]+=\s*(True|False|\d+)\s*$", text, re.MULTILINE)
+        if not match:
+            continue
+        raw_value = match.group(1)
+        if raw_value == "True":
+            parsed[key] = True
+        elif raw_value == "False":
+            parsed[key] = False
+        else:
+            parsed[key] = int(raw_value)
+    return parsed
 
 
 def check_branch() -> CheckResult:
@@ -159,6 +218,46 @@ def check_env() -> CheckResult:
     )
 
 
+def _generation_config_mismatches(name: str, actual: dict[str, object]) -> list[str]:
+    mismatches = []
+    for key, expected in EXPECTED_GENERATION_CONFIG.items():
+        if key not in actual:
+            mismatches.append(f"{name}.{key}=<missing>，期望 {expected}")
+            continue
+        if actual[key] != expected:
+            mismatches.append(f"{name}.{key}={actual[key]}，期望 {expected}")
+    return mismatches
+
+
+def check_generation_config() -> CheckResult:
+    try:
+        configs = {
+            "frontend": _parse_frontend_generation_config(ROOT / "web/src/services/batchApi.ts"),
+            "pipeline": _parse_pipeline_generation_config(ROOT / "src/testcase_generator/pipeline/config.py"),
+            "settings": _parse_settings_generation_defaults(ROOT / "src/platform_api/core/settings.py"),
+        }
+    except (OSError, ValueError, SyntaxError, KeyError) as exc:
+        return CheckResult(
+            "生成配置",
+            False,
+            str(exc),
+            "确认 batchApi.ts、pipeline/config.py、settings.py 中的生成配置结构未漂移。",
+        )
+
+    mismatches: list[str] = []
+    for name, actual in configs.items():
+        mismatches.extend(_generation_config_mismatches(name, actual))
+    if not mismatches:
+        summary = ", ".join(f"{key}={value}" for key, value in EXPECTED_GENERATION_CONFIG.items())
+        return CheckResult("生成配置", True, summary)
+    return CheckResult(
+        "生成配置",
+        False,
+        "; ".join(mismatches),
+        "按 docs/acceptance/runbook.md 第 2 节修正真实跑批配置，保持前端、settings、pipeline 契约一致。",
+    )
+
+
 def _http_check(name: str, url: str, expected: str, *, include_body: bool = False) -> CheckResult:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
@@ -206,6 +305,7 @@ def run_checks(skip_runtime: bool, allow_dirty: bool) -> list[CheckResult]:
         check_generator_diff(),
         check_acceptance_files(),
         check_env(),
+        check_generation_config(),
     ]
     if not skip_runtime:
         checks.extend(
