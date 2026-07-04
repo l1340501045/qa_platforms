@@ -18,7 +18,7 @@ import {
   PlayCircleOutlined,
   ProfileOutlined,
 } from '@ant-design/icons';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useSearchParams } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import { triggerGeneration } from '../../services/batchApi';
 import { createDocAssociation, getDocAssociations, listDocuments } from '../../services/documentApi';
@@ -111,9 +111,14 @@ const metricToneFromStatus = (
   return 'default';
 };
 
+function buildKnowledgeReturnUrl(systemId: string | null): string {
+  return systemId ? `/systems/${encodeURIComponent(systemId)}/documents` : '/systems';
+}
+
 const DocumentDetailPage: React.FC = () => {
   const { documentId } = useParams<{ documentId: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const { currentDocument, fetchDocument } = useKnowledgeStore();
 
@@ -130,6 +135,11 @@ const DocumentDetailPage: React.FC = () => {
   const [docLoading, setDocLoading] = useState(false);
   const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
   const [parseOpen, setParseOpen] = useState(false);
+
+  const fromKnowledge = searchParams.get('from') === 'knowledge';
+  const knowledgeSystemId = fromKnowledge ? searchParams.get('system_id') : null;
+  const returnUrl = buildKnowledgeReturnUrl(knowledgeSystemId);
+  const returnLabel = knowledgeSystemId ? '返回知识库' : '返回项目/系统';
 
   useEffect(() => {
     if (!documentId) return;
@@ -285,8 +295,8 @@ const DocumentDetailPage: React.FC = () => {
           title="文档不可用"
           description="当前文档可能已被删除，或暂时无法加载。"
           action={
-            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate('/systems')}>
-              返回项目/系统
+            <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(returnUrl)}>
+              {returnLabel}
             </Button>
           }
         />
@@ -302,8 +312,12 @@ const DocumentDetailPage: React.FC = () => {
     label: currentDocument.embedding_status || '-',
     tone: 'default' as StatusTone,
   };
-  const directAssociationCount = associations?.direct.length ?? currentDocument.association_count ?? 0;
-  const indirectAssociationCount = associations?.indirect.length ?? 0;
+  const directAssociations = associations?.direct ?? [];
+  const indirectAssociations = associations?.indirect ?? [];
+  const directAssociationCount = associations
+    ? directAssociations.length
+    : currentDocument.association_count ?? 0;
+  const indirectAssociationCount = indirectAssociations.length;
 
   return (
     <PageShell>
@@ -315,6 +329,12 @@ const DocumentDetailPage: React.FC = () => {
           <Space size={8} wrap>
             <Link to="/systems">项目/系统</Link>
             <Text type="secondary">/</Text>
+            {knowledgeSystemId && (
+              <>
+                <Link to={returnUrl}>知识库</Link>
+                <Text type="secondary">/</Text>
+              </>
+            )}
             <Text type="secondary">文档详情</Text>
             <StatusTag tone={docStatus.tone}>{docStatus.label}</StatusTag>
             <StatusTag tone={embeddingStatus.tone}>{embeddingStatus.label}</StatusTag>
@@ -322,8 +342,8 @@ const DocumentDetailPage: React.FC = () => {
         }
         actions={
           [
-            <Button key="back" icon={<ArrowLeftOutlined />} onClick={() => navigate('/systems')}>
-              返回项目/系统
+            <Button key="back" icon={<ArrowLeftOutlined />} onClick={() => navigate(returnUrl)}>
+              {returnLabel}
             </Button>,
             <Button key="parse" icon={<FileSearchOutlined />} onClick={() => setParseOpen(true)}>
               解析详情
@@ -473,7 +493,7 @@ const DocumentDetailPage: React.FC = () => {
         <Spin spinning={assocLoading}>
           <Table
             columns={assocColumns}
-            dataSource={associations?.direct || []}
+            dataSource={directAssociations}
             rowKey="id"
             pagination={false}
             scroll={{ x: 520 }}

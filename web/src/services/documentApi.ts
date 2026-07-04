@@ -14,6 +14,7 @@ import type {
   DocType,
   DocStatus,
 } from '../types';
+import { normalizeDocAssociations } from './documentAssociationModel';
 
 export interface DocumentFilterParams extends PaginationParams {
   doc_type?: DocType;
@@ -69,7 +70,11 @@ export async function createDocAssociation(
   documentId: string,
   params: CreateDocAssociationRequest,
 ): Promise<DocumentAssociation> {
-  const res = await api.post(`/documents/${documentId}/associations`, params);
+  const res = await api.post(`/documents/${documentId}/associations`, {
+    source_doc_id: documentId,
+    target_doc_id: params.target_document_id,
+    relation_type: params.relation_type,
+  });
   return res.data;
 }
 
@@ -81,5 +86,5 @@ export async function getDocAssociations(
   const res = await api.get(`/documents/${documentId}/associations`, {
     params: { depth },
   });
-  return res.data;
+  return normalizeDocAssociations(res.data, documentId);
 }

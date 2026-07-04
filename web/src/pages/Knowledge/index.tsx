@@ -128,6 +128,12 @@ function buildFolderTree(documents: Document[]): DataNode[] {
   return root;
 }
 
+function buildKnowledgeDocumentUrl(documentId: string, systemId?: string): string {
+  const params = new URLSearchParams({ from: 'knowledge' });
+  if (systemId) params.set('system_id', systemId);
+  return `/documents/${documentId}?${params.toString()}`;
+}
+
 const KnowledgePage: React.FC = () => {
   const { systemId } = useParams<{ systemId: string }>();
   const navigate = useNavigate();
@@ -292,7 +298,7 @@ const KnowledgePage: React.FC = () => {
               size="small"
               onClick={(event) => {
                 event.stopPropagation();
-                navigate(`/documents/${record.id}`);
+                navigate(buildKnowledgeDocumentUrl(record.id, systemId));
               }}
               style={{ paddingInline: 0 }}
             >
@@ -567,7 +573,7 @@ const KnowledgePage: React.FC = () => {
               pagination={false}
               scroll={{ x: 760 }}
               onRow={(record) => ({
-                onClick: () => navigate(`/documents/${record.id}`),
+                onClick: () => navigate(buildKnowledgeDocumentUrl(record.id, systemId)),
                 style: { cursor: 'pointer' },
               })}
             />

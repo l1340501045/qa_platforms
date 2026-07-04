@@ -161,6 +161,7 @@ switch (batch.status) {
 - 选择 `other` / “其他” 类型时必须给出明确风险提示或确认，避免本应作为 PRD、技术文档、测试规则的资料误入库后影响自动关联和生成依据。
 - 文档列表必须有显式“下一步”操作；可放在标题主列或独立操作列，但窄屏下必须可见。
 - 窄屏下“生成用例 / 查看详情”必须跟随文档标题在主列可见；不要把主流程动作长期藏在表格横向滚动深处。
+- 从知识库进入文档详情时，详情链接必须带上 `from=knowledge&system_id=<systemId>`；详情页应据此提供“返回知识库”入口，刷新后仍能回到原系统知识库。
 - “生成用例”复用现有 `triggerGeneration(documentId)`，成功后跳转 `/batches/:batchId`。
 - 列表里的生成动作必须有确认弹窗，避免误触发生成任务。
 - 行点击仍可进入 `/documents/:documentId` 详情；按钮点击要 `stopPropagation()`，避免和行点击冲突。
@@ -196,6 +197,9 @@ const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
 - 顶部主动作必须保留“生成测试用例”，并复用现有 `triggerGeneration(documentId)`；成功后跳转 `/batches/:batchId`。
 - 生成动作必须有确认弹窗，避免误触发真实生成批次。
 - 保留“添加关联”“知识速查表”“解析详情”等已有能力，不改变 API 契约。
+- 如果 URL 带 `from=knowledge&system_id=<systemId>`，顶部面包屑和返回按钮必须回到 `/systems/:systemId/documents`；直接打开、从搜索或关联文档进入时，继续返回项目/系统入口。
+- 文档关联接口以真实后端为准：`GET /documents/:id/associations` 当前返回分页结构 `{items,total,page,per_page,total_pages}`，前端需要在服务层归一化为页面消费的 `{direct, indirect}`，不能在页面里直接假设 `direct.length` 一定存在。
+- 添加文档关联时，页面可用 `target_document_id` 表达表单语义，但提交给后端必须映射为 `source_doc_id + target_doc_id + relation_type`。
 - 关联文档表格需要使用 `scroll.x`，避免长标题或多列在 1024 宽度撑破页面。
 - 加载失败或文档为空时使用 `EmptyState` 给出返回路径，不能无限显示 loading。
 
