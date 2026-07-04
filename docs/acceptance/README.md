@@ -31,6 +31,6 @@
 
 [ux-small-batch-prd.md](./ux-small-batch-prd.md) 覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、筛选分页和导出，适合证明 UI/UX 主链路是否可用。
 
-[first-use-observation.md](./first-use-observation.md) 用于记录具备 QA 背景但首次使用平台的人是否能独立完成上传、生成、审查和导出。
+[first-use-observation.md](./first-use-observation.md) 用于记录具备 QA 背景但首次使用平台的人，是否能在没有平台操作讲解的情况下独立完成上传、生成、审查和导出。
 
 它不含图片，不能替代视觉模型链路验收；它也不能替代完整大 PRD 的生成质量回归。
