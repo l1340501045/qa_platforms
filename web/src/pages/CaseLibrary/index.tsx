@@ -44,6 +44,7 @@ import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import SplitPane from '../../components/layout/SplitPane';
 import { layoutTokens } from '../../components/layout/tokens';
+import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text } = Typography;
 
@@ -102,6 +103,9 @@ const CaseLibraryPage: React.FC = () => {
 
   const [treeData, setTreeData] = useState<CaseTreeDocument[]>([]);
   const [treeLoading, setTreeLoading] = useState(false);
+  const [treeError, setTreeError] = useState<string | null>(null);
+  const [systemLoading, setSystemLoading] = useState(false);
+  const [systemError, setSystemError] = useState<string | null>(null);
 
   const [selectedNodeKey, setSelectedNodeKey] = useState('root');
   const [detailCaseId, setDetailCaseId] = useState<string | null>(null);
@@ -109,20 +113,32 @@ const CaseLibraryPage: React.FC = () => {
   // 可见批次列表（用于批次切换器）
   const [viewableBatches, setViewableBatches] = useState<SystemBatchItem[]>([]);
 
+  const loadSystems = useCallback(async () => {
+    setSystemLoading(true);
+    setSystemError(null);
+    try {
+      const opts = await listSystemOptions();
+      setSystemOptions(opts);
+      if (opts.length > 0) {
+        setSelectedSystemId((current) => current || opts[0].id);
+      } else {
+        setSelectedSystemId(undefined);
+        setTreeData([]);
+      }
+    } catch (err) {
+      setSystemError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      setSystemOptions([]);
+      setSelectedSystemId(undefined);
+      setTreeData([]);
+    } finally {
+      setSystemLoading(false);
+    }
+  }, []);
+
   // 加载系统选项
   useEffect(() => {
-    listSystemOptions()
-      .then((opts) => {
-        setSystemOptions(opts);
-        if (opts.length > 0) {
-          setSelectedSystemId(opts[0].id);
-        } else {
-          setSelectedSystemId(undefined);
-          setTreeData([]);
-        }
-      })
-      .catch(() => {});
-  }, []);
+    loadSystems();
+  }, [loadSystems]);
 
   // 当系统变更时，加载该系统的可见批次列表
   useEffect(() => {
@@ -145,6 +161,7 @@ const CaseLibraryPage: React.FC = () => {
   const loadTree = useCallback(async () => {
     if (!selectedSystemId) return;
     setTreeLoading(true);
+    setTreeError(null);
     try {
       const data = await getCaseTree(selectedSystemId, {
         batch_id: selectedBatchId,
@@ -158,7 +175,8 @@ const CaseLibraryPage: React.FC = () => {
       });
       setTreeData(data);
       setSelectedNodeKey('root');
-    } catch {
+    } catch (err) {
+      setTreeError(getErrorMessage(err, '用例资产暂时无法加载，请重试。'));
       setTreeData([]);
     } finally {
       setTreeLoading(false);
@@ -229,6 +247,7 @@ const CaseLibraryPage: React.FC = () => {
     selectedBatchId || priority || reviewStatus || bucket || verdict || reviewIssueType || caseTreeView !== 'stable',
   );
   const hasSystem = Boolean(selectedSystemId);
+  const assetMetricUnavailable = Boolean(treeError && !treeLoading);
 
   const clearFilters = () => {
     setCaseTreeView('stable');
@@ -259,7 +278,12 @@ const CaseLibraryPage: React.FC = () => {
         description="先选系统，再按稳定主集、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。"
         actions={
           <>
-            <Button icon={<ReloadOutlined />} loading={treeLoading} disabled={!hasSystem} onClick={loadTree}>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={treeLoading || systemLoading}
+              disabled={!hasSystem && !systemError}
+              onClick={hasSystem ? loadTree : loadSystems}
+            >
               刷新资产
             </Button>
             <Button type="primary" icon={<FolderOpenOutlined />} disabled={!hasSystem} onClick={openKnowledgeBase}>
@@ -269,18 +293,39 @@ const CaseLibraryPage: React.FC = () => {
         }
       />
 
+      {systemError && !systemLoading ? (
+        <EmptyState
+          role="alert"
+          title="系统列表加载失败"
+          description={`无法确认有哪些系统和用例资产。${systemError}`}
+          action={<Button onClick={loadSystems}>重试加载</Button>}
+        />
+      ) : (
+        <>
       <Alert
-        type={hasSystem ? 'info' : 'warning'}
+        type={hasSystem && !treeError ? 'info' : 'warning'}
         showIcon
         style={{ marginBottom: 16 }}
-        message={hasSystem ? activeView.message : '先选择一个系统，再查看它沉淀下来的用例资产'}
+        message={
+          treeError
+            ? '用例资产暂时无法加载'
+            : hasSystem
+              ? activeView.message
+              : '先选择一个系统，再查看它沉淀下来的用例资产'
+        }
         description={
-          hasSystem
+          treeError
+            ? '不能据此判断当前系统没有资产；可点击刷新资产或在下方重试加载。'
+            : hasSystem
             ? `${activeView.description} 当前批次范围：${selectedBatchLabel}。`
             : '系统列表为空或尚未选中系统时，用例树不会加载；可以先去系统管理创建系统并上传 PRD。'
         }
         action={
-          hasSystem ? (
+          treeError ? (
+            <Button size="small" onClick={loadTree}>
+              重试加载
+            </Button>
+          ) : hasSystem ? (
             <Button size="small" onClick={openKnowledgeBase}>
               去知识库
             </Button>
@@ -301,11 +346,13 @@ const CaseLibraryPage: React.FC = () => {
             placeholder="选择系统"
             style={{ width: 220 }}
             value={selectedSystemId}
+            loading={systemLoading}
             onChange={(val) => {
               setSelectedSystemId(val);
               setSelectedBatchId(undefined);
               setSelectedNodeKey('root');
               setTreeData([]);
+              setTreeError(null);
             }}
             options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
           />
@@ -445,15 +492,26 @@ const CaseLibraryPage: React.FC = () => {
       {/* ─── 统计卡片 ─── */}
       <MetricStrip
         items={[
-          { key: 'total', label: '当前视图用例', value: stats.total, tone: 'primary', hint: activeView.label },
-          { key: 'selected', label: '选中范围', value: selectedCases.length },
-          { key: 'docs', label: '文档数', value: stats.docCount },
-          { key: 'modules', label: '模块数', value: stats.moduleCount },
-          { key: 'branches', label: '分支节点', value: stats.branchCount },
-          { key: 'p0', label: 'P0 用例', value: stats.p0, tone: 'danger' },
-          { key: 'confirmed', label: '已确认', value: stats.confirmed, tone: 'success' },
-          { key: 'pending', label: '待处理', value: stats.pending + stats.needsModification, tone: 'warning' },
-          { key: 'duplicates', label: '重复标记', value: stats.duplicate },
+          {
+            key: 'total',
+            label: '当前视图用例',
+            value: assetMetricUnavailable ? '-' : stats.total,
+            tone: assetMetricUnavailable ? 'warning' : 'primary',
+            hint: assetMetricUnavailable ? '加载失败' : activeView.label,
+          },
+          { key: 'selected', label: '选中范围', value: assetMetricUnavailable ? '-' : selectedCases.length },
+          { key: 'docs', label: '文档数', value: assetMetricUnavailable ? '-' : stats.docCount },
+          { key: 'modules', label: '模块数', value: assetMetricUnavailable ? '-' : stats.moduleCount },
+          { key: 'branches', label: '分支节点', value: assetMetricUnavailable ? '-' : stats.branchCount },
+          { key: 'p0', label: 'P0 用例', value: assetMetricUnavailable ? '-' : stats.p0, tone: 'danger' },
+          { key: 'confirmed', label: '已确认', value: assetMetricUnavailable ? '-' : stats.confirmed, tone: 'success' },
+          {
+            key: 'pending',
+            label: '待处理',
+            value: assetMetricUnavailable ? '-' : stats.pending + stats.needsModification,
+            tone: 'warning',
+          },
+          { key: 'duplicates', label: '重复标记', value: assetMetricUnavailable ? '-' : stats.duplicate },
         ]}
       />
 
@@ -483,14 +541,28 @@ const CaseLibraryPage: React.FC = () => {
             </div>
             <div style={{ padding: 12 }}>
               <Spin spinning={treeLoading}>
-                <CaseAssetTree
-                  tree={caseAssetTree}
-                  selectedKey={selectedNodeKey}
-                  onSelect={setSelectedNodeKey}
-                  emptyDescription={hasSystem ? '当前视图暂无资产' : '请选择系统'}
-                  height={500}
-                  maxHeight="calc(100vh - 440px)"
-                />
+                {treeError && !treeLoading ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="结构加载失败"
+                    description="用例树暂时无法加载，不能据此判断当前系统没有资产。"
+                    action={
+                      <Button size="small" onClick={loadTree}>
+                        重试
+                      </Button>
+                    }
+                  />
+                ) : (
+                  <CaseAssetTree
+                    tree={caseAssetTree}
+                    selectedKey={selectedNodeKey}
+                    onSelect={setSelectedNodeKey}
+                    emptyDescription={hasSystem ? '当前视图暂无资产' : '请选择系统'}
+                    height={500}
+                    maxHeight="calc(100vh - 440px)"
+                  />
+                )}
               </Spin>
             </div>
           </div>
@@ -540,6 +612,13 @@ const CaseLibraryPage: React.FC = () => {
                   description="选择系统后会加载该系统已沉淀的用例资产。"
                   action={<Button onClick={() => navigate('/systems')}>去系统管理</Button>}
                 />
+              ) : treeError && !treeLoading ? (
+                <EmptyState
+                  role="alert"
+                  title="用例资产加载失败"
+                  description={`无法确认当前系统是否已有资产。${treeError}`}
+                  action={<Button onClick={loadTree}>重试加载</Button>}
+                />
               ) : selectedCases.length === 0 && !treeLoading ? (
                 <EmptyState
                   title="当前范围暂无用例资产"
@@ -578,6 +657,8 @@ const CaseLibraryPage: React.FC = () => {
         open={!!detailCaseId}
         onClose={() => setDetailCaseId(null)}
       />
+        </>
+      )}
     </PageShell>
   );
 };

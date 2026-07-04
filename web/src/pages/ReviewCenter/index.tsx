@@ -13,6 +13,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text } = Typography;
 
@@ -94,16 +95,6 @@ function createInitialLaneData(): Record<WorkbenchLaneStatus, PaginatedData<Revi
     running: createEmptyBatchPage(),
     pending_review: createEmptyBatchPage(),
   };
-}
-
-function getErrorMessage(err: unknown, fallback: string): string {
-  if (typeof err === 'object' && err !== null && 'message' in err) {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) {
-      return message;
-    }
-  }
-  return fallback;
 }
 
 function getBatchActionLabel(status: BatchStatus): string {

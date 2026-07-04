@@ -29,6 +29,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
+import { getErrorMessage } from '../../utils/errorMessage';
 import type {
   CreateExportRequest,
   ExportFormat,
@@ -86,6 +87,7 @@ const Exports: React.FC = () => {
   const [batchOptions, setBatchOptions] = useState<SystemBatchItem[]>([]);
   const [batchLoading, setBatchLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ExportStatus | undefined>();
+  const [listError, setListError] = useState<string | null>(null);
 
   // ─── 轮询 ───
   const pollTimerRef = useRef<number | null>(null);
@@ -95,11 +97,19 @@ const Exports: React.FC = () => {
   // ─── 加载列表 ───
   const fetchList = useCallback(async (page = 1, perPage = 20, status?: ExportStatus) => {
     setLoading(true);
+    setListError(null);
     try {
       const result = await listExports({ page, per_page: perPage, status });
       setData(result);
-    } catch {
-      message.error('加载导出列表失败');
+    } catch (err) {
+      setListError(getErrorMessage(err, '导出任务暂时无法加载，请重试。'));
+      setData({
+        items: [],
+        total: 0,
+        page,
+        per_page: perPage,
+        total_pages: 0,
+      });
     } finally {
       setLoading(false);
     }
@@ -339,20 +349,30 @@ const Exports: React.FC = () => {
       />
 
       <Alert
-        type={processingCount > 0 ? 'info' : 'success'}
+        type={listError ? 'warning' : processingCount > 0 ? 'info' : 'success'}
         showIcon
         style={{ marginBottom: 16 }}
-        message={processingCount > 0 ? '导出任务正在生成，页面会自动刷新状态' : '导出中心用于拿到可交付文件'}
-        description="建议先完成批次审查或落库，再从这里导出批次结果或系统资产快照。完成后直接下载文件；失败任务可按相同范围重新创建。"
+        message={
+          listError
+            ? '导出任务列表暂时无法加载'
+            : processingCount > 0
+              ? '导出任务正在生成，页面会自动刷新状态'
+              : '导出中心用于拿到可交付文件'
+        }
+        description={
+          listError
+            ? '不能据此判断当前没有导出任务或可下载文件；可在下方重试加载。'
+            : '建议先完成批次审查或落库，再从这里导出批次结果或系统资产快照。完成后直接下载文件；失败任务可按相同范围重新创建。'
+        }
       />
 
       <MetricStrip
         items={[
-          { key: 'total', label: '任务总数', value: data.total },
-          { key: 'processing', label: '本页处理中', value: processingCount, tone: 'primary' },
-          { key: 'completed', label: '本页已完成', value: completedCount, tone: 'success' },
-          { key: 'downloadable', label: '可下载文件', value: downloadableCount, tone: 'success' },
-          { key: 'failed', label: '本页失败', value: failedCount, tone: 'danger' },
+          { key: 'total', label: '任务总数', value: listError ? '-' : data.total, hint: listError ? '加载失败' : undefined },
+          { key: 'processing', label: '本页处理中', value: listError ? '-' : processingCount, tone: 'primary' },
+          { key: 'completed', label: '本页已完成', value: listError ? '-' : completedCount, tone: 'success' },
+          { key: 'downloadable', label: '可下载文件', value: listError ? '-' : downloadableCount, tone: 'success' },
+          { key: 'failed', label: '本页失败', value: listError ? '-' : failedCount, tone: 'danger' },
         ]}
       />
 
@@ -375,7 +395,23 @@ const Exports: React.FC = () => {
 
       {/* ─── 列表 ─── */}
       <Spin spinning={loading}>
-        {data.items.length === 0 ? (
+        {listError && !loading ? (
+          <EmptyState
+            role="alert"
+            title="导出任务加载失败"
+            description={`无法确认是否有可下载文件或失败任务。${listError}`}
+            action={
+              <Space wrap>
+                <Button onClick={() => fetchList(data.page, data.per_page, statusFilter)}>
+                  重试加载
+                </Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                  新建导出
+                </Button>
+              </Space>
+            }
+          />
+        ) : data.items.length === 0 ? (
           <EmptyState
             title={statusFilter ? '当前状态下没有导出任务' : '还没有导出任务'}
             description={statusFilter ? '可以切换状态筛选，或新建一个导出任务。' : '从已审查批次或系统资产创建一个导出任务，完成后可下载交付文件。'}

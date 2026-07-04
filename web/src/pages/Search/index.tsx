@@ -29,6 +29,7 @@ import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
 import type { Priority, ReviewStatus, SearchResultItem } from '../../types';
+import { getErrorMessage } from '../../utils/errorMessage';
 
 const { Text } = Typography;
 
@@ -70,6 +71,7 @@ const SearchPage: React.FC = () => {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(!!initialQuery);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   // 系统选项
   const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
@@ -88,6 +90,7 @@ const SearchPage: React.FC = () => {
 
       setLoading(true);
       setSearched(true);
+      setSearchError(null);
       try {
         const res = await searchCases({
           q: q.trim(),
@@ -108,6 +111,11 @@ const SearchPage: React.FC = () => {
         if (opts?.reviewStatus) params.review_status = opts.reviewStatus;
         if (p > 1) params.page = String(p);
         setSearchParams(params, { replace: true });
+      } catch (err) {
+        setSearchError(getErrorMessage(err, '搜索服务暂时无法加载，请重试。'));
+        setItems([]);
+        setTotal(0);
+        setPage(p);
       } finally {
         setLoading(false);
       }
@@ -135,6 +143,10 @@ const SearchPage: React.FC = () => {
 
   const handlePageChange = (newPage: number) => {
     doSearch(query, { systemId, priority, reviewStatus, page: newPage });
+  };
+
+  const retrySearch = () => {
+    doSearch(query, { systemId, priority, reviewStatus, page });
   };
 
   const handleFilterChange = (
@@ -258,8 +270,14 @@ const SearchPage: React.FC = () => {
       {searched && (
         <MetricStrip
           items={[
-            { key: 'total', label: '匹配结果', value: total, tone: 'primary' },
-            { key: 'page', label: '本页展示', value: items.length },
+            {
+              key: 'total',
+              label: '匹配结果',
+              value: searchError ? '-' : total,
+              tone: searchError ? 'warning' : 'primary',
+              hint: searchError ? '加载失败' : undefined,
+            },
+            { key: 'page', label: '本页展示', value: searchError ? '-' : items.length },
             { key: 'query', label: '当前关键词', value: query || '-' },
           ]}
         />
@@ -350,6 +368,13 @@ const SearchPage: React.FC = () => {
                 浏览用例资产
               </Button>
             }
+          />
+        ) : searchError && !loading ? (
+          <EmptyState
+            role="alert"
+            title="搜索结果加载失败"
+            description={`无法确认当前关键词是否已有覆盖。${searchError}`}
+            action={<Button onClick={retrySearch}>重试搜索</Button>}
           />
         ) : items.length === 0 && !loading ? (
           <EmptyState

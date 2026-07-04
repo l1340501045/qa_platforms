@@ -86,6 +86,9 @@
 - 工作台 `/review` 区分“没有批次”和“批次加载失败”：队列失败显示页面级警告和“重试队列”，列表失败显示错误空态和“重试加载”。
 - `EmptyState` 支持 `role="alert"`，用于页面级错误态被辅助技术感知。
 - API interceptor 对短时间内完全相同的错误 toast 做去重，避免工作台 4 个队列 + 1 个列表并发失败时刷屏。
+- 搜索 `/search` 区分“无匹配结果”和“搜索请求失败”：失败时显示“搜索结果加载失败”“重试搜索”，指标条显示 `- / 加载失败`，不再用 0 条误导用户。
+- 用例资产 `/case-library` 区分“暂无资产”和“资产树/系统列表加载失败”：系统列表失败显示页面级错误态；资产树失败时顶部提示、左树、右表都明确“不能据此判断当前系统没有资产”。
+- 导出中心 `/exports` 区分“没有导出任务”和“导出列表加载失败”：失败时顶部提示变为 warning，指标条显示 `- / 加载失败`，列表区提供“重试加载”和“新建导出”。
 
 仍然不足：
 
@@ -97,7 +100,7 @@
 - 用例资产页的批次下拉仍依赖后端默认批次列表，没有在前端解释“默认最新可见批次”的后端选择规则；如果真实用户困惑，需要后端返回当前生效批次元信息。
 - 用例资产页没有做虚拟树/虚拟表；当前通过局部滚动和分页降低滚动成本，但真实 2000+ 用例资产仍需继续做性能验证。
 - 导出列表接口当前不返回 `total_cases`、`completed_at`、`error_message` 的完整列表字段；前端已兼容缺省值，但真实环境下失败原因可能仍不如详情接口完整。
-- 工作台页面级错误态已补齐，但搜索、用例资产、导出等入口页失败时仍主要依赖全局提示和空态兜底，后续应继续补页面内“失败原因 + 重试”。
+- 用例资产页的批次范围下拉加载失败仍是静默降级为空列表；虽然不阻断默认资产浏览，但后续应补一个局部 warning 或重试入口，避免用户误以为没有可选批次。
 
 ### 2. 是否误伤完整生成测试用例主流程
 
@@ -230,6 +233,20 @@
   - 截图产物：
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/review-error-narrow.png`
     - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/review-ok-desktop.png`
+- 入口页错误恢复补充验证：
+  - Playwright mock `/search`、`/case-library`、`/exports` 的 503，不触发真实后端。
+  - `/search` 失败时能看到“搜索结果加载失败”“重试搜索”，指标条显示“加载失败”，1024 宽无页面级横向溢出。
+  - `/case-library` 系统列表失败时能看到“系统列表加载失败”“重试加载”；资产树失败时能看到“用例资产加载失败”“不能据此判断当前系统没有资产”，指标条显示“加载失败”，1024 宽无页面级横向溢出。
+  - `/exports` 失败时能看到“导出任务列表暂时无法加载”“导出任务加载失败”“重试加载”，指标条显示“加载失败”，1024 宽无页面级横向溢出。
+  - 正常 mock 数据下 `/search`、`/case-library`、`/exports` 仍能显示结果/资产/导出任务，未阻断成功路径。
+  - 截图产物：
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/search-error-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/search-success-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-tree-error-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-system-error-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/case-library-success-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/exports-error-narrow.png`
+    - `.trellis/tasks/07-04-ux-information-architecture-visual/screenshots/exports-success-narrow.png`
 
 ## 当前结论
 
@@ -239,4 +256,4 @@
 
 - 审查中心 `/review` 和批次页之间继续增强上下文衔接，例如从待办队列进入后保留来源筛选。
 - 针对真实大批次数据继续验证性能、树折叠策略和表格分页体验。
-- 继续把工作台这套页面级错误态和重试入口推广到搜索、用例资产、导出等入口页。
+- 继续补用例资产批次范围下拉等局部失败态，并推进真实大批量数据下的性能与交互验证。
