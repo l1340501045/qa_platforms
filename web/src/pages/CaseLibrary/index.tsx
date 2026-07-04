@@ -51,14 +51,14 @@ const { Text } = Typography;
 
 const VIEW_COPY: Record<CaseTreeView, { label: string; message: string; description: string }> = {
   stable: {
-    label: '稳定主集',
-    message: '当前展示可复用、可落库的稳定资产',
-    description: '适合回归选择、导出复用和查看已沉淀的主集用例；需要排查重复或异常时切到全部资产。',
+    label: '主集候选',
+    message: '当前展示主集桶内的候选用例',
+    description: '这些用例已进入主集桶，但仍要结合审查状态判断是否可复用；需要排查重复或异常时切到全部资产。',
   },
   all: {
     label: '全部资产',
     message: '当前展示完整资产池',
-    description: '包含重复、待处理和稳定资产，适合做全量追溯、质量排查或核对生成结果。',
+    description: '包含主集候选、重复和待处理用例，适合做全量追溯、质量排查或核对生成结果。',
   },
   review_required: {
     label: '待处理资产',
@@ -336,7 +336,7 @@ const CaseLibraryPage: React.FC = () => {
             用例资产
           </>
         }
-        description="先选系统，再按稳定主集、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。"
+        description="先选系统，再按主集候选、全部资产或待处理资产浏览沉淀用例；树用于定位文档、模块和分支，表格用于审查与追溯。"
         actions={
           <>
             <Button
@@ -432,7 +432,7 @@ const CaseLibraryPage: React.FC = () => {
               }
             }}
             options={[
-              { value: 'stable', label: '稳定主集' },
+              { value: 'stable', label: '主集候选' },
               { value: 'all', label: '全部资产' },
               { value: 'review_required', label: '待处理资产' },
             ]}
