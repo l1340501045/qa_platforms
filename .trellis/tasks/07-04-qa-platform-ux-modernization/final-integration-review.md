@@ -2,7 +2,7 @@
 
 ## 结论
 
-当前 `feat/qa-platform-ux-modernization` 父任务下 11 个子任务均已完成并归档。分支已经达到“UI/UX 候选交付、可进入真实小批次验收 / PR review 准备”的状态。
+当前 `feat/qa-platform-ux-modernization` 的 UI/UX 主体改造、运行态验收、真实验收脚本和验收入口资料已经阶段性收口。分支已经达到“UI/UX 候选交付、可进入真实小批次验收 / PR review 准备”的状态。
 
 可以成立的结论：
 
@@ -10,8 +10,9 @@
 - 已修复用户最初指出的关键问题：系统列表假 0、上传资料类型误落 `other`、目录树默认全展开、模块分支平铺、工作台入口不清晰、错误态伪装空态。
 - 当前 UI/UX 分支相对 `checkpoint/architecture-migration-pre-ux` 没有 `src/testcase_generator/**` diff；没有触碰生成算法、LLM 调用策略、case cap、核验策略或 worker 生成逻辑。
 - 当前 HEAD 运行态验收已补齐：API、worker、前端在线；核心页面在 1280 和 1024 宽度下无页面级横向溢出、无控制台错误/告警；文档类型标注弹窗告警已修复。
-- 已产出真实跑批与首次上手验收脚本，明确周一公司网络可用后如何判定可合 main、需修后合、或不可合。
+- 已产出真实跑批与首次使用平台验收脚本，明确周一公司网络可用后如何判定可合 main、需修后合、或不可合。
 - 已补充固定小规模验收 PRD 样例 `docs/acceptance/ux-small-batch-prd.md`，避免周一临时裁剪大 PRD 带来不可控变量。
+- 已把真实验收入口收口到 `docs/acceptance/`，执行者不用进入 `.trellis/tasks/archive` 才能找到 runbook、回填模板和样例 PRD。
 
 不能夸大的结论：
 
@@ -33,6 +34,8 @@
   - `4605f24 归档真实跑批验收脚本任务`
   - `a5cf515 补充小规模跑批验收PRD样例`
   - `c418c94 归档小规模跑批验收PRD样例任务`
+  - `8cb395d 补充UI验收入口说明`
+  - `e01d5a4 归档UI验收入口说明任务`
 - 主流程保护证据：`git diff checkpoint/architecture-migration-pre-ux...HEAD --name-only -- src/testcase_generator` 无输出。
 
 这证明本轮 UI/UX 分支没有把测试用例生成核心逻辑混进来。平台 API 和前端有改动，是本任务范围内的系统统计、文档类型、页面动线、资产树和错误态改造。
@@ -50,8 +53,10 @@
 | 系统删除软删文档 | 已修复阻塞删除的真实 bug | 仅软删除文档不再阻塞系统删除；有有效文档/批次仍阻止删除 | 未来新增外键表仍可能触发兜底 `IntegrityError` |
 | 历史文档类型重标注 | 已补齐历史 `other` 修正入口 | 后端 `PATCH /documents/{id}/type`；知识库列表和文档详情支持人工重标注 | 不重新解析、不记录操作者；未来若 doc_type 影响解析需单独设计 |
 | 当前 HEAD 运行态验收 | 已补齐最新浏览器证据 | `runtime-acceptance-report.md` 覆盖 API / worker / frontend、8 个核心页面、1280/1024、类型标注弹窗告警修复 | 未跑真实 LLM 新批次；未做破坏性 mutation |
-| 真实批次与首次上手验收脚本 | 已补齐合并前执行方法 | `acceptance-runbook.md` 和 `post-batch-report-template.md` 区分小规模 UI 主链路验收与完整 PRD 质量回归 | 这是脚本，不是已通过的真实验收结果 |
+| 真实批次与首次使用平台验收脚本 | 已补齐合并前执行方法 | `docs/acceptance/runbook.md` 和 `docs/acceptance/post-batch-report-template.md` 区分小规模 UI 主链路验收与完整 PRD 质量回归 | 这是脚本，不是已通过的真实验收结果 |
 | 小规模真实跑批 PRD 样例 | 已补齐固定验收输入 | `docs/acceptance/ux-small-batch-prd.md` 覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、分页和导出 | 不含图片，不能替代视觉模型链路验收；不能替代完整大 PRD 质量回归 |
+| UI 验收入口说明 | 已补齐周一执行入口 | `docs/acceptance/README.md` 明确执行顺序、GO / NO-GO 和回填入口 | 仍需真实批次结果回填 |
+| UI 验收资料自包含化 | 已补齐可迁移验收包 | `docs/acceptance/runbook.md`、`post-batch-report-template.md`、`ux-small-batch-prd.md` 在同目录内自包含 | runbook 与 Trellis 归档存在副本，后续流程变化要同步 |
 
 ## 父任务验收逐条核对
 
@@ -65,8 +70,8 @@
 | QA 可从系统进入知识库、触发生成、处理澄清/失败、审查、资产、导出 | 阶段性通过 | 当前 HEAD 浏览器验收覆盖入口和只读页面；真实新批次和 mutation 仍需用户验收 |
 | 前端 lint/type/build 通过，后端相关测试通过 | 通过 | 当前 HEAD 验收任务运行 `npm run lint`、`npm run typecheck`、`npm run build`；父任务此前运行 `tests/platform_api`、`test:ui-models` |
 | 主流程保护结果明确 | 通过 | `src/testcase_generator` 相对 checkpoint 无 diff |
-| 每个子任务有独立 review | 通过 | 11 个子任务均归档；文档型任务也有 `review.md` |
-| 父任务最终报告汇总 review 和未解决风险 | 通过 | 本文件更新到当前 11/11 状态 |
+| 每个子任务有独立 review | 通过 | 已完成的 UI/UX 子任务均有 `review.md`；验收资料收口任务也补了自审 |
+| 父任务最终报告汇总 review 和未解决风险 | 通过 | 本文件更新到当前验收入口收口状态 |
 
 ## 当前 HEAD 运行态证据摘要
 
@@ -87,7 +92,7 @@
 
 ## 真实跑批验收脚本摘要
 
-来自 `.trellis/tasks/archive/2026-07/07-04-ux-real-batch-first-use-acceptance/acceptance-runbook.md`：
+来自 `docs/acceptance/runbook.md`：
 
 1. 先确认分支、工作区、`src/testcase_generator` 无 diff。
 2. 启动 Docker infra、API、worker、frontend。
@@ -102,7 +107,7 @@
    - `p0_quota_enabled=false`
 4. 新建专门验收系统，默认上传 `docs/acceptance/ux-small-batch-prd.md` 跑一个小规模真实批次。
 5. 验证上传、生成、待澄清/失败/待审核、用例树、用例资产、搜索、导出。
-6. 找一个具备 QA 背景但没用过平台的人，只给任务目标，不讲页面操作，观察能否首次上手。
+6. 找一个具备 QA 背景但首次使用本平台的人，只给任务目标，不讲页面操作，观察能否按任务目标完成。
 7. 跑完后导出 `.audit/<batch_id>/`，交给 Codex 继续审查新批次用例质量。
 
 ## 合 main 判定
@@ -142,7 +147,7 @@
 
 方向已经对齐。当前 UI 不再按数据库对象堆菜单，而是按 QA 工作流组织：工作台处理待办，项目/系统承接资料和生成入口，用例资产沉淀结果，搜索定位历史覆盖，导出服务交付。
 
-但仍缺真人首次上手证据。专家审查能发现明显动线问题，不能代替真实 QA 第一次使用时的理解成本。
+但仍缺真人首次使用平台证据。专家审查能发现明显动线问题，不能代替真实 QA 第一次使用平台时的理解成本。
 
 ### 2. 是否保护完整生成测试用例主流程
 
@@ -174,4 +179,4 @@
 - 代码状态：UI/UX 候选交付。
 - Trellis 父任务：可以保留为 planning，等待真实小批次验收结果；暂不归档父任务。
 - 全局目标：继续保持 active，不标记 complete。
-- 下一步：周一按 `acceptance-runbook.md` 使用 `docs/acceptance/ux-small-batch-prd.md` 跑小规模真实批次，跑完按 `post-batch-report-template.md` 回填给 Codex。
+- 下一步：周一按 `docs/acceptance/runbook.md` 使用 `docs/acceptance/ux-small-batch-prd.md` 跑小规模真实批次，跑完按 `docs/acceptance/post-batch-report-template.md` 回填给 Codex。

@@ -30,7 +30,8 @@
     "07-04-07-04-ux-current-head-runtime-acceptance",
     "07-04-ux-real-batch-first-use-acceptance",
     "07-04-ux-small-batch-prd-fixture",
-    "07-04-ux-acceptance-entrypoint"
+    "07-04-ux-acceptance-entrypoint",
+    "07-04-ux-acceptance-self-contained-docs"
   ],
   "parent": null,
   "relatedFiles": [],

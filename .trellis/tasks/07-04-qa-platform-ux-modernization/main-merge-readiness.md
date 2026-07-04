@@ -6,11 +6,11 @@
 
 已满足：
 
-- 11 个 UI/UX 子任务均已完成并归档。
+- UI/UX 主体改造、运行态验收、真实验收脚本和验收入口资料均已完成阶段性收口。
 - 当前 HEAD 运行态验收通过。
 - 工作流主导航、知识库、批次工作台、用例资产、搜索、导出已按 QA 日常动线重构。
 - `src/testcase_generator/**` 相对 checkpoint 无 diff，生成核心未被 UI 分支污染。
-- 真实跑批与首次上手验收 runbook 已准备。
+- 真实跑批与首次使用平台验收 runbook 已准备。
 
 未满足：
 
@@ -42,7 +42,7 @@ uv run celery -A src.platform_api.core.celery_app.celery_app inspect ping --time
 
 推荐资料：
 
-- 默认使用 [ux-small-batch-prd.md](/Users/echo_lacey/workspace/qa_platforms/docs/acceptance/ux-small-batch-prd.md)。
+- 默认使用 [ux-small-batch-prd.md](../../../docs/acceptance/ux-small-batch-prd.md)。
 - 这份样例覆盖权限、字段边界、CSV 上传、异步状态、失败重试、停止、筛选分页和导出，适合作为 UI/UX 主链路验收输入。
 - 如果要验证图片链路，再额外补一份含图片的小 PRD；不要直接用完整大 PRD 替代最小验收。
 
@@ -96,13 +96,13 @@ uv run python scripts/audit_export.py <batch_id> --dump
 
 | 判定 | 条件 |
 |---|---|
-| GO | 小规模真实批次通过；首次上手演练无 P0/P1；新 `.audit` 无 UI/UX 造成的 P0/P1 回归 |
+| GO | 小规模真实批次通过；首次使用平台的 QA 演练无 P0/P1；新 `.audit` 无 UI/UX 造成的 P0/P1 回归 |
 | FIX THEN GO | 只有 P2 UI 问题或文案/布局细节；记录后可另开任务 |
 | NO-GO | 上传、生成、批次页、审查、资产、搜索、导出任一主链路断；状态误导；文档类型仍错；用例树退回平铺 |
 | SPLIT OUT | LLM 网关、生成质量策略、大 PRD 成本问题；转 infra 或 testcase generator，不直接否定 UI 分支 |
 
 ## 批判性说明
 
-这份清单有意不要求先跑完整大 PRD 才能合 UI 分支。原因是完整大 PRD 的耗时、网关稳定性和生成质量属于更大范围的质量回归；UI/UX 分支的最小合并门槛应该先证明主流程可用、状态可理解、首次使用者不会迷路。
+这份清单有意不要求先跑完整大 PRD 才能合 UI 分支。原因是完整大 PRD 的耗时、网关稳定性和生成质量属于更大范围的质量回归；UI/UX 分支的最小合并门槛应该先证明主流程可用、状态可理解、首次使用平台的 QA 不会迷路。
 
 但如果小规模批次通过后，完整大 PRD 新批次暴露了 UI/UX 导致的模块树错乱、用例资产无法浏览、搜索/导出不可用，那仍然必须回到 UI/UX 分支修复。
