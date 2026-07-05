@@ -15,7 +15,6 @@ import {
   Select,
   Space,
   Spin,
-  Steps,
   Tag,
   Typography,
   message,
@@ -35,6 +34,80 @@ import {
 import type { Priority, ReviewStatus, TestCase, TestStep } from '../types';
 
 const { Text, Paragraph } = Typography;
+
+const SECTION_STYLE: React.CSSProperties = {
+  marginBottom: 24,
+};
+
+const SECTION_TITLE_STYLE: React.CSSProperties = {
+  display: 'block',
+  marginBottom: 10,
+  fontSize: 15,
+};
+
+const LIST_STYLE: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: 20,
+  lineHeight: 1.8,
+};
+
+const STEP_ITEM_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: '32px 1fr',
+  columnGap: 12,
+  padding: '14px 0',
+  borderBottom: '1px solid #f0f0f0',
+};
+
+const STEP_NUMBER_STYLE: React.CSSProperties = {
+  width: 28,
+  height: 28,
+  borderRadius: '50%',
+  background: '#1677ff',
+  color: '#fff',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontWeight: 600,
+  lineHeight: 1,
+};
+
+const STEP_META_GRID_STYLE: React.CSSProperties = {
+  display: 'grid',
+  gap: 8,
+  marginTop: 10,
+};
+
+const FIELD_LABEL_STYLE: React.CSSProperties = {
+  display: 'block',
+  color: '#595959',
+  fontSize: 12,
+  fontWeight: 600,
+  marginBottom: 4,
+};
+
+const INPUT_BLOCK_STYLE: React.CSSProperties = {
+  background: '#fafafa',
+  border: '1px solid #f0f0f0',
+  borderRadius: 6,
+  padding: '8px 10px',
+  color: '#262626',
+};
+
+const EXPECTATION_BLOCK_STYLE: React.CSSProperties = {
+  background: '#f6ffed',
+  border: '1px solid #b7eb8f',
+  borderRadius: 6,
+  padding: '8px 10px',
+  color: '#262626',
+};
+
+const PASS_CRITERIA_STYLE: React.CSSProperties = {
+  background: '#f0f7ff',
+  border: '1px solid #bae0ff',
+  borderRadius: 6,
+  padding: '10px 14px',
+};
 
 const PRIORITY_COLOR: Record<string, string> = {
   P0: 'red',
@@ -149,11 +222,11 @@ const StepEditor: React.FC<StepEditorProps> = ({ steps, onChange }) => {
             />
           </div>
           <div>
-            <Text type="secondary" style={{ fontSize: 12 }}>预期结果</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>步骤预期</Text>
             <Input
               value={step.expected_result}
               onChange={(e) => updateStep(idx, 'expected_result', e.target.value)}
-              placeholder="预期结果"
+              placeholder="该步骤执行后的可观察结果"
             />
           </div>
         </div>
@@ -480,7 +553,7 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
       title={editing ? '编辑用例' : caseData?.title || '用例详情'}
       open={open}
       onClose={onClose}
-      width={640}
+      width={720}
       destroyOnClose
       footer={caseData ? renderFooter() : undefined}
     >
@@ -514,11 +587,11 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
 
             {/* 前置条件 */}
             {preconditions.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8 }}>
+              <div style={SECTION_STYLE}>
+                <Text strong style={SECTION_TITLE_STYLE}>
                   前置条件
                 </Text>
-                <ul style={{ margin: 0, paddingLeft: 20 }}>
+                <ul style={LIST_STYLE}>
                   {preconditions.map((p, i) => (
                     <li key={i}>{p}</li>
                   ))}
@@ -528,48 +601,71 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
 
             {/* 测试步骤 */}
             {steps.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8 }}>
+              <div style={SECTION_STYLE}>
+                <Text strong style={SECTION_TITLE_STYLE}>
                   测试步骤
                 </Text>
-                <Steps
-                  direction="vertical"
-                  size="small"
-                  current={-1}
-                  items={steps.map((step) => ({
-                    title: step.action,
-                    description: (
-                      <div>
-                        {step.input_data && (
-                          <div>
-                            <Text type="secondary">输入数据：</Text>
-                            {step.input_data}
+                <div style={{ borderTop: '1px solid #f0f0f0' }}>
+                  {steps.map((step, idx) => {
+                    const inputData = step.input_data?.trim();
+                    const expectedResult = step.expected_result?.trim();
+
+                    return (
+                      <div
+                        key={step.step_number || idx}
+                        style={{
+                          ...STEP_ITEM_STYLE,
+                          borderBottom: idx === steps.length - 1 ? 'none' : STEP_ITEM_STYLE.borderBottom,
+                        }}
+                      >
+                        <span style={STEP_NUMBER_STYLE}>{idx + 1}</span>
+                        <div>
+                          <Text
+                            strong
+                            style={{
+                              display: 'block',
+                              color: '#262626',
+                              fontSize: 15,
+                              lineHeight: 1.55,
+                            }}
+                          >
+                            {step.action || '未填写操作'}
+                          </Text>
+                          <div style={STEP_META_GRID_STYLE}>
+                            {inputData && (
+                              <div>
+                                <Text style={FIELD_LABEL_STYLE}>输入数据</Text>
+                                <div style={INPUT_BLOCK_STYLE}>{inputData}</div>
+                              </div>
+                            )}
+                            {expectedResult && (
+                              <div>
+                                <Text style={FIELD_LABEL_STYLE}>步骤预期</Text>
+                                <div style={EXPECTATION_BLOCK_STYLE}>{expectedResult}</div>
+                              </div>
+                            )}
                           </div>
-                        )}
-                        {step.expected_result && (
-                          <div>
-                            <Text type="secondary">预期结果：</Text>
-                            {step.expected_result}
-                          </div>
-                        )}
+                        </div>
                       </div>
-                    ),
-                  }))}
-                />
+                    );
+                  })}
+                </div>
               </div>
             )}
 
-            {/* 预期结果（汇总） */}
+            {/* 通过标准（expected_results 展示语义） */}
             {expectedResults.length > 0 && (
-              <div style={{ marginBottom: 24 }}>
-                <Text strong style={{ display: 'block', marginBottom: 8 }}>
-                  预期结果
+              <div style={SECTION_STYLE}>
+                <Text strong style={SECTION_TITLE_STYLE}>
+                  通过标准
                 </Text>
-                <ul style={{ margin: 0, paddingLeft: 20 }}>
-                  {expectedResults.map((r, i) => (
-                    <li key={i}>{r}</li>
-                  ))}
-                </ul>
+                <div style={PASS_CRITERIA_STYLE}>
+                  <ul style={{ ...LIST_STYLE, paddingLeft: 18 }}>
+                    {expectedResults.map((r, i) => (
+                      <li key={i}>{r}</li>
+                    ))}
+                  </ul>
+                </div>
               </div>
             )}
 
@@ -578,7 +674,7 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
               steps.length === 0 &&
               expectedResults.length === 0 && (
                 <Empty
-                  description="该用例暂无前置条件 / 步骤 / 预期结果"
+                  description="该用例暂无前置条件 / 步骤 / 通过标准"
                   image={Empty.PRESENTED_IMAGE_SIMPLE}
                   style={{ margin: '24px 0' }}
                 />
@@ -675,11 +771,11 @@ const CaseDetailDrawer: React.FC<CaseDetailDrawerProps> = ({
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <Text strong style={{ display: 'block', marginBottom: 4 }}>预期结果</Text>
+              <Text strong style={{ display: 'block', marginBottom: 4 }}>通过标准</Text>
               <StringListEditor
                 items={editForm.expected_results}
                 onChange={(items) => setEditForm({ ...editForm, expected_results: items })}
-                placeholder="预期结果"
+                placeholder="整条用例的通过标准"
               />
             </div>
           </div>

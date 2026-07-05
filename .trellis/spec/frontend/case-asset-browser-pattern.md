@@ -136,6 +136,51 @@ const branchNodes = mod.branches.map((branch) => ({
 - 树节点标题应单行省略并保留完整 `title`，数量标签必须始终可见；不能让长模块名/分支名挤掉计数或撑宽页面。
 - 需要更复杂的工作台动作时，继续通过 `renderActions` 扩展，不把审核业务写进 `CaseAssetTable`。
 
+## 用例详情抽屉字段语义
+
+详情抽屉展示 `steps[].expected_result` 和 `expected_results` 时必须区分语义，不允许两个区域都直出为“预期结果”。
+
+数据契约：
+
+- `steps[].action`：单步操作动作。
+- `steps[].input_data`：该步骤使用的输入数据。
+- `steps[].expected_result`：该步骤执行后的可观察结果，展示文案使用“步骤预期”。
+- `expected_results`：整条用例最终判定口径，展示文案使用“通过标准”。
+
+实现锚点：`web/src/components/CaseDetailDrawer.tsx:602` 展示测试步骤，`web/src/components/CaseDetailDrawer.tsx:656` 展示通过标准。
+
+错误：
+
+```tsx
+<Text>测试步骤</Text>
+<Steps description={`预期结果：${step.expected_result}`} />
+
+<Text>预期结果</Text>
+{expectedResults.map(...)}
+```
+
+问题：
+
+- Ant Design `Steps` 的 description 默认弱化为灰色说明，长步骤内容会像备注。
+- 步骤内预期和整条用例汇总都叫“预期结果”，QA 无法判断哪个是执行脚本、哪个是最终通过标准。
+
+正确：
+
+```tsx
+<Text>测试步骤</Text>
+<Text>步骤预期</Text>
+<div>{step.expected_result}</div>
+
+<Text>通过标准</Text>
+{expectedResults.map(...)}
+```
+
+为什么：
+
+- 每步预期用于指导执行过程中的检查点。
+- 通过标准用于整条用例的最终判定。
+- 只改前端展示文案和布局即可对齐语义，不需要迁移后端字段或生成结构。
+
 ## 用例资产页工作台约定
 
 用例资产 `/case-library` 是 QA 复用与追溯已沉淀用例的工作台，不应只是“左树右表”的数据展示页。
