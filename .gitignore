@@ -2,9 +2,11 @@
 .env
 .env.*
 !.env.example
+!.env.prod.example
 
 # ---- 本地备份（不提交）----
 backup_*.content.md
+backups/
 
 # ---- Python ----
 .venv/

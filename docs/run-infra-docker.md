@@ -1,12 +1,17 @@
 # Docker 基础设施运行指南
 
-本项目推荐只把基础设施放进 Docker：
+本文件是本机开发模式：只把基础设施放进 Docker，API、worker、前端仍在宿主机使用最新源码启动。
 
-- Postgres + pgvector：`localhost:5434`
-- Redis / Celery broker：`localhost:6380`
-- MinIO：`localhost:9100`，控制台 `localhost:9101`
+如果要把 Windows 笔记本作为公司内网服务器，请使用生产部署文档：[Windows 内网服务器 Docker 生产部署指南](./run-prod-docker-windows.md)。
+
+本机开发模式端口只绑定 `127.0.0.1`：
+
+- Postgres + pgvector：`127.0.0.1:5434`
+- Redis / Celery broker：`127.0.0.1:6380`
+- MinIO：`127.0.0.1:9100`，控制台 `127.0.0.1:9101`
 
 后端 API 和 Celery worker 继续在本机用 `uv run ...` 启动。这样真实跑批一定使用当前工作区的最新代码，不会被旧 Docker 镜像卡住。
+由于 API/worker 在 Docker 外，本机开发模式必须保留这些端口映射；但绑定到 `127.0.0.1` 后，公司内网不能直接访问这些依赖端口。
 
 ## 首次启动全新基础设施
 
