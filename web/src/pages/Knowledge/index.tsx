@@ -260,6 +260,28 @@ const KnowledgePage: React.FC = () => {
     clearUploadResult();
   };
 
+  const confirmGenerateDocument = (documentId: string, title: string) => {
+    Modal.confirm({
+      title: '生成测试用例',
+      content: `将基于「${title}」创建一个新的生成批次。生成开始后会进入批次工作台查看进度。`,
+      okText: '开始生成',
+      cancelText: '取消',
+      onOk: async () => {
+        setGeneratingDocId(documentId);
+        try {
+          const res = await triggerGeneration(documentId);
+          message.success('生成任务已创建');
+          handleCloseResultModal();
+          navigate(buildKnowledgeBatchUrl(res.batch_id, systemId));
+        } catch (err: any) {
+          message.error(err?.message || '生成失败');
+        } finally {
+          setGeneratingDocId(null);
+        }
+      },
+    });
+  };
+
   const openRelabelModal = (doc: Document, event?: React.MouseEvent) => {
     event?.stopPropagation();
     setRelabelDoc(doc);
@@ -283,24 +305,12 @@ const KnowledgePage: React.FC = () => {
 
   const handleGenerateDocument = (doc: Document, event?: React.MouseEvent) => {
     event?.stopPropagation();
-    Modal.confirm({
-      title: '生成测试用例',
-      content: `将基于「${doc.title}」创建一个新的生成批次。生成开始后会进入批次工作台查看进度。`,
-      okText: '开始生成',
-      cancelText: '取消',
-      onOk: async () => {
-        setGeneratingDocId(doc.id);
-        try {
-          const res = await triggerGeneration(doc.id);
-          message.success('生成任务已创建');
-          navigate(buildKnowledgeBatchUrl(res.batch_id, systemId));
-        } catch (err: any) {
-          message.error(err?.message || '生成失败');
-        } finally {
-          setGeneratingDocId(null);
-        }
-      },
-    });
+    confirmGenerateDocument(doc.id, doc.title);
+  };
+
+  const handleOpenUploadedDocument = (documentId: string) => {
+    handleCloseResultModal();
+    navigate(buildKnowledgeDocumentUrl(documentId, systemId));
   };
 
   const columns: ColumnsType<Document> = [
@@ -661,10 +671,36 @@ const KnowledgePage: React.FC = () => {
             {uploadResult.uploaded.length > 0 && (
               <>
                 <Title level={5}>已上传</Title>
-                <ul>
+                <ul style={{ paddingLeft: 18 }}>
                   {uploadResult.uploaded.map((item) => (
-                    <li key={item.id}>
-                      {item.title} <Tag color={docTypeColorMap[item.doc_type]}>{docTypeLabelMap[item.doc_type]}</Tag>
+                    <li key={item.id} style={{ marginBottom: 8 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                        }}
+                      >
+                        <span style={{ flex: '1 1 260px', minWidth: 0, wordBreak: 'break-word' }}>
+                          {item.title}{' '}
+                          <Tag color={docTypeColorMap[item.doc_type]}>{docTypeLabelMap[item.doc_type]}</Tag>
+                        </span>
+                        <Space size={8} wrap>
+                          <Button type="link" size="small" onClick={() => handleOpenUploadedDocument(item.id)}>
+                            查看详情
+                          </Button>
+                          <Button
+                            type="link"
+                            size="small"
+                            loading={generatingDocId === item.id}
+                            onClick={() => confirmGenerateDocument(item.id, item.title)}
+                          >
+                            生成用例
+                          </Button>
+                        </Space>
+                      </div>
                     </li>
                   ))}
                 </ul>
