@@ -29,6 +29,11 @@ import {
 } from '../../components/case-assets/caseAssetModel';
 import CaseAssetTree from '../../components/case-assets/CaseAssetTree';
 import CaseAssetTable from '../../components/case-assets/CaseAssetTable';
+import {
+  BUCKET_FILTER_OPTIONS,
+  REVIEW_ISSUE_FILTER_OPTIONS,
+  VERDICT_FILTER_OPTIONS,
+} from '../../components/case-assets/caseDisplay';
 import type {
   CaseBucket,
   CaseTreeDocument,
@@ -524,11 +529,7 @@ const CaseLibraryPage: React.FC = () => {
             value={bucket}
             onChange={setBucket}
             disabled={caseTreeView === 'stable'}
-            options={[
-              { value: 'main', label: '主集' },
-              { value: 'needs_spec', label: '待澄清' },
-              { value: 'to_fix', label: '待修正' },
-            ]}
+            options={BUCKET_FILTER_OPTIONS}
           />
         </Space>
         <Space direction="vertical" size={6}>
@@ -538,15 +539,10 @@ const CaseLibraryPage: React.FC = () => {
             showSearch
             optionFilterProp="label"
             placeholder="全部"
-            style={{ width: 140 }}
+            style={{ width: 150 }}
             value={verdict}
             onChange={setVerdict}
-            options={[
-              { value: 'grounded', label: 'grounded' },
-              { value: 'ungrounded', label: 'ungrounded' },
-              { value: 'undefined', label: 'undefined' },
-              { value: 'conflict', label: 'conflict' },
-            ]}
+            options={VERDICT_FILTER_OPTIONS}
           />
         </Space>
         <Space direction="vertical" size={6}>
@@ -556,14 +552,10 @@ const CaseLibraryPage: React.FC = () => {
             showSearch
             optionFilterProp="label"
             placeholder="全部"
-            style={{ width: 130 }}
+            style={{ width: 140 }}
             value={reviewIssueType}
             onChange={setReviewIssueType}
-            options={[
-              { value: 'case_wrong', label: '用例错' },
-              { value: 'prd_conflict', label: 'PRD冲突' },
-              { value: 'verify_uncertain', label: '核验不确定' },
-            ]}
+            options={REVIEW_ISSUE_FILTER_OPTIONS}
           />
         </Space>
         <Space direction="vertical" size={6}>

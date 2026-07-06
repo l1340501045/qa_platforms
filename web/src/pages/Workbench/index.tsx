@@ -32,6 +32,13 @@ import {
 import { useTestcaseStore } from '../../stores/testcaseStore';
 import CaseTreeReview from '../../components/CaseTreeReview';
 import EmptyState from '../../components/common/EmptyState';
+import {
+  BUCKET_FILTER_OPTIONS,
+  BUCKET_TAG,
+  REVIEW_ISSUE_FILTER_OPTIONS,
+  VERDICT_FILTER_OPTIONS,
+  VERDICT_TAG,
+} from '../../components/case-assets/caseDisplay';
 import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
@@ -153,6 +160,30 @@ const GUIDANCE_BY_STATUS: Record<BatchStatus, { type: 'success' | 'info' | 'warn
     message: '生成任务失败',
     description: '可重新入队整批重跑；重跑前建议确认 Worker、Redis 和模型网关状态。',
   },
+};
+
+const qualitySummaryStyle: React.CSSProperties = {
+  marginBottom: 16,
+  padding: 16,
+  border: `1px solid ${layoutTokens.border}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surface,
+};
+
+const qualitySummaryHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 16,
+  marginBottom: 12,
+};
+
+const qualityPillStyle: React.CSSProperties = {
+  minWidth: 136,
+  padding: '10px 12px',
+  border: `1px solid ${layoutTokens.borderSubtle}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surfaceMuted,
 };
 
 function getStageLabel(stageName?: string | null): string {
@@ -436,6 +467,25 @@ const Workbench: React.FC = () => {
     return stats;
   }, [allCasesForIterate]);
 
+  const qualityStats = useMemo(() => {
+    const stats: Record<CaseBucket | CaseVerdict, number> = {
+      main: 0,
+      needs_spec: 0,
+      to_fix: 0,
+      grounded: 0,
+      ungrounded: 0,
+      undefined: 0,
+      conflict: 0,
+    };
+
+    for (const item of allCasesForIterate) {
+      if (item.bucket) stats[item.bucket] += 1;
+      if (item.verdict) stats[item.verdict] += 1;
+    }
+
+    return stats;
+  }, [allCasesForIterate]);
+
   const totalCasesForDisplay = allCasesForIterate.length || batch?.total_cases || 0;
   const openQuestionCount = openQuestions?.length ?? 0;
   const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
@@ -550,6 +600,17 @@ const Workbench: React.FC = () => {
   const badgeCfg = STATUS_BADGE_MAP[batch.status];
   const statusGuidance = GUIDANCE_BY_STATUS[batch.status];
   const canIterate = caseReviewStats.needs_modification > 0;
+  const hasQualityFilter = Boolean(bucketFilter || verdictFilter || reviewIssueTypeFilter);
+  const focusQualityBucket = (bucket: CaseBucket) => {
+    setBucketFilter(bucket);
+    setVerdictFilter(undefined);
+    setReviewIssueTypeFilter(undefined);
+  };
+  const focusVerdict = (verdict: CaseVerdict) => {
+    setBucketFilter(undefined);
+    setVerdictFilter(verdict);
+    setReviewIssueTypeFilter(undefined);
+  };
   const renderPrimaryActions = () => (
     <>
       {batch.status === 'suspended' && openQuestionCount > 0 && (
@@ -663,6 +724,69 @@ const Workbench: React.FC = () => {
         )}
       </div>
 
+      <div style={qualitySummaryStyle}>
+        <div style={qualitySummaryHeaderStyle}>
+          <div>
+            <Text strong>质量分流</Text>
+            <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+              主集候选用于继续人工审查；规格待澄清和生成待修正不应直接当作可执行测试。
+              {hasQualityFilter ? ' 当前计数受质量筛选影响。' : ''}
+            </Text>
+          </div>
+          <Space wrap size={8}>
+            <Button size="small" onClick={() => focusQualityBucket('main')}>
+              只看主集
+            </Button>
+            <Button size="small" onClick={() => focusQualityBucket('needs_spec')}>
+              处理待澄清
+            </Button>
+            <Button size="small" onClick={() => focusQualityBucket('to_fix')}>
+              查看待修正
+            </Button>
+            <Button size="small" onClick={() => focusVerdict('conflict')}>
+              查看冲突
+            </Button>
+          </Space>
+        </div>
+        <Space wrap size={8}>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.main.color}>{BUCKET_TAG.main.label}</Tag>
+            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.success }}>
+              {qualityStats.main}
+            </div>
+            <Text type="secondary">可继续审查</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.needs_spec.color}>{BUCKET_TAG.needs_spec.label}</Tag>
+            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.warning }}>
+              {qualityStats.needs_spec}
+            </div>
+            <Text type="secondary">先补规格</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.to_fix.color}>{BUCKET_TAG.to_fix.label}</Tag>
+            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.danger }}>
+              {qualityStats.to_fix}
+            </div>
+            <Text type="secondary">先修用例</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={VERDICT_TAG.conflict.color}>{VERDICT_TAG.conflict.label}</Tag>
+            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.danger }}>
+              {qualityStats.conflict}
+            </div>
+            <Text type="secondary">优先核对</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={VERDICT_TAG.ungrounded.color}>需人工核对</Tag>
+            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.warning }}>
+              {qualityStats.ungrounded + qualityStats.undefined}
+            </div>
+            <Text type="secondary">无依据/未定义</Text>
+          </div>
+        </Space>
+      </div>
+
       {/* ─── 筛选栏 ─── */}
       <div style={{ marginBottom: 8 }}>
         <Text strong>用例审查</Text>
@@ -699,11 +823,7 @@ const Workbench: React.FC = () => {
           style={{ width: 140 }}
           value={bucketFilter}
           onChange={setBucketFilter}
-          options={[
-            { value: 'main', label: '主集' },
-            { value: 'needs_spec', label: '待澄清' },
-            { value: 'to_fix', label: '待修正' },
-          ]}
+          options={BUCKET_FILTER_OPTIONS}
         />
         <Select
           allowClear
@@ -713,12 +833,7 @@ const Workbench: React.FC = () => {
           style={{ width: 160 }}
           value={verdictFilter}
           onChange={setVerdictFilter}
-          options={[
-            { value: 'grounded', label: 'grounded' },
-            { value: 'ungrounded', label: 'ungrounded' },
-            { value: 'undefined', label: 'undefined' },
-            { value: 'conflict', label: 'conflict' },
-          ]}
+          options={VERDICT_FILTER_OPTIONS}
         />
         <Select
           allowClear
@@ -728,11 +843,7 @@ const Workbench: React.FC = () => {
           style={{ width: 160 }}
           value={reviewIssueTypeFilter}
           onChange={setReviewIssueTypeFilter}
-          options={[
-            { value: 'case_wrong', label: '用例错' },
-            { value: 'prd_conflict', label: 'PRD冲突' },
-            { value: 'verify_uncertain', label: '核验不确定' },
-          ]}
+          options={REVIEW_ISSUE_FILTER_OPTIONS}
         />
       </FilterBar>
 
