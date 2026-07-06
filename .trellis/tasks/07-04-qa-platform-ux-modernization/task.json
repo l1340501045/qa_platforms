@@ -43,7 +43,8 @@
     "07-04-ux-acceptance-pytest-warning-cleanup",
     "07-04-ux-parent-implement-status-note",
     "07-04-ux-final-review-commit-scope-note",
-    "07-04-ux-post-reboot-no-llm-smoke"
+    "07-04-ux-post-reboot-no-llm-smoke",
+    "07-04-ux-no-mutation-control-flow-smoke"
   ],
   "parent": null,
   "relatedFiles": [],
