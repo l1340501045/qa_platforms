@@ -20,7 +20,7 @@ import {
 import { DownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
-import { createExport, listExports } from '../../services/exportApi';
+import { createExport, downloadExportFile, listExports } from '../../services/exportApi';
 import { listSystemOptions, listSystemBatches } from '../../services/systemApi';
 import type { SystemBatchItem } from '../../services/systemApi';
 import EmptyState from '../../components/common/EmptyState';
@@ -67,7 +67,16 @@ const FORMAT_HELP: Record<ExportFormat, string> = {
   excel: '适合导入外部测试管理工具或继续二次处理。',
 };
 
+const FORMAT_EXTENSION: Record<ExportFormat, string> = {
+  markdown: 'md',
+  excel: 'xlsx',
+};
+
 const POLL_INTERVAL = 3000;
+
+function getExportFallbackFilename(record: ExportTask): string {
+  return `qa-export-${record.id.slice(0, 8)}.${FORMAT_EXTENSION[record.format]}`;
+}
 
 const Exports: React.FC = () => {
   // ─── 列表状态 ───
@@ -95,6 +104,7 @@ const Exports: React.FC = () => {
   const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<ExportStatus | undefined>();
   const [listError, setListError] = useState<string | null>(null);
+  const [downloadingExportId, setDownloadingExportId] = useState<string | null>(null);
 
   // ─── 轮询 ───
   const pollTimerRef = useRef<number | null>(null);
@@ -190,6 +200,30 @@ const Exports: React.FC = () => {
     setStatusFilter(value);
     fetchList(1, data.per_page, value);
   };
+
+  const handleDownload = useCallback(async (record: ExportTask) => {
+    if (!record.file_url) {
+      message.warning('导出文件尚未生成，请刷新后重试');
+      return;
+    }
+
+    setDownloadingExportId(record.id);
+    try {
+      const { blob, filename } = await downloadExportFile(record.id, getExportFallbackFilename(record));
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      message.error(getErrorMessage(err, '导出文件暂时无法下载，请稍后重试。'));
+    } finally {
+      setDownloadingExportId(null);
+    }
+  }, []);
 
   // ─── 创建导出 ───
   const handleCreate = useCallback(async () => {
@@ -315,9 +349,9 @@ const Exports: React.FC = () => {
                 type="link"
                 size="small"
                 icon={<DownloadOutlined />}
-                href={record.file_url}
-                target="_blank"
-                rel="noopener noreferrer"
+                loading={downloadingExportId === record.id}
+                disabled={downloadingExportId !== null && downloadingExportId !== record.id}
+                onClick={() => handleDownload(record)}
                 style={{ paddingInline: 0 }}
               >
                 下载文件

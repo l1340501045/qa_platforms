@@ -14,7 +14,10 @@ from src.platform_api.core.celery_app import celery_app
 from src.platform_api.core.minio_client import ensure_bucket_exists, minio_client
 from src.platform_api.core.settings import settings
 from src.platform_api.models.enums import BatchStatus, ReviewStatus
+from src.platform_api.models.knowledge import Document
+from src.platform_api.models.public import System
 from src.platform_api.models.testcase import ExportTask, TestBatch, TestCase
+from src.testcase_generator.services.module_tree_classifier import classify_case_for_audit
 
 logger = logging.getLogger(__name__)
 
@@ -101,9 +104,24 @@ async def _execute_export(
             # 排除已删除的用例
             filters.append(TestCase.review_status != ReviewStatus.DELETED)
 
-            stmt = select(TestCase).where(*filters).order_by(TestCase.created_at.asc())
+            stmt = (
+                select(
+                    TestCase,
+                    System.name.label("system_name"),
+                    Document.title.label("document_title"),
+                )
+                .join(TestBatch, TestCase.batch_id == TestBatch.id)
+                .join(Document, TestBatch.document_id == Document.id)
+                .join(System, TestBatch.system_id == System.id)
+                .where(*filters)
+                .order_by(TestCase.created_at.asc())
+            )
             result = await session.execute(stmt)
-            cases = list(result.scalars().all())
+            cases = []
+            for case, system_name, document_title in result.all():
+                setattr(case, "_export_system_name", system_name)
+                setattr(case, "_export_document_title", document_title)
+                cases.append(case)
 
             # 2. 三路分流：needs_spec → 需求澄清清单（交 PM）；to_fix → 待修正用例（交测试）；其余 → 主集
             main_cases, clarification_cases, fix_cases = _split_cases(cases)
@@ -153,7 +171,11 @@ async def _execute_export(
 
         logger.info(
             "Export %s completed: %d main + %d clarification + %d to_fix cases, format=%s",
-            export_id, len(main_cases), len(clarification_cases), len(fix_cases), format,
+            export_id,
+            len(main_cases),
+            len(clarification_cases),
+            len(fix_cases),
+            format,
         )
         # 注：total_cases 落库 ExportTask.total_cases（=主集可执行数）；下面两个计数仅随
         # celery result 返回 + 已写日志，不落库（ExportTask 无对应列），前端查 DB 暂取不到。
@@ -188,16 +210,181 @@ async def _execute_export(
 
 def _md_cell(value) -> str:
     """Markdown 表格单元格转义：竖线/换行会破坏表格结构，需替换。"""
-    return str(value if value is not None else "").replace("|", "\\|").replace("\n", " ").replace("\r", " ")
+    return (
+        str(value if value is not None else "")
+        .replace("|", "\\|")
+        .replace("\r\n", "<br>")
+        .replace("\n", "<br>")
+        .replace("\r", "<br>")
+    )
 
 
 # Excel(openpyxl) 不接受的控制字符（除 \t\n\r），写入会抛 IllegalCharacterError
 _XLSX_ILLEGAL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+_TAPD_DIRECTORY_SEP_RE = re.compile(r"\s*(?:/|\\|>|＞|\||｜|»|→|—|–)\s*")
+_TAPD_DIRECTORY_IGNORED_PARTS = {"_review_required", "unresolved_module", "待分类", "未匹配模块"}
+
+TAPD_HEADERS = [
+    "用例目录",
+    "用例名称",
+    "需求ID",
+    "前置条件",
+    "用例步骤",
+    "预期结果",
+    "用例类型",
+    "用例状态",
+    "用例等级",
+    "创建人",
+    "自测人",
+]
+
+TAPD_INSTRUCTIONS = [
+    "[字段填写说明]“用例目录”请填写完整路径，用“-”分隔。如果目录为空，默认导入为“未规划目录”中；如果用例目录不存在，请在预览页面选择是否要自动创建目录。",
+    "“用例名称”为必填项。",
+    "“需求ID”请填写需求ID，多个需求ID以英文;号隔开。需求必须是本项目下的需求。",
+    "“前置条件”请填写合法文本。",
+    "“用例步骤”请填写合法文本。",
+    "“预期结果”请填写合法文本。",
+    "“用例类型”请填写：功能测试、性能测试、安全性测试、其他。",
+    "“用例状态”请填写：正常、待更新、已废弃。",
+    "“用例等级”请填写：高、中、低。",
+    "支持多个人员传入,使用';'隔开 如: \"xxx;xxx\"",
+    "单选人名字段，该字段将仅能填入1个成员。如若写入多个成员，只取第一个",
+]
+
+TAPD_PRIORITY_MAP = {
+    "P0": "高",
+    "P1": "中",
+    "P2": "低",
+    "P3": "低",
+}
 
 
 def _xlsx_safe(value) -> str:
     """清洗 Excel 不接受的控制字符，避免 openpyxl 抛 IllegalCharacterError。"""
     return _XLSX_ILLEGAL_RE.sub("", str(value if value is not None else ""))
+
+
+def _case_provenance(case) -> dict:
+    provenance = getattr(case, "provenance", None)
+    return provenance if isinstance(provenance, dict) else {}
+
+
+def _tapd_directory_parts(*values) -> list[str]:
+    parts: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        normalized = _TAPD_DIRECTORY_SEP_RE.sub("-", str(value))
+        for item in normalized.split("-"):
+            part = item.strip(" -\t\r\n")
+            if not part or part in _TAPD_DIRECTORY_IGNORED_PARTS:
+                continue
+            if parts and parts[-1] == part:
+                continue
+            parts.append(part)
+    return parts
+
+
+def _legacy_tapd_directory(case) -> str:
+    provenance = _case_provenance(case)
+    source = provenance.get("source_section")
+    if not source:
+        derived_from = provenance.get("derived_from")
+        if isinstance(derived_from, list):
+            source = "-".join(str(item) for item in derived_from if str(item).strip())
+        elif derived_from:
+            source = str(derived_from)
+    if not source:
+        return ""
+    return "-".join(_tapd_directory_parts(source))
+
+
+def _tapd_directory(case) -> str:
+    """TAPD 用例目录：复用平台用例树坐标，按“系统-文档-模块-分支”输出完整路径。"""
+    provenance = _case_provenance(case)
+    classification = classify_case_for_audit(
+        {
+            "title": getattr(case, "title", ""),
+            "provenance": provenance,
+        }
+    )
+    module_name = classification.get("business_module")
+    branch_path = classification.get("branch_path") or []
+
+    if module_name not in _TAPD_DIRECTORY_IGNORED_PARTS:
+        tree_parts = _tapd_directory_parts(
+            getattr(case, "_export_system_name", None),
+            getattr(case, "_export_document_title", None),
+            module_name,
+            *branch_path,
+        )
+        if tree_parts:
+            return "-".join(tree_parts)
+
+    legacy_directory = _legacy_tapd_directory(case)
+    if legacy_directory:
+        return legacy_directory
+
+    return "-".join(
+        _tapd_directory_parts(
+            getattr(case, "_export_system_name", None),
+            getattr(case, "_export_document_title", None),
+        )
+    )
+
+
+def _tapd_priority(priority) -> str:
+    """系统优先级到 TAPD 用例等级：P0=高、P1=中、P2/P3=低。"""
+    return TAPD_PRIORITY_MAP.get(str(priority or "").upper(), "低")
+
+
+def _format_tapd_steps(steps) -> str:
+    """TAPD 步骤列只放操作与输入；逐步预期放到“预期结果”列。"""
+    if not isinstance(steps, list):
+        return _format_field(steps)
+
+    lines: list[str] = []
+    for i, step in enumerate(steps, 1):
+        if isinstance(step, dict):
+            action = step.get("action") or step.get("step") or ""
+            input_data = step.get("input_data")
+            line = str(action or step)
+            if input_data:
+                line = f"{line}（输入：{input_data}）"
+        else:
+            line = str(step)
+        lines.append(f"{i}. {line}")
+    return "\n".join(lines)
+
+
+def _format_tapd_expected(case) -> str:
+    steps = getattr(case, "steps", None)
+    if isinstance(steps, list):
+        expected_lines = [
+            f"{i}. {step.get('expected_result')}"
+            for i, step in enumerate(steps, 1)
+            if isinstance(step, dict) and step.get("expected_result")
+        ]
+        if expected_lines:
+            return "\n".join(expected_lines)
+    return _format_field(getattr(case, "expected_results", None))
+
+
+def _tapd_row(case) -> list:
+    return [
+        _xlsx_safe(_tapd_directory(case)),
+        _xlsx_safe(case.title),
+        "",
+        _xlsx_safe(_format_field(case.preconditions)),
+        _xlsx_safe(_format_tapd_steps(case.steps)),
+        _xlsx_safe(_format_tapd_expected(case)),
+        "",
+        "",
+        _xlsx_safe(_tapd_priority(case.priority)),
+        "",
+        "",
+    ]
 
 
 def _review_row(c) -> tuple[str, str, str]:
@@ -239,96 +426,74 @@ def _append_excel_review_sheet(wb, title: str, rows: list) -> None:
 
 
 def _generate_markdown(cases: list, clarification: list | None = None, to_fix: list | None = None) -> str:
-    """将用例列表生成 Markdown 格式（主集 + 可选「需求澄清清单」「待修正用例」两段）"""
-    lines: list[str] = ["# 测试用例导出\n"]
-    lines.append(f"导出时间: {datetime.now(timezone.utc).isoformat()}\n")
-    lines.append(f"可执行用例数: {len(cases)}\n")
-    lines.append("---\n")
-
-    for i, case in enumerate(cases, 1):
-        lines.append(f"## {i}. {case.title}\n")
-        lines.append(f"**优先级**: {case.priority}\n")
-        lines.append(f"**信任等级**: {case.trust_level}\n")
-
-        # 前置条件
-        lines.append("### 前置条件\n")
-        preconditions = case.preconditions
-        if isinstance(preconditions, list):
-            for pc in preconditions:
-                lines.append(f"- {pc}\n")
-        elif isinstance(preconditions, dict):
-            for k, v in preconditions.items():
-                lines.append(f"- {k}: {v}\n")
-
-        # 操作步骤
-        lines.append("### 操作步骤\n")
-        steps = case.steps
-        if isinstance(steps, list):
-            for j, step in enumerate(steps, 1):
-                if isinstance(step, dict):
-                    lines.append(f"{j}. {step.get('action', step)}\n")
-                else:
-                    lines.append(f"{j}. {step}\n")
-
-        # 预期结果
-        lines.append("### 预期结果\n")
-        expected = case.expected_results
-        if isinstance(expected, list):
-            for er in expected:
-                lines.append(f"- {er}\n")
-        elif isinstance(expected, dict):
-            for k, v in expected.items():
-                lines.append(f"- {k}: {v}\n")
-
-        lines.append("---\n")
-
+    """生成 Markdown 评审视图：主表按 TAPD 字段口径，问题用例保留为独立清单。"""
+    lines: list[str] = ["| " + " | ".join(_md_cell(header) for header in TAPD_HEADERS) + " |\n"]
+    lines.append("| " + " | ".join("---" for _ in TAPD_HEADERS) + " |\n")
+    for case in cases:
+        lines.append("| " + " | ".join(_md_cell(value) for value in _tapd_row(case)) + " |\n")
     if clarification:
+        lines.append("\n")
         _append_md_review_section(lines, "需求澄清清单（待 PM 确认，未计入可执行用例）", clarification)
     if to_fix:
+        lines.append("\n")
         _append_md_review_section(lines, "待修正用例（与 PRD 冲突，需测试/AI 修正，未计入可执行用例）", to_fix)
-
-    return "\n".join(lines)
+    return "".join(lines)
 
 
 def _generate_excel(cases: list, clarification: list | None = None, to_fix: list | None = None) -> bytes:
-    """将用例列表生成 Excel 格式（主集 sheet +「需求澄清清单」「待修正用例」可选 sheet）"""
+    """将可执行用例生成 TAPD 导入模板 Excel。
+
+    clarification / to_fix 不进入 TAPD 导入文件：它们不是可执行用例，需留在 Markdown
+    评审文档中处理，避免外部测试管理工具误导入。
+    """
     try:
         from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
     except ImportError:
-        logger.info("openpyxl 不可用，降级为 CSV 导出（含需求澄清/待修正区块）")
+        logger.info("openpyxl 不可用，降级为 TAPD CSV 导出")
         return _generate_csv_fallback(cases, clarification, to_fix)
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "测试用例"
+    ws.title = "Sheet1"
 
-    # 表头
-    headers = ["序号", "标题", "优先级", "前置条件", "操作步骤", "预期结果", "信任等级", "维度"]
-    ws.append(headers)
+    ws.append(TAPD_HEADERS)
+    ws.append(TAPD_INSTRUCTIONS)
 
-    for i, case in enumerate(cases, 1):
-        preconditions = _format_field(case.preconditions)
-        steps = _format_field(case.steps)
-        expected = _format_field(case.expected_results)
-        dimensions = _format_field(case.dimensions)
+    header_fill = PatternFill(fill_type="solid", fgColor="C4BD97")
+    instruction_fill = PatternFill(fill_type="solid", fgColor="EBF1DE")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = Font(name="Calibri", size=16, bold=True, color="000000")
+        cell.alignment = Alignment(vertical="center")
+    for cell in ws[2]:
+        cell.fill = instruction_fill
+        cell.font = Font(name="Calibri", size=11, color="000000")
+        cell.alignment = Alignment(vertical="top", wrap_text=True)
 
-        ws.append(
-            [
-                i,
-                _xlsx_safe(case.title),
-                _xlsx_safe(case.priority),
-                _xlsx_safe(preconditions),
-                _xlsx_safe(steps),
-                _xlsx_safe(expected),
-                case.trust_level,
-                _xlsx_safe(dimensions),
-            ]
-        )
+    for case in cases:
+        ws.append(_tapd_row(case))
 
-    if clarification:
-        _append_excel_review_sheet(wb, "需求澄清清单", clarification)
-    if to_fix:
-        _append_excel_review_sheet(wb, "待修正用例", to_fix)
+    for row in ws.iter_rows(min_row=3):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    widths = {
+        "A": 24,
+        "B": 32,
+        "C": 13,
+        "D": 28,
+        "E": 42,
+        "F": 42,
+        "G": 13,
+        "H": 13,
+        "I": 13,
+        "J": 13,
+        "K": 13,
+    }
+    for column, width in widths.items():
+        ws.column_dimensions[column].width = width
+    ws.freeze_panes = "A3"
 
     output = io.BytesIO()
     wb.save(output)
@@ -336,43 +501,16 @@ def _generate_excel(cases: list, clarification: list | None = None, to_fix: list
 
 
 def _generate_csv_fallback(cases: list, clarification: list | None = None, to_fix: list | None = None) -> bytes:
-    """降级 CSV 导出（openpyxl 不可用时）。
-
-    CSV 是单表格式无法分 sheet，故在主表后用分隔标题行附加「需求澄清清单」
-    「待修正用例」两区块，避免降级时静默丢失这两类用例。
-    """
+    """降级 CSV 导出（openpyxl 不可用时），保持 TAPD 模板列顺序。"""
     import csv
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["序号", "标题", "优先级", "前置条件", "操作步骤", "预期结果", "信任等级", "维度"])
+    writer.writerow(TAPD_HEADERS)
+    writer.writerow(TAPD_INSTRUCTIONS)
 
-    for i, case in enumerate(cases, 1):
-        writer.writerow(
-            [
-                i,
-                case.title,
-                case.priority,
-                _format_field(case.preconditions),
-                _format_field(case.steps),
-                _format_field(case.expected_results),
-                case.trust_level,
-                _format_field(case.dimensions),
-            ]
-        )
-
-    def _write_review_block(title: str, rows: list | None) -> None:
-        if not rows:
-            return
-        writer.writerow([])
-        writer.writerow([f"# {title}"])
-        writer.writerow(["序号", "标题", "verdict", "判定理由", "PRD依据"])
-        for i, c in enumerate(rows, 1):
-            verdict, rationale, evidence = _review_row(c)
-            writer.writerow([i, c.title, verdict, rationale, evidence])
-
-    _write_review_block("需求澄清清单（待 PM 确认）", clarification)
-    _write_review_block("待修正用例（与 PRD 冲突）", to_fix)
+    for case in cases:
+        writer.writerow(_tapd_row(case))
 
     return output.getvalue().encode("utf-8-sig")
 
