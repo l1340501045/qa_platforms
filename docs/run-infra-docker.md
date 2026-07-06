@@ -10,10 +10,11 @@
 
 ## 首次启动全新基础设施
 
+先启动 Docker Desktop，确认 Docker Engine 已运行。
+
 如果当前没有占用 `5434` / `6380` / `9100` / `9101` 的旧容器：
 
 ```bash
-colima start
 docker compose -f docker-compose.infra.yml up -d
 uv run alembic upgrade head
 ```
@@ -25,7 +26,6 @@ uv run alembic upgrade head
 当前这台机器上曾经跑过依赖容器，且库里已有历史数据。为了保留历史数据，可以直接启动旧容器：
 
 ```bash
-colima start
 docker start qa-platforms-pg qa-workbench-redis-1 qa-workbench-minio-1
 uv run alembic upgrade head
 ```
