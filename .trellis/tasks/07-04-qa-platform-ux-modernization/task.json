@@ -46,7 +46,8 @@
     "07-04-ux-post-reboot-no-llm-smoke",
     "07-04-ux-no-mutation-control-flow-smoke",
     "07-06-ux-real-batch-post-review",
-    "07-06-ux-real-browser-acceptance"
+    "07-06-ux-real-browser-acceptance",
+    "07-06-07-06-real-batch-quality-review"
   ],
   "parent": null,
   "relatedFiles": [],
