@@ -44,7 +44,8 @@
     "07-04-ux-parent-implement-status-note",
     "07-04-ux-final-review-commit-scope-note",
     "07-04-ux-post-reboot-no-llm-smoke",
-    "07-04-ux-no-mutation-control-flow-smoke"
+    "07-04-ux-no-mutation-control-flow-smoke",
+    "07-06-ux-real-batch-post-review"
   ],
   "parent": null,
   "relatedFiles": [],
