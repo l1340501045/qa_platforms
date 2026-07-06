@@ -35,18 +35,29 @@ import EmptyState from '../../components/common/EmptyState';
 import {
   BUCKET_FILTER_OPTIONS,
   BUCKET_TAG,
+  REVIEW_ISSUE_TAG,
   REVIEW_ISSUE_FILTER_OPTIONS,
   VERDICT_FILTER_OPTIONS,
   VERDICT_TAG,
 } from '../../components/case-assets/caseDisplay';
+import {
+  getCasesForNode,
+  normalizeCaseTreeDocuments,
+} from '../../components/case-assets/caseAssetModel';
 import FilterBar from '../../components/layout/FilterBar';
 import MetricStrip from '../../components/layout/MetricStrip';
 import PageHeader from '../../components/layout/PageHeader';
 import PageShell from '../../components/layout/PageShell';
+import { getCaseTree } from '../../services/systemApi';
 import { layoutTokens } from '../../components/layout/tokens';
 import { buildDocumentReturnUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
+import { getErrorMessage } from '../../utils/errorMessage';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
 import { getFailedStageDetail } from '../../utils/stageFailure';
+import {
+  buildWorkbenchQualityStats,
+  getHumanReviewCount,
+} from '../../utils/workbenchQuality';
 import type {
   BatchStatus,
   CaseBucket,
@@ -231,6 +242,9 @@ const Workbench: React.FC = () => {
   const [verdictFilter, setVerdictFilter] = useState<CaseVerdict | undefined>();
   const [reviewIssueTypeFilter, setReviewIssueTypeFilter] = useState<ReviewIssueType | undefined>();
   const [allCasesForIterate, setAllCasesForIterate] = useState<CaseTreeCase[]>([]);
+  const [qualityOverviewCases, setQualityOverviewCases] = useState<CaseTreeCase[]>([]);
+  const [qualityOverviewLoading, setQualityOverviewLoading] = useState(false);
+  const [qualityOverviewError, setQualityOverviewError] = useState<string | null>(null);
   const [treeReloadSignal, setTreeReloadSignal] = useState(0);
 
   // Ref to track if gate modal was auto-shown for current suspended state
@@ -300,6 +314,32 @@ const Workbench: React.FC = () => {
   const handleSearch = useCallback((value: string) => {
     setSearchKeyword(value.trim());
   }, []);
+
+  // ─── 全批质量总览：不受下方筛选影响，只用于批次级质量结构判断 ───
+  const loadQualityOverview = useCallback(async () => {
+    if (!batchId || !batch?.system_id) {
+      setQualityOverviewCases([]);
+      setQualityOverviewError(null);
+      return;
+    }
+
+    setQualityOverviewLoading(true);
+    setQualityOverviewError(null);
+    try {
+      const data = await getCaseTree(batch.system_id, { batch_id: batchId });
+      const overviewTree = normalizeCaseTreeDocuments(data, { rootTitle: '全部模块' });
+      setQualityOverviewCases(getCasesForNode(overviewTree.root.key, overviewTree));
+    } catch (err) {
+      setQualityOverviewCases([]);
+      setQualityOverviewError(getErrorMessage(err, '质量总览暂时无法加载，请稍后重试。'));
+    } finally {
+      setQualityOverviewLoading(false);
+    }
+  }, [batch?.system_id, batchId]);
+
+  useEffect(() => {
+    loadQualityOverview();
+  }, [loadQualityOverview, treeReloadSignal]);
 
   // ─── 澄清提交 ───
   const handleClarifySubmit = useCallback(async () => {
@@ -467,24 +507,16 @@ const Workbench: React.FC = () => {
     return stats;
   }, [allCasesForIterate]);
 
-  const qualityStats = useMemo(() => {
-    const stats: Record<CaseBucket | CaseVerdict, number> = {
-      main: 0,
-      needs_spec: 0,
-      to_fix: 0,
-      grounded: 0,
-      ungrounded: 0,
-      undefined: 0,
-      conflict: 0,
-    };
+  const qualityOverviewStats = useMemo(
+    () => buildWorkbenchQualityStats(qualityOverviewCases),
+    [qualityOverviewCases],
+  );
 
-    for (const item of allCasesForIterate) {
-      if (item.bucket) stats[item.bucket] += 1;
-      if (item.verdict) stats[item.verdict] += 1;
-    }
-
-    return stats;
-  }, [allCasesForIterate]);
+  const currentQueueCount = useMemo(() => {
+    const kw = searchKeyword.trim();
+    if (!kw) return allCasesForIterate.length;
+    return allCasesForIterate.filter((item) => item.title.includes(kw)).length;
+  }, [allCasesForIterate, searchKeyword]);
 
   const totalCasesForDisplay = allCasesForIterate.length || batch?.total_cases || 0;
   const openQuestionCount = openQuestions?.length ?? 0;
@@ -600,7 +632,14 @@ const Workbench: React.FC = () => {
   const badgeCfg = STATUS_BADGE_MAP[batch.status];
   const statusGuidance = GUIDANCE_BY_STATUS[batch.status];
   const canIterate = caseReviewStats.needs_modification > 0;
-  const hasQualityFilter = Boolean(bucketFilter || verdictFilter || reviewIssueTypeFilter);
+  const currentQueueLabels = [
+    reviewFilter ? REVIEW_STATUS_LABELS[reviewFilter] : null,
+    bucketFilter ? BUCKET_TAG[bucketFilter].label : null,
+    verdictFilter ? VERDICT_TAG[verdictFilter].label : null,
+    reviewIssueTypeFilter ? REVIEW_ISSUE_TAG[reviewIssueTypeFilter].label : null,
+    searchKeyword.trim() ? `标题包含「${searchKeyword.trim()}」` : null,
+  ].filter(Boolean);
+  const hasQueueFilter = currentQueueLabels.length > 0;
   const focusQualityBucket = (bucket: CaseBucket) => {
     setBucketFilter(bucket);
     setVerdictFilter(undefined);
@@ -644,6 +683,11 @@ const Workbench: React.FC = () => {
       )}
       {renderPrimaryActions()}
     </>
+  );
+  const renderQualityCount = (value: number, color: string) => (
+    <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color }}>
+      {qualityOverviewLoading ? <Spin size="small" /> : qualityOverviewError ? '—' : value}
+    </div>
   );
 
   return (
@@ -729,8 +773,7 @@ const Workbench: React.FC = () => {
           <div>
             <Text strong>质量分流</Text>
             <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
-              主集候选用于继续人工审查；规格待澄清和生成待修正不应直接当作可执行测试。
-              {hasQualityFilter ? ' 当前计数受质量筛选影响。' : ''}
+              全批质量总览，不随下方筛选变化；快捷入口只改变当前筛选队列。
             </Text>
           </div>
           <Space wrap size={8}>
@@ -748,40 +791,53 @@ const Workbench: React.FC = () => {
             </Button>
           </Space>
         </div>
+        {qualityOverviewError && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="质量总览暂时不可用"
+            description={qualityOverviewError}
+            action={
+              <Button size="small" loading={qualityOverviewLoading} onClick={loadQualityOverview}>
+                重试总览
+              </Button>
+            }
+          />
+        )}
+        {hasQueueFilter && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`当前筛选队列：${currentQueueLabels.join(' / ')}`}
+            description={`下方用例树和表格正在按该队列展示，当前队列约 ${currentQueueCount} 条；上方质量总览仍表示全批结构。`}
+          />
+        )}
         <Space wrap size={8}>
           <div style={qualityPillStyle}>
             <Tag color={BUCKET_TAG.main.color}>{BUCKET_TAG.main.label}</Tag>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.success }}>
-              {qualityStats.main}
-            </div>
+            {renderQualityCount(qualityOverviewStats.main, layoutTokens.success)}
             <Text type="secondary">可继续审查</Text>
           </div>
           <div style={qualityPillStyle}>
             <Tag color={BUCKET_TAG.needs_spec.color}>{BUCKET_TAG.needs_spec.label}</Tag>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.warning }}>
-              {qualityStats.needs_spec}
-            </div>
+            {renderQualityCount(qualityOverviewStats.needs_spec, layoutTokens.warning)}
             <Text type="secondary">先补规格</Text>
           </div>
           <div style={qualityPillStyle}>
             <Tag color={BUCKET_TAG.to_fix.color}>{BUCKET_TAG.to_fix.label}</Tag>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.danger }}>
-              {qualityStats.to_fix}
-            </div>
+            {renderQualityCount(qualityOverviewStats.to_fix, layoutTokens.danger)}
             <Text type="secondary">先修用例</Text>
           </div>
           <div style={qualityPillStyle}>
             <Tag color={VERDICT_TAG.conflict.color}>{VERDICT_TAG.conflict.label}</Tag>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.danger }}>
-              {qualityStats.conflict}
-            </div>
+            {renderQualityCount(qualityOverviewStats.conflict, layoutTokens.danger)}
             <Text type="secondary">优先核对</Text>
           </div>
           <div style={qualityPillStyle}>
             <Tag color={VERDICT_TAG.ungrounded.color}>需人工核对</Tag>
-            <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color: layoutTokens.warning }}>
-              {qualityStats.ungrounded + qualityStats.undefined}
-            </div>
+            {renderQualityCount(getHumanReviewCount(qualityOverviewStats), layoutTokens.warning)}
             <Text type="secondary">无依据/未定义</Text>
           </div>
         </Space>
