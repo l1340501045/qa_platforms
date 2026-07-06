@@ -64,6 +64,10 @@ const sectionHeaderStyle: React.CSSProperties = {
   marginBottom: 12,
 };
 
+const reviewActionButtonStyle: React.CSSProperties = {
+  paddingInline: 4,
+};
+
 type ReviewAction = 'confirmed' | 'needs_modification' | 'deleted';
 
 /** 局部更新树中某条用例（审核后改 review_status，不重新拉树，保持列表稳定） */
@@ -265,10 +269,11 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
   const renderReviewActions = useCallback(
     (record: CaseTreeCase) =>
       editable ? (
-        <Space size="small">
+        <Space size={0}>
           <Button
             size="small"
             type="link"
+            style={reviewActionButtonStyle}
             disabled={record.review_status === 'confirmed'}
             onClick={() => handleConfirm(record.id)}
           >
@@ -277,6 +282,7 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
           <Button
             size="small"
             type="link"
+            style={reviewActionButtonStyle}
             disabled={record.review_status === 'needs_modification'}
             onClick={() => openModify(record.id)}
           >
@@ -288,7 +294,13 @@ const CaseTreeReview: React.FC<CaseTreeReviewProps> = ({
             okButtonProps={{ danger: true }}
             onConfirm={() => handleDelete(record.id)}
           >
-            <Button size="small" type="link" danger disabled={record.review_status === 'deleted'}>
+            <Button
+              size="small"
+              type="link"
+              danger
+              style={reviewActionButtonStyle}
+              disabled={record.review_status === 'deleted'}
+            >
               删除
             </Button>
           </Popconfirm>

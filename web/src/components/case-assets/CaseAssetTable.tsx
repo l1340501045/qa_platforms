@@ -41,18 +41,20 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
   showIterationTag = false,
   onOpenCase,
   renderActions,
-  actionColumnWidth = 160,
+  actionColumnWidth = 132,
   pagination,
   rowClickToOpen = false,
   highlightedCaseId,
 }) => {
+  const hasActions = Boolean(renderActions);
+  const tableScrollX = hasActions ? 560 + actionColumnWidth : 760;
   const columns: ColumnsType<CaseTreeCase> = useMemo(() => {
     const tableColumns: ColumnsType<CaseTreeCase> = [
       {
         title: titleColumnLabel,
         dataIndex: 'title',
         key: 'title',
-        width: renderActions ? 320 : 360,
+        width: hasActions ? 240 : 360,
         render: (text: string, record) => {
           const titleStyle = getTitleClampStyle();
           const titleNode = titleAsLink ? (
@@ -85,20 +87,20 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: '优先级',
         dataIndex: 'priority',
         key: 'priority',
-        width: 74,
+        width: hasActions ? 62 : 74,
         render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
       },
       {
         title: '质量',
         key: 'quality',
-        width: 138,
+        width: hasActions ? 118 : 138,
         render: (_, record) => renderCaseQualityTags(record),
       },
       {
         title: '可信度',
         dataIndex: 'trust_level',
         key: 'trust_level',
-        width: 86,
+        width: hasActions ? 72 : 86,
         render: (val: number) => {
           const { color, label } = getTrustDisplay(val);
           return <span style={{ color, fontWeight: 600 }}>{label}</span>;
@@ -108,7 +110,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: '状态',
         dataIndex: 'review_status',
         key: 'review_status',
-        width: 92,
+        width: hasActions ? 68 : 92,
         render: (val: ReviewStatus) => {
           const cfg = REVIEW_TAG[val];
           return <Tag color={cfg.color}>{cfg.label}</Tag>;
@@ -121,12 +123,13 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
         title: '操作',
         key: 'actions',
         width: actionColumnWidth,
+        fixed: 'right',
         render: (_, record) => renderActions(record),
       });
     }
 
     return tableColumns;
-  }, [actionColumnWidth, onOpenCase, renderActions, showIterationTag, titleAsLink, titleColumnLabel]);
+  }, [actionColumnWidth, hasActions, onOpenCase, renderActions, showIterationTag, titleAsLink, titleColumnLabel]);
 
   return (
     <Table<CaseTreeCase>
@@ -135,7 +138,7 @@ const CaseAssetTable: React.FC<CaseAssetTableProps> = ({
       dataSource={cases}
       pagination={pagination}
       size="small"
-      scroll={{ x: 760 }}
+      scroll={{ x: tableScrollX }}
       onRow={(record) => ({
         onClick: rowClickToOpen ? () => onOpenCase?.(record.id) : undefined,
         style: rowClickToOpen ? { cursor: 'pointer' } : undefined,
