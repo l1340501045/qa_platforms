@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -15,6 +16,50 @@ def _load_preflight() -> ModuleType:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _completed_branch(branch: str):
+    return subprocess.CompletedProcess(
+        ["git", "branch", "--show-current"],
+        0,
+        stdout=f"{branch}\n",
+        stderr="",
+    )
+
+
+def test_check_branch_allows_main_after_stage_merge(monkeypatch):
+    preflight = _load_preflight()
+    monkeypatch.setattr(preflight, "_run", lambda args: _completed_branch("main"))
+
+    result = preflight.check_branch()
+
+    assert result.ok is True
+    assert result.detail == "main"
+
+
+def test_check_branch_keeps_stage_branch_allowed(monkeypatch):
+    preflight = _load_preflight()
+    monkeypatch.setattr(
+        preflight,
+        "_run",
+        lambda args: _completed_branch("feat/qa-platform-ux-modernization"),
+    )
+
+    result = preflight.check_branch()
+
+    assert result.ok is True
+    assert result.detail == "feat/qa-platform-ux-modernization"
+
+
+def test_check_branch_rejects_unrelated_branch(monkeypatch):
+    preflight = _load_preflight()
+    monkeypatch.setattr(preflight, "_run", lambda args: _completed_branch("wip/demo"))
+
+    result = preflight.check_branch()
+
+    assert result.ok is False
+    assert "main" in result.fix
+    assert "feat/qa-platform-ux-modernization" in result.fix
 
 
 def test_parse_frontend_generation_config(tmp_path: Path):

@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-EXPECTED_BRANCH = "feat/qa-platform-ux-modernization"
+ALLOWED_BRANCHES = ("main", "feat/qa-platform-ux-modernization")
 GENERATOR_BASE_REF = "checkpoint/architecture-migration-pre-ux...HEAD"
 EXPECTED_ENV = {
     "LLM_PRIMARY_MODEL": "claude-opus-4-6",
@@ -127,13 +127,13 @@ def _parse_settings_generation_defaults(path: Path) -> dict[str, object]:
 def check_branch() -> CheckResult:
     result = _run(["git", "branch", "--show-current"])
     branch = result.stdout.strip()
-    if branch == EXPECTED_BRANCH:
+    if branch in ALLOWED_BRANCHES:
         return CheckResult("当前分支", True, branch)
     return CheckResult(
         "当前分支",
         False,
         branch or "无法读取当前分支",
-        f"切换到 {EXPECTED_BRANCH} 后再跑真实验收。",
+        "切换到已合并阶段成果的分支后再跑真实验收: " + ", ".join(ALLOWED_BRANCHES),
     )
 
 
