@@ -64,6 +64,31 @@ export function buildKnowledgeReturnUrl(systemId: string | null): string {
   return systemId ? `/systems/${encodeURIComponent(systemId)}/documents` : '/systems';
 }
 
+export function buildAssociatedDocumentUrl(
+  targetDocumentId: string,
+  sourceDocumentId: string,
+  sourceParams: URLSearchParams,
+): string {
+  const params = new URLSearchParams({
+    from: 'document',
+    document_id: sourceDocumentId,
+  });
+
+  const sourceFrom = sourceParams.get('from');
+  const documentFrom = sourceFrom === 'document' ? sourceParams.get('document_from') : sourceFrom;
+
+  if (documentFrom === 'knowledge') {
+    params.set('document_from', 'knowledge');
+    appendIfPresent(params, 'system_id', sourceParams.get('system_id'));
+  }
+  if (documentFrom === 'search') {
+    params.set('document_from', 'search');
+    appendSearchContext(params, sourceParams);
+  }
+
+  return `/documents/${encodeURIComponent(targetDocumentId)}?${params.toString()}`;
+}
+
 export function buildDocumentReturnUrl(sourceParams: URLSearchParams): string | null {
   const documentId = sourceParams.get('document_id');
   if (!documentId) return null;

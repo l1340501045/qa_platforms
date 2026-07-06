@@ -35,7 +35,12 @@ import PageShell from '../../components/layout/PageShell';
 import { layoutTokens } from '../../components/layout/tokens';
 import type { DocAssociations, DocRelationType, DocType, Document } from '../../types';
 import type { ColumnsType } from 'antd/es/table';
-import { buildDocumentBatchUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
+import {
+  buildAssociatedDocumentUrl,
+  buildDocumentBatchUrl,
+  buildDocumentReturnUrl,
+  buildKnowledgeReturnUrl,
+} from '../../utils/batchReturn';
 import { getErrorMessage } from '../../utils/errorMessage';
 import { buildSearchReturnUrl } from '../../utils/searchReturn';
 
@@ -166,10 +171,24 @@ const DocumentDetailPage: React.FC = () => {
 
   const fromKnowledge = searchParams.get('from') === 'knowledge';
   const fromSearch = searchParams.get('from') === 'search';
+  const fromDocument = searchParams.get('from') === 'document';
   const knowledgeSystemId = fromKnowledge ? searchParams.get('system_id') : null;
   const searchReturnUrl = buildSearchReturnUrl(searchParams);
-  const returnUrl = fromSearch ? searchReturnUrl : buildKnowledgeReturnUrl(knowledgeSystemId);
-  const returnLabel = fromSearch ? '返回搜索结果' : knowledgeSystemId ? '返回知识库' : '返回项目/系统';
+  const documentReturnUrl = buildDocumentReturnUrl(searchParams);
+  const returnUrl =
+    fromDocument && documentReturnUrl
+      ? documentReturnUrl
+      : fromSearch
+        ? searchReturnUrl
+        : buildKnowledgeReturnUrl(knowledgeSystemId);
+  const returnLabel =
+    fromDocument && documentReturnUrl
+      ? '返回来源文档'
+      : fromSearch
+        ? '返回搜索结果'
+        : knowledgeSystemId
+          ? '返回知识库'
+          : '返回项目/系统';
 
   const loadDocument = useCallback(async () => {
     if (!documentId) return;
@@ -328,7 +347,15 @@ const DocumentDetailPage: React.FC = () => {
       dataIndex: ['document', 'title'],
       key: 'title',
       render: (text: string, record) => (
-        <Link to={`/documents/${record.document.id}`}>{text}</Link>
+        <Link
+          to={
+            documentId
+              ? buildAssociatedDocumentUrl(record.document.id, documentId, searchParams)
+              : `/documents/${record.document.id}`
+          }
+        >
+          {text}
+        </Link>
       ),
     },
     {
