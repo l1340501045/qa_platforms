@@ -11,15 +11,16 @@ from pydantic import BaseModel, Field
 from src.testcase_generator.schemas.comprehension_report import (
     BlindSpot,
     ComprehensionReport,
+    ConflictDetail,
     FeatureUnderstanding,
     OpenQuestion,
     SourceConflict,
 )
 from src.testcase_generator.schemas.parsed_context import FeatureItem, ParsedContext, SourceItem
 from src.testcase_generator.schemas.pipeline_state import PipelineState
-from src.testcase_generator.stages.comprehend.blind_spot_detector import BlindSpotDetector
-from src.testcase_generator.stages.comprehend.gate import evaluate_gate, MAX_OPEN_QUESTIONS
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.comprehend.blind_spot_detector import BlindSpotDetector
+from src.testcase_generator.stages.comprehend.gate import MAX_OPEN_QUESTIONS, evaluate_gate
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class ComprehensionLLMOutput(BaseModel):
 
     feature_coverages: List[FeatureCoverage] = Field(description="每个功能点的覆盖分析")
     overall_coverage: float = Field(ge=0.0, le=1.0, description="整体理解覆盖度")
-    identified_conflicts: List[dict] = Field(default_factory=list, description="识别到的信源冲突列表")
+    identified_conflicts: List[ConflictDetail] = Field(default_factory=list, description="结构化信源冲突列表")
     blind_spot_areas: List[str] = Field(default_factory=list, description="理解盲区名称列表")
 
 
@@ -64,6 +65,15 @@ COMPREHEND_SYSTEM_PROMPT = """角色：你是资深测试工程师，当前任�
 5. 信任顺序仲裁冲突：PRD(Level 1) > 技术文档(Level 2) > 口述(Level 3) > UI设计(Level 4) > 原型(Level 5)
    - 不同级：高级胜出
    - 同级冲突：标记 has_conflict=True 并描述冲突（需人工裁决）
+
+冲突结构化输出要求（identified_conflicts 每个元素）：
+- topic：冲突点简短标题。
+- side_a / side_b：各含 location（章节号/表名，如 "§5.6.1"、"§9.2 表"）、
+  statement（该处说法原文要点）、trust_level（同文档跨章节冲突时两方相同）。
+- 同一文档不同章节自相矛盾，也必须上报，两方 trust_level 相同。
+- location 尽量填真实章节号/表名；【禁止】编造 "未列"/"N/A"/"未知" 等占位词；
+  确实定位不到时把 location 留空（""），仍要上报该冲突（由系统降级处理）。
+- recommendation：side_a / side_b / neither；recommendation_reason：一句话理由（依据信任顺序/更具体/常识）。
 
 输出要求：严格按指定 JSON Schema 输出。"""
 
@@ -93,7 +103,7 @@ async def comprehend_node(state: PipelineState) -> dict:
     # 初始化检测器（用于仲裁规则）
     detector = BlindSpotDetector()
 
-    # 1. 调用 LLM 构建语义理解矩阵（注入澄清回答作为补充信源）
+    # 1. 调用 LLM 构建语义理解矩阵
     feature_matrix, understanding_coverage, llm_conflicts = await _build_feature_matrix_llm(
         features, sources, clarification_answers=clarification_answers
     )
@@ -116,9 +126,9 @@ async def comprehend_node(state: PipelineState) -> dict:
 
     gate_result = evaluate_gate(preliminary_report)
 
-    # 5. 构建 open_questions（NO_GO 或 CONDITIONAL 时）
+    # 5. 构建 open_questions（仅 NO_GO 时——CONDITIONAL 直通 test_points 不挂起）
     open_questions: list[OpenQuestion] = []
-    if gate_result in ("NO_GO", "CONDITIONAL"):
+    if gate_result == "NO_GO":
         open_questions = _build_open_questions(
             blind_spots=blind_spots,
             conflicts=conflicts,
@@ -150,7 +160,7 @@ async def comprehend_node(state: PipelineState) -> dict:
     return {
         "comprehension_report": comprehension_report,
         "gate_result": gate_result,
-        "open_questions": [q.model_dump() for q in open_questions] if open_questions else [],
+        "open_questions": [_open_question_to_payload(q) for q in open_questions],
         "current_stage": "comprehend",
     }
 
@@ -159,13 +169,8 @@ async def _build_feature_matrix_llm(
     features: list[FeatureItem],
     sources: list[SourceItem],
     clarification_answers: list[dict] | None = None,
-) -> tuple[list[FeatureUnderstanding], float, list[dict]]:
-    """调用 LLM 进行语义级覆盖分析，构建理解矩阵
-
-    如果有 clarification_answers（Gate NO_GO 恢复后用户的回答），
-    将其作为信任等级 3（用户口述）的补充信源注入 LLM prompt，
-    使覆盖度与盲区据此重算。
-    """
+) -> tuple[list[FeatureUnderstanding], float, list[ConflictDetail]]:
+    """调用 LLM 进行语义级覆盖分析，构建理解矩阵（方案 A 后澄清不再回 comprehend；此函数仅首次理解使用）。"""
 
     # 组装用户内容：功能点列表 + 信源摘要
     features_desc = []
@@ -197,14 +202,8 @@ async def _build_feature_matrix_llm(
         "features": features_desc,
         "sources": sources_desc,
     }
-
-    # 注入澄清回答作为补充信源（信任等级 3 = 用户口述）
     if clarification_answers:
-        user_content_dict["clarification_answers"] = {
-            "trust_level": 3,
-            "note": "以下是用户对之前盲区/冲突的澄清回答，作为补充信源重新评估覆盖度",
-            "answers": clarification_answers,
-        }
+        user_content_dict["clarification_answers"] = clarification_answers
 
     user_content = json.dumps(user_content_dict, ensure_ascii=False, indent=2)
 
@@ -248,8 +247,19 @@ async def _build_feature_matrix_llm(
     return matrix, understanding_coverage, llm_output.identified_conflicts
 
 
+_PLACEHOLDER_TOKENS = {"未列", "未知", "n/a", "na", "无", "null", "none", "待定", "-", "—"}
+
+
+def _is_placeholder(s: str | None) -> bool:
+    """判定来源/章节定位是否为空或占位串（用于冲突卡片降级）。"""
+    if s is None:
+        return True
+    t = s.strip().lower()
+    return t == "" or t in _PLACEHOLDER_TOKENS
+
+
 def _merge_conflicts(
-    llm_conflicts: list[dict],
+    llm_conflicts: list[ConflictDetail],
     features: list[FeatureItem],
     sources: list[SourceItem],
     detector: BlindSpotDetector,
@@ -262,24 +272,41 @@ def _merge_conflicts(
     existing_ids = {c.conflict_id for c in rule_conflicts}
     counter = len(rule_conflicts)
 
-    for lc in llm_conflicts:
+    for detail in llm_conflicts:
         counter += 1
         cid = f"C-{counter:03d}"
-        if cid not in existing_ids:
-            rule_conflicts.append(
-                SourceConflict(
-                    conflict_id=cid,
-                    description=lc.get("description", "LLM 识别的语义冲突"),
-                    source_a=lc.get("source_a", "未知"),
-                    source_a_trust_level=lc.get("source_a_trust_level", 3),
-                    source_b=lc.get("source_b", "未知"),
-                    source_b_trust_level=lc.get("source_b_trust_level", 3),
-                    resolution=lc.get("resolution", "unresolved"),
-                    resolution_basis=lc.get("resolution_basis", "llm_semantic_detection"),
-                )
+        if cid in existing_ids:
+            continue
+        placeholder = _is_placeholder(detail.side_a.location) or _is_placeholder(detail.side_b.location)
+        rule_conflicts.append(
+            SourceConflict(
+                conflict_id=cid,
+                description=f"{detail.topic}：'{detail.side_a.statement}' vs '{detail.side_b.statement}'",
+                source_a=detail.side_a.location or "",
+                source_a_trust_level=detail.side_a.trust_level,
+                source_b=detail.side_b.location or "",
+                source_b_trust_level=detail.side_b.trust_level,
+                resolution="unresolved",
+                resolution_basis="llm_structured_detection",
+                conflict_detail=None if placeholder else detail,
             )
+        )
 
     return rule_conflicts
+
+
+def _open_question_to_payload(q: OpenQuestion) -> dict:
+    """唯一前端序列化点：把 OpenQuestion 拼成前端契约 dict。"""
+    return {
+        "id": q.question_id,
+        "question_id": q.question_id,
+        "question": q.question,
+        "context": q.context,
+        "priority": q.severity,
+        "question_type": q.question_type,
+        "conflict_detail": q.conflict_detail.model_dump() if q.conflict_detail else None,
+        "blocking": q.blocking,
+    }
 
 
 def _build_open_questions(
@@ -296,14 +323,26 @@ def _build_open_questions(
     for conflict in conflicts:
         if conflict.resolution == "unresolved":
             q_counter += 1
+            a_ok = not _is_placeholder(conflict.source_a)
+            b_ok = not _is_placeholder(conflict.source_b)
+            if a_ok and b_ok:
+                ctx = (
+                    f"'{conflict.source_a}'(Level {conflict.source_a_trust_level}) 与 "
+                    f"'{conflict.source_b}'(Level {conflict.source_b_trust_level}) 描述不一致"
+                )
+            else:
+                ctx = "同一文档内存在描述不一致，需人工确认以哪处为准"
             questions.append(
                 OpenQuestion(
                     question_id=f"Q-{q_counter:03d}",
                     question=f"信源冲突需要人工裁决：{conflict.description}",
-                    context=f"'{conflict.source_a}'(Level {conflict.source_a_trust_level}) 与 "
-                    f"'{conflict.source_b}'(Level {conflict.source_b_trust_level}) 描述不一致",
+                    context=ctx,
                     related_features=[],
                     blocking=True,
+                    question_type="conflict",
+                    severity="high",
+                    conflict_detail=conflict.conflict_detail,
+                    conflict_id=conflict.conflict_id,
                 )
             )
             if len(questions) >= max_questions:
@@ -320,6 +359,8 @@ def _build_open_questions(
                     context=blind_spot.reason,
                     related_features=[],
                     blocking=True,
+                    question_type="blind_spot",
+                    severity=blind_spot.severity,
                 )
             )
             if len(questions) >= max_questions:
@@ -336,6 +377,8 @@ def _build_open_questions(
                     context=blind_spot.reason,
                     related_features=[],
                     blocking=False,
+                    question_type="blind_spot",
+                    severity=blind_spot.severity,
                 )
             )
             if len(questions) >= max_questions:

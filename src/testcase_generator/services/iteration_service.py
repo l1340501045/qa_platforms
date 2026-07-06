@@ -9,9 +9,9 @@ from uuid import UUID
 
 from sqlalchemy import select, update
 
-from src.testcase_generator.db import async_session_factory
-from src.platform_api.models.testcase import TestBatch, TestCase, TestPoint
 from src.platform_api.models.enums import BatchStatus, ReviewStatus
+from src.platform_api.models.testcase import TestBatch, TestCase, TestPoint
+from src.testcase_generator.db import async_session_factory
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,13 @@ class IterationService:
             modified_cases = list(cases_result.scalars().all())
 
             test_point_ids = {c.test_point_id for c in modified_cases if c.test_point_id is not None}
+
+            # 从库中读取各用例的 review_comment 组成 feedback（修复：前端传入的 feedback 为空时兜底）
+            if not feedback:
+                feedback = {}
+            for case in modified_cases:
+                if case.review_comment and str(case.id) not in feedback:
+                    feedback[str(case.id)] = case.review_comment
 
             # 3. 加载需要重跑的 test_points
             if test_point_ids:
@@ -171,8 +178,8 @@ class IterationService:
         构建一个局部 PipelineState，只包含需要重写的 test_points，
         通过 LangGraph 编译的子图执行 write_cases 节点。
         """
-        from src.testcase_generator.stages.write_cases.node import write_cases_node
         from src.testcase_generator.schemas.test_point import TestPointSchema
+        from src.testcase_generator.stages.write_cases.node import write_cases_node
 
         # 将 ORM 模型转换为 schema
         tp_schemas = []

@@ -11,6 +11,7 @@ from src.platform_api.models.knowledge import Document, DocumentAssociation
 from src.platform_api.repositories.base import BaseRepository
 from src.platform_api.schemas.document import (
     DOC_RELATION_TYPES,
+    DOC_TYPES,
     CreateDocumentAssociationRequest,
 )
 from src.platform_api.services.upload_service import UploadService
@@ -41,6 +42,10 @@ class DocumentService:
         - 重复内容（content_hash 已存在）跳过，避免唯一约束冲突
         返回契约结构：{uploaded, skipped, failed, summary}
         """
+        if doc_type not in DOC_TYPES:
+            raise ApiError("E4001", f"无效的文档类型，允许值：{DOC_TYPES}")
+
+        doc_type = str(doc_type)
         outcome = await self.upload_service.process_uploads(files=files, system_id=system_id)
 
         uploaded: list[dict] = []
@@ -108,9 +113,13 @@ class DocumentService:
 
     async def _hash_exists(self, content_hash: str) -> bool:
         """检查是否已存在相同 content_hash 的未删除文档"""
-        stmt = select(func.count()).select_from(Document).where(
-            Document.content_hash == content_hash,
-            Document.deleted_at.is_(None),
+        stmt = (
+            select(func.count())
+            .select_from(Document)
+            .where(
+                Document.content_hash == content_hash,
+                Document.deleted_at.is_(None),
+            )
         )
         result = await self.session.execute(stmt)
         return result.scalar_one() > 0
@@ -145,6 +154,15 @@ class DocumentService:
         doc = await self.repo.get_by_id(document_id)
         if doc is None or doc.deleted_at is not None:
             raise ApiError("E4041", "文档不存在")
+        return doc
+
+    async def update_document_type(self, document_id: UUID, doc_type: str) -> Document:
+        """更新文档类型（用于历史文档重标注）"""
+        if doc_type not in DOC_TYPES:
+            raise ApiError("E4001", f"无效的文档类型，允许值：{DOC_TYPES}")
+        doc = await self.get_document(document_id)
+        doc.doc_type = str(doc_type)
+        await self.session.flush()
         return doc
 
     # ─── 文档删除（软删除） ───

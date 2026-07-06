@@ -19,6 +19,7 @@ import {
   archiveBatch,
   reviewTestCase,
   triggerGeneration,
+  retryBatch,
 } from '../services/batchApi';
 import type { BatchQueryParams } from '../services/batchApi';
 
@@ -51,6 +52,7 @@ interface TestcaseState {
   submitClarification: (batchId: string, answers: ClarifyAnswer[]) => Promise<void>;
   reviewCase: (caseId: string, action: 'confirmed' | 'needs_modification' | 'deleted', comment?: string) => Promise<void>;
   triggerIterate: (batchId: string, modifiedCaseIds: string[]) => Promise<void>;
+  retryBatch: (batchId: string) => Promise<void>;
   archiveBatch: (batchId: string) => Promise<void>;
   setReviewFilter: (filter: ReviewStatus | undefined) => void;
   clearBatch: () => void;
@@ -164,7 +166,7 @@ export const useTestcaseStore = create<TestcaseState>((set, get) => ({
     action: 'confirmed' | 'needs_modification' | 'deleted',
     comment?: string,
   ) => {
-    const resp = await reviewTestCase(caseId, { action, comment });
+    const resp = await reviewTestCase(caseId, { status: action, comment });
     // 局部更新用例状态
     set((state) => ({
       cases: state.cases.map((c) =>
@@ -178,6 +180,11 @@ export const useTestcaseStore = create<TestcaseState>((set, get) => ({
   triggerIterate: async (batchId: string, modifiedCaseIds: string[]) => {
     await triggerIterate(batchId, modifiedCaseIds);
     // 迭代后恢复轮询
+    get().startPolling(batchId);
+  },
+
+  retryBatch: async (batchId: string) => {
+    await retryBatch(batchId);
     get().startPolling(batchId);
   },
 

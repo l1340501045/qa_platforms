@@ -14,6 +14,7 @@ import type {
   DocType,
   DocStatus,
 } from '../types';
+import { normalizeDocAssociations } from './documentAssociationModel';
 
 export interface DocumentFilterParams extends PaginationParams {
   doc_type?: DocType;
@@ -28,6 +29,7 @@ export interface DocumentFilterParams extends PaginationParams {
 export async function batchUploadDocuments(
   systemId: string,
   files: File[],
+  docType: DocType = 'prd',
 ): Promise<UploadResult> {
   const formData = new FormData();
   files.forEach((file) => {
@@ -37,6 +39,7 @@ export async function batchUploadDocuments(
 
   const res = await api.post(`/systems/${systemId}/documents/batch`, formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
+    params: { doc_type: docType },
     timeout: 120000, // 上传给 2 分钟超时
   });
   return res.data;
@@ -57,6 +60,15 @@ export async function getDocument(documentId: string): Promise<DocumentDetail> {
   return res.data;
 }
 
+/** 更新文档类型 PATCH /documents/:id/type */
+export async function updateDocumentType(
+  documentId: string,
+  docType: DocType,
+): Promise<DocumentDetail> {
+  const res = await api.patch(`/documents/${documentId}/type`, { doc_type: docType });
+  return res.data;
+}
+
 /** 删除文档 DELETE /documents/:id */
 export async function deleteDocument(documentId: string): Promise<void> {
   await api.delete(`/documents/${documentId}`);
@@ -67,7 +79,11 @@ export async function createDocAssociation(
   documentId: string,
   params: CreateDocAssociationRequest,
 ): Promise<DocumentAssociation> {
-  const res = await api.post(`/documents/${documentId}/associations`, params);
+  const res = await api.post(`/documents/${documentId}/associations`, {
+    source_doc_id: documentId,
+    target_doc_id: params.target_document_id,
+    relation_type: params.relation_type,
+  });
   return res.data;
 }
 
@@ -79,5 +95,5 @@ export async function getDocAssociations(
   const res = await api.get(`/documents/${documentId}/associations`, {
     params: { depth },
   });
-  return res.data;
+  return normalizeDocAssociations(res.data, documentId);
 }

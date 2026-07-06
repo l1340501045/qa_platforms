@@ -11,8 +11,12 @@ import pytest
 import asyncio
 from uuid import uuid4, UUID
 
+from tests.testcase_generator.integration.conftest import requires_db
+
 # 强制使用测试 PG
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5434/qa_platforms")
+
+pytestmark = requires_db
 
 from sqlalchemy import text
 from src.platform_api.core.database import async_session_factory

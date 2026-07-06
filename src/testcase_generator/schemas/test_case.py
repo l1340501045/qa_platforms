@@ -33,6 +33,22 @@ Verdict = Literal["grounded", "ungrounded", "conflict", "undefined", "unverified
 Bucket = Literal["main", "needs_spec", "to_fix"]
 """分桶：main=主用例集 / needs_spec=待补规格·超纲 / to_fix=与 PRD 冲突需修正"""
 
+ReviewIssueType = Literal["case_wrong", "prd_conflict", "verify_uncertain"]
+"""审查诊断类型：
+- case_wrong       用例断言与明确 PRD 事实相反，或生成了不应执行的具体 oracle
+- prd_conflict     PRD 条款之间存在实质互斥，需要产品裁决
+- verify_uncertain verify 判断跨实体/跨层级/证据不足，需人工复核或补同层证据
+"""
+
+
+class CrossSectionConflictRef(BaseModel):
+    """跨条款矛盾的一对出处（PRD 两条互斥条款）"""
+
+    ref_a: str = Field(description="条款 A 的章节标识")
+    quote_a: str = Field(description="条款 A 原文")
+    ref_b: str = Field(description="条款 B 的章节标识")
+    quote_b: str = Field(description="条款 B 原文")
+
 
 class CaseVerification(BaseModel):
     """用例事实核验结论（verify 关卡产出）"""
@@ -44,6 +60,22 @@ class CaseVerification(BaseModel):
     unsupported_assertions: list[str] = Field(
         default_factory=list, description="无 PRD 支撑或与 PRD 冲突的具体断言列表"
     )
+    cross_section_conflict: bool = Field(
+        default=False, description="该用例断言虽被某条款支持，但 PRD 另有条款与之实质互斥（PRD 内部矛盾）"
+    )
+    conflicting_refs: list[CrossSectionConflictRef] = Field(
+        default_factory=list, description="互斥条款对清单（cross_section_conflict=True 时给出）"
+    )
+    conflict_subject_case: str = Field(default="", description="（verdict=conflict 时）用例断言所约束的对象/字段")
+    conflict_subject_prd: str = Field(default="", description="（verdict=conflict 时）PRD 反驳条款所约束的对象/字段")
+    conflict_entity_mismatch: bool = Field(
+        default=False, description="conflict 双方非同一实体（疑似概念混淆假矛盾，已被同实体门控降级）"
+    )
+    same_entity: bool | None = Field(default=None, description="LLM 对 conflict 双方是否同一实体的结构化判断")
+    review_issue_type: ReviewIssueType | None = Field(
+        default=None,
+        description="审查诊断类型：case_wrong / prd_conflict / verify_uncertain，用于报告和待处理队列分流",
+    )
 
 
 class Provenance(BaseModel):
@@ -53,6 +85,10 @@ class Provenance(BaseModel):
     source_section: str = Field(description="来源章节")
     verbatim_excerpt: str = Field(description="原文摘录")
     trust_level: int = Field(ge=1, le=5, description="信任等级")
+    grounding: dict | None = Field(
+        default=None,
+        description="溯源校验统计 {verified,fuzzy,relocated,unresolved}；None=未启用 grounded 模式",
+    )
 
 
 class GeneratedTestCase(BaseModel):

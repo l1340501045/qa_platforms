@@ -38,6 +38,25 @@ class AuditReport(BaseModel):
     dimension_cell_covered: int = Field(description="有用例覆盖的 (feature_id, dimension) 组合数")
     dimension_cell_coverage: float = Field(ge=0.0, le=1.0, description="维度单元覆盖率")
 
+    # 规则级覆盖（rule_coverage_gate_enabled 开时填充；关时为默认 0/空，行为同历史）。
+    # 规则「被覆盖」= 其锚点测试点（携带 rule_id）至少有 1 条用例。结构性闸，确定性、无额外 LLM。
+    total_rules: int = Field(default=0, description="规则台账条数（gate 关时为 0）")
+    covered_rules: int = Field(default=0, description="锚点有 >=1 用例的规则数")
+    rule_coverage: float = Field(default=1.0, ge=0.0, le=1.0, description="规则覆盖率 covered/total")
+    uncovered_rule_codes: list[str] = Field(
+        default_factory=list,
+        description="未覆盖规则码列表（锚点测试点无用例），交 backfill 定向补齐",
+    )
+
+    # 结构化覆盖（structural_coverage_enabled 开时填充；关时为默认 0/空，行为同历史）。
+    structural_total: int = Field(default=0, description="结构化测试点总数（gate 关时为 0）")
+    structural_covered: int = Field(default=0, description="有 >=1 用例覆盖的结构化点数")
+    structural_coverage: float = Field(default=1.0, ge=0.0, le=1.0, description="结构化覆盖率")
+    uncovered_structural_keys: list[str] = Field(
+        default_factory=list,
+        description="未覆盖结构化点 key 列表，交 backfill 定向补齐",
+    )
+
     # 兼容旧字段名（逐步废弃）
     @property
     def covered_test_points(self) -> int:

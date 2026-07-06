@@ -4,11 +4,12 @@ from datetime import datetime
 from typing import Sequence
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
+from src.platform_api.models.enums import DocType
 
 # ─── 文档类型枚举 ───
-DOC_TYPES = ("prd", "tech_doc", "test_rule", "test_case", "bug_record", "prototype", "other")
+DOC_TYPES = tuple(item.value for item in DocType)
 
 # ─── 文档关联类型枚举 ───
 DOC_RELATION_TYPES = (
@@ -49,6 +50,12 @@ class DocumentResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def status(self) -> str:
+        """前端兼容字段：映射 embedding_status → status"""
+        return self.embedding_status
+
     model_config = {"from_attributes": True, "populate_by_name": True}
 
 
@@ -57,6 +64,10 @@ class DocumentListResponse(BaseModel):
     total: int
     offset: int
     limit: int
+
+
+class UpdateDocumentTypeRequest(BaseModel):
+    doc_type: str = Field(..., description="文档类型")
 
 
 # ─── Document Association Schemas ───

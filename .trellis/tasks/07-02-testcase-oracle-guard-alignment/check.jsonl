@@ -1,0 +1,3 @@
+{"file":".trellis/spec/backend/testing-pattern.md","reason":"审查测试是否符合项目现有 pytest 模式"}
+{"file":".trellis/spec/guides/index.md","reason":"审查是否存在 AI review 常见误判、过度抽象或边界混淆"}
+{"file":"/Users/echo_lacey/.agents/skills/testcase-generator/SKILL.md","reason":"审查实现是否符合测试用例生成红线"}

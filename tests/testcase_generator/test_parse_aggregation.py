@@ -77,3 +77,75 @@ def test_no_heading_falls_back_to_whole_content():
     sections = _extract_sections(_result("纯文本无标题的需求描述"), doc_type="prd")
     assert len(sections) == 1
     assert "纯文本" in sections[0].content
+
+
+# ── 根因1：补全 meta 关键词 ────────────────────────────────────────────────────
+
+VERSION_RECORD_MD = """# 文档标题
+概述正文。
+
+# 版本记录
+
+| 时间 | 版本 | 变更内容 | 变更人 |
+| -- | -- | -- | -- |
+| 2026.05.28 | v1.0 | 初稿 | 张三 |
+
+# 2. 需求说明
+正式功能：用户可在系统中登录并查看数据。
+"""
+
+
+def test_version_record_heading_dropped():
+    # "版本记录"(谁何时改了什么)是纯元信息，不应成为功能点
+    sections = _extract_sections(_result(VERSION_RECORD_MD), doc_type="prd")
+    headings = [s.heading for s in sections]
+    assert "版本记录" not in headings
+    assert any("需求说明" in h for h in headings)
+
+
+# ── 根因2a：同源二级章节合并 ───────────────────────────────────────────────────
+
+COHESIVE_MD = """# 3. CP书籍数据权限控制
+
+## 3.1 功能说明
+在【CP商管理】中新增【负责人】字段，用于控制【CP选书】页面的数据权限。
+
+## 3.2 配置规则
+【CP商管理】中新增【负责人】字段，负责人配置后仅对应负责人可在【CP选书】页面查看该 CP 商相关数据。
+
+## 3.3 权限规则
+超管不受【负责人】字段限制，可查看全部 CP 商选书数据；非超管仅可查看本人负责的 CP 商选书数据。
+"""
+
+
+def test_cohesive_subsections_merge_to_parent_feature():
+    # 同一功能的「功能说明/配置规则/权限规则」判别性术语高度共享 → 退回一级粒度合并
+    sections = _extract_sections(_result(COHESIVE_MD), doc_type="prd")
+    headings = [s.heading for s in sections]
+    assert "3. CP书籍数据权限控制" in headings
+    assert "3.1 功能说明" not in headings
+    assert "3.2 配置规则" not in headings
+    parent = next(s for s in sections if s.heading == "3. CP书籍数据权限控制")
+    assert "负责人" in parent.content and "超管" in parent.content
+
+
+NON_COHESIVE_MD = """# 平台 PRD
+## 5.1 账户授权管理
+管理广告主账户与授权，支持新增、编辑、解绑广告主账户。
+## 5.2 漫剧库展示
+展示可投放漫剧列表与详情，支持按题材筛选漫剧。
+## 5.3 投放计划编辑
+编辑投放计划的预算、排期与定向人群配置。
+## 5.4 数据报表导出
+导出投放效果统计报表，支持多维度汇总与下载。
+"""
+
+
+def test_distinct_features_stay_module_level():
+    # 4 个二级标题各讲不同功能、判别性术语不共享 → 保持二级粒度，不被误合并(零回归)
+    sections = _extract_sections(_result(NON_COHESIVE_MD), doc_type="prd")
+    headings = [s.heading for s in sections]
+    assert "5.1 账户授权管理" in headings
+    assert "5.2 漫剧库展示" in headings
+    assert "5.3 投放计划编辑" in headings
+    assert "5.4 数据报表导出" in headings

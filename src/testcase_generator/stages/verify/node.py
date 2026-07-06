@@ -10,12 +10,13 @@ import logging
 from collections import defaultdict
 
 from src.testcase_generator.schemas.parsed_context import ParsedContext
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.stages.context_utils import (
-    collect_global_sections,
     CrossFeatureIndex,
+    collect_global_sections,
 )
 from src.testcase_generator.stages.verify.verifier import (
     PrdSection,
@@ -27,7 +28,7 @@ from src.testcase_generator.stages.verify.verifier import (
 logger = logging.getLogger(__name__)
 
 
-def _build_feature_sections(
+async def _build_feature_sections(
     parsed_context: ParsedContext,
     feature_ids: set[str],
     feature_query: dict[str, str] | None = None,
@@ -81,12 +82,12 @@ def _build_feature_sections(
     # 跨功能点规格检索注入（与 write_cases 口径一致，治"假阴性空壳"根因 A2）：
     # 核验时也要看到"被折到别处的规格"，否则会把据此写的确定断言误判 ungrounded/undefined。
     if feature_query:
-        cross_index = CrossFeatureIndex(parsed_context)
+        cross_index = await CrossFeatureIndex.build(parsed_context)
         for fid in feature_ids:
             q = feature_query.get(fid, "")
             if not q:
                 continue
-            for cs in cross_index.query(q, seen[fid], top_k=3):
+            for cs in await cross_index.query(q, seen[fid], top_k=3):
                 _add(
                     fid,
                     PrdSection(
@@ -104,6 +105,7 @@ async def verify_node(state: PipelineState) -> dict:
     parsed_context: ParsedContext = state["parsed_context"]
     test_points: list[TestPointSchema] = state.get("test_points", [])
     final_cases: list[GeneratedTestCase] = state.get("final_test_cases") or state.get("test_cases", [])
+    runtime = effective_settings(state)
 
     tp_feature_of: dict[str, str] = {tp.id: tp.feature_id for tp in test_points}
 
@@ -119,18 +121,22 @@ async def verify_node(state: PipelineState) -> dict:
                 case_id=key,
                 feature_id=feature_id,
                 title=c.title,
+                # 透传 source_ref（任务 07-02 R5）：guards 需用 step 的 source_ref 匹配
+                # source_trust 做低信任降权；只传 source_quote 会让 src_ref 退化成原文。
                 steps=[
                     {
                         "action": s.action,
                         "input_data": s.input_data,
                         "expected_result": s.expected_result,
                         "source_quote": s.source_quote,
+                        "source_ref": s.source_ref,
                     }
                     for s in c.steps
                 ],
                 expected_results=c.expected_results,
                 preconditions=c.preconditions,
                 provenance_excerpt=c.provenance.verbatim_excerpt if c.provenance else None,
+                confidence_note=c.confidence_note,
             )
         )
 
@@ -139,9 +145,34 @@ async def verify_node(state: PipelineState) -> dict:
     feature_query: dict[str, str] = defaultdict(str)
     for tp in test_points:
         feature_query[tp.feature_id] += f"{tp.dimension} {tp.description}\n"
-    sections_by_feature = _build_feature_sections(parsed_context, feature_ids, dict(feature_query))
+    sections_by_feature = await _build_feature_sections(parsed_context, feature_ids, dict(feature_query))
 
-    verifications = await verify_cases(verify_inputs, sections_by_feature)
+    # oracle guard 上下文（任务 07-02）：
+    # - tech_source_refs：所有技术方案源(tech_doc)的 source_ref 集合。R3 用它精确判断
+    #   「该技术断言是否被技术方案支撑」——而非全局一刀切 has_tech_spec（会放行无关模块的
+    #   worker/cron 断言）。仅当 batch 含 tech_doc 时不代表任意 case 的技术断言都可执行。
+    # - source_trust：各 source_ref 的信任等级，R5 低信任降权用。
+    tech_source_refs: set[str] = set()
+    source_trust: dict[str, int] = {}
+    for s in parsed_context.sources:
+        is_tech = str(s.doc_type) == "tech_doc"
+        for sec in s.sections:
+            ref = sec.source_ref
+            if not ref:
+                continue
+            if is_tech:
+                tech_source_refs.add(ref)
+            # 首次出现的 source_ref 取最高信任（数值最小 = 最高权威），避免低信任覆盖
+            if ref not in source_trust or s.trust_level < source_trust[ref]:
+                source_trust[ref] = s.trust_level
+
+    verifications = await verify_cases(
+        verify_inputs,
+        sections_by_feature,
+        tech_source_refs=tech_source_refs,
+        source_trust=source_trust,
+        runtime_settings=runtime,
+    )
 
     # 回挂结论（按位置键映射）
     for c, key in zip(final_cases, keys):

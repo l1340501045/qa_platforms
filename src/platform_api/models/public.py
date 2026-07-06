@@ -25,6 +25,23 @@ class System(Base):
     )
 
 
+class Notification(Base):
+    """站内通知消息"""
+
+    __tablename__ = "notifications"
+    __table_args__ = {"schema": "public"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type: Mapped[str] = mapped_column(String(50), nullable=False)  # batch_completed/batch_failed/batch_suspended
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    body: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # batch
+    target_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    is_read: Mapped[bool] = mapped_column(default=False, nullable=False)
+    actor: Mapped[str] = mapped_column(String(100), nullable=False, default="system")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
 class SystemAssociation(Base):
     __tablename__ = "system_associations"
     __table_args__ = (

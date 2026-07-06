@@ -1,0 +1,175 @@
+# 检索 Golden Set（~60）。expected_refs = 应召回的「非自身、非全局」章节（生产里自身+全局已另注入）。
+# polarity: positive=有跨章节依赖 / negative=应召回空（测 hybrid 噪声）。
+# source_ref 逐字取自 candidates.json。group 便于审核与归因。
+
+# ───────── A. 权限/数据隔离簇（规格折在第 10 章，多功能点共需） ─────────
+- {id: GS-A01, group: perm, feature_id: F-008, polarity: positive,
+   query: "普通投手登录标题包列表只显示自己创建的，投放组长可见所有投手的标题包",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则", "prd:漫剧批创初版功能PRD §10.1 角色分类"],
+   note: "标题包按创建人隔离，权限规则在 §10.2/§10.1"}
+- {id: GS-A02, group: perm, feature_id: F-009, polarity: positive,
+   query: "普通投手只见自己创建的定向包，投放组长可见所有人的定向包",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则", "prd:漫剧批创初版功能PRD §10.1 角色分类"]}
+- {id: GS-A03, group: perm, feature_id: F-011, polarity: positive,
+   query: "任务中心默认只显示执行人=当前用户的任务，组长不受执行人隔离可见全部",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则", "prd:漫剧批创初版功能PRD §10.1 角色分类"]}
+- {id: GS-A04, group: perm, feature_id: F-028, polarity: positive,
+   query: "投手只能查看编辑自己创建的标题包/定向包/账户授权/任务，组长可见本组成员数据",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"]}
+- {id: GS-A05, group: perm, feature_id: F-029, polarity: positive,
+   query: "素材库全员可见不做人维度隔离；标题/定向/任务按创建人隔离；管理员可见全部",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.1 角色分类"]}
+- {id: GS-A06, group: perm, feature_id: F-007, polarity: positive,
+   query: "素材中心数据全员可见，不按投手隔离，任意角色登录都能看到完整素材列表",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"],
+   note: "边界🟡：素材全员可见这条规则其实在 §10.2 数据权限表里"}
+- {id: GS-A07, group: perm, feature_id: F-003, polarity: positive,
+   query: "投手只能管理归属自己的头条广告主账户，越权访问他人账户应被拒绝",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"],
+   note: "边界🟡：账户授权是否纳入权限簇"}
+- {id: GS-A08, group: perm, feature_id: F-008, polarity: positive,
+   query: "permission_denied：投手尝试编辑他人创建的标题包，系统拒绝并提示无权限",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"]}
+
+# ───────── B. IAP/IAA 监测链接绑定簇（规格散在 §5.3/§7.1/§7.2） ─────────
+- {id: GS-B01, group: iaa_iap, feature_id: F-013, polarity: positive,
+   query: "付费直投/付费ROI 的链接类型为 IAP，提交时自动绑定 IAP 预置监测链接",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则", "prd:漫剧批创初版功能PRD §5.3 投放链接管理", "prd:漫剧批创初版功能PRD §7.1 链接来源"]}
+- {id: GS-B02, group: iaa_iap, feature_id: F-015, polarity: positive,
+   query: "数据库链接配置表存在且仅存在两条预置监测链接，分别标识 IAP 与 IAA",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-B03, group: iaa_iap, feature_id: F-016, polarity: positive,
+   query: "选择投放方式付费直投时系统提交广告自动绑定 IAP 预置监测链接",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.1 链接来源", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-B04, group: iaa_iap, feature_id: F-013, polarity: positive,
+   query: "idempotency：同一投放方式重复提交，绑定的监测链接类型保持一致",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则"]}
+- {id: GS-B05, group: iaa_iap, feature_id: F-015, polarity: positive,
+   query: "IAP 预置链接 URL 路径与标准宏参数占位符（PROMOTION_ID 等）校验",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则"]}
+
+# ───────── C. 漫剧库/批创 数据链路簇 ─────────
+- {id: GS-C01, group: lineage, feature_id: F-004, polarity: positive,
+   query: "新建投放链接保存后，漫剧库自动出现该漫剧记录并聚合来源徽标与关联链接数",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-C02, group: lineage, feature_id: F-005, polarity: positive,
+   query: "新建投放链接填写漫剧ID/漫剧名/来源等，系统据此聚合进漫剧库",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.2 漫剧库"]}
+- {id: GS-C03, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创左栏漫剧列表仅展示至少有一条 IAP 或 IAA 投放链接的漫剧",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.2 漫剧库", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-C04, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创选择账户的可选列表仅含完成授权且归属正确的头条广告主账户",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.1 头条账户授权管理"],
+   note: "hub 联动🟡：账户配置区"}
+- {id: GS-C05, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创创意素材通过双层弹窗从素材中心选取视频(N/200)",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.5 素材中心"],
+   note: "hub 联动🟡：素材配置区"}
+- {id: GS-C06, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创中栏标题区选择标题包，系统将标题依次分配到每条广告",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.6 标题包"],
+   note: "hub 联动🟡：标题配置区"}
+
+# ───────── D. 广告提交/事件资产簇 ─────────
+- {id: GS-D01, group: submit, feature_id: F-021, polarity: positive,
+   query: "选择付费优化目标映射到 active_pay 事件，缺资产时自动创建并校验事件ID",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.2 事件资产检测与创建"]}
+- {id: GS-D02, group: submit, feature_id: F-022, polarity: positive,
+   query: "提交后按账户串行调用巨量接口写入结果，按三层结构创建项目与广告",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.1 三层广告结构", "prd:漫剧批创初版功能PRD §8.2 事件资产检测与创建"]}
+- {id: GS-D03, group: submit, feature_id: F-010, polarity: positive,
+   query: "state_transition：批创提交后任务进入队列由 worker 异步创建广告",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.1 三层广告结构"]}
+- {id: GS-D04, group: submit, feature_id: F-021, polarity: positive,
+   query: "api_contract：调用巨量资产列表接口检测事件资产是否已存在",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.2 事件资产检测与创建"]}
+
+# ───────── E. 负样本（自洽或仅依赖全局章节，应召回空） ─────────
+- {id: GS-E01, group: neg, feature_id: F-006, polarity: negative,
+   query: "商品库列表每行展示商品/商品库/更新时间三列，字段与接口返回一致", expected_refs: []}
+- {id: GS-E02, group: neg, feature_id: F-024, polarity: negative,
+   query: "半角字母 abc 计为 1.5 字向上取整为 2 字（字数算法）", expected_refs: [],
+   note: "字数规则在 §9.1 全局，已全局注入，跨检索不应再加"}
+- {id: GS-E03, group: neg, feature_id: F-025, polarity: negative,
+   query: "标题包包名必填，为空时提示『包名不能为空』", expected_refs: []}
+- {id: GS-E04, group: neg, feature_id: F-026, polarity: negative,
+   query: "项目预算稳定模式输入 300 元应接受保存成功", expected_refs: []}
+- {id: GS-E05, group: neg, feature_id: F-027, polarity: negative,
+   query: "标题包选择恰好 50 个成功，第 51 个被阻止并提示上限", expected_refs: []}
+- {id: GS-E06, group: neg, feature_id: F-002, polarity: negative,
+   query: "任意列表页设置筛选点搜索按条件过滤，点重置一键清空", expected_refs: []}
+- {id: GS-E07, group: neg, feature_id: F-006, polarity: negative,
+   query: "pagination_boundary：商品库列表分页翻页与每页条数切换", expected_refs: []}
+- {id: GS-E08, group: neg, feature_id: F-005, polarity: negative,
+   query: "text_length：投放链接漫剧名超长输入的字段长度校验", expected_refs: [],
+   note: "字段长度约束在 §9.2 全局"}
+
+# ───────── F. 痛点探针（手工，独立于功能点；feature_id 留空不参与 own 排除） ─────────
+- {id: GS-F01, group: probe, feature_id: "", polarity: positive,
+   query: "监测链接和投放链接是不是一回事，二者如何区分与关联",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.3 投放链接管理", "prd:漫剧批创初版功能PRD §7.1 链接来源"]}
+- {id: GS-F02, group: probe, feature_id: "", polarity: positive,
+   query: "切换投放方式后，已自动绑定的监测链接会如何变化/重置",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-F03, group: probe, feature_id: "", polarity: positive,
+   query: "投手能否看到其他投手创建的标题包/定向包/任务",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"]}
+- {id: GS-F04, group: probe, feature_id: "", polarity: positive,
+   query: "提交广告后系统按什么规则绑定哪一条预置监测链接",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.2 提交时的绑定规则", "prd:漫剧批创初版功能PRD §7.1 链接来源", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-F05, group: probe, feature_id: "", polarity: negative,
+   query: "标题字数到底怎么计算（半角全角规则）", expected_refs: [],
+   note: "答案在 §9.1 全局，验证的是全局注入而非跨检索"}
+
+# ───────── 维度采样补充（覆盖大功能点的更多检索情形） ─────────
+- {id: GS-S01, group: perm, feature_id: F-006, polarity: positive,
+   query: "access_control：不同角色访问商品库的可见性是否受数据权限约束",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则"], note: "边界🟡"}
+- {id: GS-S02, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创选择商品来自商品库，商品与漫剧关联校验",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.4 商品库"], note: "hub 联动🟡：商品配置区"}
+- {id: GS-S03, group: lineage, feature_id: F-010, polarity: positive,
+   query: "批创定向配置可复用定向包",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.7 定向包"], note: "hub 联动🟡：定向配置区"}
+- {id: GS-S04, group: iaa_iap, feature_id: F-016, polarity: positive,
+   query: "CBO激活/IAA 投放方式提交时自动绑定 IAA 预置监测链接",
+   expected_refs: ["prd:漫剧批创初版功能PRD §7.1 链接来源", "prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-S05, group: lineage, feature_id: F-004, polarity: positive,
+   query: "同一漫剧多条投放链接，漫剧库聚合为一条并累加关联链接数",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}
+- {id: GS-S06, group: submit, feature_id: F-022, polarity: positive,
+   query: "提交时接口校验所有必填项，任一不通过则阻止写入队列并返回具体错误",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.1 三层广告结构"]}
+- {id: GS-S07, group: neg, feature_id: F-007, polarity: negative,
+   query: "素材卡片展示缩略图/时长/大小/标签/创建时间，按目录树筛选", expected_refs: []}
+- {id: GS-S08, group: neg, feature_id: F-009, polarity: negative,
+   query: "定向包新建时各定向条件字段的必填与默认值校验", expected_refs: [],
+   note: "字段约束在 §9.2 全局"}
+- {id: GS-S09, group: neg, feature_id: F-011, polarity: negative,
+   query: "任务中心列表按提交时间降序，支持分页与状态筛选", expected_refs: []}
+- {id: GS-S10, group: neg, feature_id: F-008, polarity: negative,
+   query: "标题包列表支持包名模糊搜索与分页展示", expected_refs: []}
+- {id: GS-S11, group: lineage, feature_id: F-031, polarity: positive,
+   query: "头条账户管理页展示账户名/账户ID/来源/余额/状态/过期时间",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.1 头条账户授权管理"],
+   note: "🟡：附图段实为账户页，spec 在 §5.1"}
+- {id: GS-S12, group: perm, feature_id: F-009, polarity: positive,
+   query: "投放组长登录定向包列表可查看所有投手创建的定向包",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则", "prd:漫剧批创初版功能PRD §10.1 角色分类"]}
+- {id: GS-S13, group: perm, feature_id: F-011, polarity: positive,
+   query: "管理员登录任务中心可查看全平台所有执行人的任务",
+   expected_refs: ["prd:漫剧批创初版功能PRD §10.2 数据权限规则", "prd:漫剧批创初版功能PRD §10.1 角色分类"]}
+- {id: GS-S14, group: submit, feature_id: F-010, polarity: positive,
+   query: "cross_system：批创提交在选定账户下批量创建项目与广告（三层）",
+   expected_refs: ["prd:漫剧批创初版功能PRD §8.1 三层广告结构"]}
+- {id: GS-S15, group: iaa_iap, feature_id: F-005, polarity: positive,
+   query: "投放链接归类为 IAP/IAA 后在批创按链接类型筛选可投漫剧",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.2 漫剧库"]}
+- {id: GS-S16, group: neg, feature_id: F-006, polarity: negative,
+   query: "response_time：商品库大数据量列表加载性能", expected_refs: []}
+- {id: GS-S17, group: neg, feature_id: F-005, polarity: negative,
+   query: "invalid_input：投放链接推广URL 非法格式拦截", expected_refs: []}
+- {id: GS-S18, group: lineage, feature_id: F-004, polarity: positive,
+   query: "漫剧库不支持手工新建，数据只能来自投放链接提取聚合",
+   expected_refs: ["prd:漫剧批创初版功能PRD §5.3 投放链接管理"]}

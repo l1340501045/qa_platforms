@@ -4,19 +4,36 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
-  Input,
   Modal,
   Radio,
+  Select,
+  Space,
   Spin,
   Table,
+  Tag,
+  Typography,
   message,
 } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { DownloadOutlined, PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 
-import { createExport, listExports } from '../../services/exportApi';
+import { createExport, downloadExportFile, listExports } from '../../services/exportApi';
+import { listSystemOptions, listSystemBatches } from '../../services/systemApi';
+import type { SystemBatchItem } from '../../services/systemApi';
+import EmptyState from '../../components/common/EmptyState';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
+import {
+  formatViewableBatchStatus,
+  isViewableBatchStatus,
+} from '../../utils/batchVisibility';
+import { getErrorMessage } from '../../utils/errorMessage';
 import type {
   CreateExportRequest,
   ExportFormat,
@@ -26,6 +43,8 @@ import type {
   PaginatedData,
 } from '../../types';
 
+const { Text } = Typography;
+
 // ─── 状态 Badge 映射 ───
 const STATUS_MAP: Record<ExportStatus, { status: 'processing' | 'success' | 'error'; text: string }> = {
   processing: { status: 'processing', text: '处理中' },
@@ -33,7 +52,31 @@ const STATUS_MAP: Record<ExportStatus, { status: 'processing' | 'success' | 'err
   failed: { status: 'error', text: '失败' },
 };
 
+const SCOPE_LABEL: Record<ExportScope, string> = {
+  batch: '批次',
+  system: '系统',
+};
+
+const FORMAT_LABEL: Record<ExportFormat, string> = {
+  markdown: 'Markdown',
+  excel: 'Excel',
+};
+
+const FORMAT_HELP: Record<ExportFormat, string> = {
+  markdown: '适合评审、归档和人工阅读。',
+  excel: '适合导入外部测试管理工具或继续二次处理。',
+};
+
+const FORMAT_EXTENSION: Record<ExportFormat, string> = {
+  markdown: 'md',
+  excel: 'xlsx',
+};
+
 const POLL_INTERVAL = 3000;
+
+function getExportFallbackFilename(record: ExportTask): string {
+  return `qa-export-${record.id.slice(0, 8)}.${FORMAT_EXTENSION[record.format]}`;
+}
 
 const Exports: React.FC = () => {
   // ─── 列表状态 ───
@@ -53,18 +96,37 @@ const Exports: React.FC = () => {
   const [formFormat, setFormFormat] = useState<ExportFormat>('markdown');
   const [formBatchId, setFormBatchId] = useState('');
   const [formSystemId, setFormSystemId] = useState('');
+  const [systemOptions, setSystemOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [batchOptions, setBatchOptions] = useState<SystemBatchItem[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [systemOptionsLoading, setSystemOptionsLoading] = useState(false);
+  const [systemOptionsError, setSystemOptionsError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<ExportStatus | undefined>();
+  const [listError, setListError] = useState<string | null>(null);
+  const [downloadingExportId, setDownloadingExportId] = useState<string | null>(null);
 
   // ─── 轮询 ───
   const pollTimerRef = useRef<number | null>(null);
+  const statusFilterRef = useRef<ExportStatus | undefined>(statusFilter);
+  statusFilterRef.current = statusFilter;
 
   // ─── 加载列表 ───
-  const fetchList = useCallback(async (page = 1, perPage = 20) => {
+  const fetchList = useCallback(async (page = 1, perPage = 20, status?: ExportStatus) => {
     setLoading(true);
+    setListError(null);
     try {
-      const result = await listExports({ page, per_page: perPage });
+      const result = await listExports({ page, per_page: perPage, status });
       setData(result);
-    } catch {
-      message.error('加载导出列表失败');
+    } catch (err) {
+      setListError(getErrorMessage(err, '导出任务暂时无法加载，请重试。'));
+      setData({
+        items: [],
+        total: 0,
+        page,
+        per_page: perPage,
+        total_pages: 0,
+      });
     } finally {
       setLoading(false);
     }
@@ -82,7 +144,11 @@ const Exports: React.FC = () => {
         pollTimerRef.current = window.setInterval(async () => {
           try {
             const current = dataRef.current;
-            const result = await listExports({ page: current.page, per_page: current.per_page });
+            const result = await listExports({
+              page: current.page,
+              per_page: current.per_page,
+              status: statusFilterRef.current,
+            });
             setData(result);
             // 如果没有 processing 任务了，停止轮询
             if (!result.items.some((t) => t.status === 'processing')) {
@@ -125,19 +191,48 @@ const Exports: React.FC = () => {
   // ─── 分页变化 ───
   const handlePageChange = useCallback(
     (page: number, pageSize: number) => {
-      fetchList(page, pageSize);
+      fetchList(page, pageSize, statusFilter);
     },
-    [fetchList],
+    [fetchList, statusFilter],
   );
+
+  const handleStatusFilterChange = (value?: ExportStatus) => {
+    setStatusFilter(value);
+    fetchList(1, data.per_page, value);
+  };
+
+  const handleDownload = useCallback(async (record: ExportTask) => {
+    if (!record.file_url) {
+      message.warning('导出文件尚未生成，请刷新后重试');
+      return;
+    }
+
+    setDownloadingExportId(record.id);
+    try {
+      const { blob, filename } = await downloadExportFile(record.id, getExportFallbackFilename(record));
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      message.error(getErrorMessage(err, '导出文件暂时无法下载，请稍后重试。'));
+    } finally {
+      setDownloadingExportId(null);
+    }
+  }, []);
 
   // ─── 创建导出 ───
   const handleCreate = useCallback(async () => {
-    if (formScope === 'batch' && !formBatchId.trim()) {
-      message.warning('请输入 Batch ID');
+    if (formScope === 'batch' && !formBatchId) {
+      message.warning('请选择批次');
       return;
     }
-    if (formScope === 'system' && !formSystemId.trim()) {
-      message.warning('请输入 System ID');
+    if (formScope === 'system' && !formSystemId) {
+      message.warning('请选择系统');
       return;
     }
 
@@ -154,43 +249,122 @@ const Exports: React.FC = () => {
       setModalOpen(false);
       resetForm();
       // 刷新列表
-      await fetchList(1, data.per_page);
+      await fetchList(1, data.per_page, statusFilter);
     } catch {
       message.error('创建导出任务失败');
     } finally {
       setCreateLoading(false);
     }
-  }, [formScope, formFormat, formBatchId, formSystemId, fetchList, data.per_page]);
+  }, [formScope, formFormat, formBatchId, formSystemId, fetchList, data.per_page, statusFilter]);
 
   const resetForm = () => {
     setFormScope('batch');
     setFormFormat('markdown');
     setFormBatchId('');
     setFormSystemId('');
+    setBatchOptions([]);
+    setBatchError(null);
   };
+
+  const loadSystemOptions = useCallback(async () => {
+    setSystemOptionsLoading(true);
+    setSystemOptionsError(null);
+    try {
+      const options = await listSystemOptions();
+      setSystemOptions(options);
+    } catch (err) {
+      setSystemOptionsError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      setSystemOptions([]);
+    } finally {
+      setSystemOptionsLoading(false);
+    }
+  }, []);
+
+  // 打开新建弹窗时懒加载系统选项
+  const openCreateModal = () => {
+    setModalOpen(true);
+    if (systemOptions.length === 0) {
+      loadSystemOptions();
+    }
+  };
+
+  // 选中系统后加载该系统可见批次（batch scope 联动）
+  const handleSystemChange = (sysId: string) => {
+    setFormSystemId(sysId);
+    setFormBatchId('');
+    setBatchOptions([]);
+    setBatchError(null);
+    if (sysId) {
+      setBatchLoading(true);
+      listSystemBatches(sysId, { per_page: 100 })
+        .then((res) =>
+          setBatchOptions(
+            res.items.filter((b) => isViewableBatchStatus(b.status)),
+          ),
+        )
+        .catch((err) => {
+          setBatchError(getErrorMessage(err, '批次列表暂时无法加载，请重试。'));
+          setBatchOptions([]);
+        })
+        .finally(() => setBatchLoading(false));
+    }
+  };
+
+  const retrySystemOptions = () => {
+    loadSystemOptions();
+  };
+
+  const retryBatchOptions = () => {
+    if (formSystemId) handleSystemChange(formSystemId);
+  };
+
+  const batchSelectHelp = (() => {
+    if (!formSystemId) return '先选择系统，再选择该系统下待审阅/已完成/已落库批次。';
+    if (batchLoading) return '正在加载该系统可导出的批次。';
+    if (batchError) return '批次列表加载失败，不能据此判断该系统没有可导出批次。';
+    if (batchOptions.length === 0) return '该系统当前没有待审阅/已完成/已落库的可导出批次。';
+    return `当前可选择 ${batchOptions.length} 个待审阅/已完成/已落库批次。`;
+  })();
 
   // ─── 表格列 ───
   const columns: ColumnsType<ExportTask> = [
     {
-      title: 'ID',
-      dataIndex: 'id',
-      key: 'id',
-      width: 100,
-      render: (val: string) => val.slice(0, 8),
-    },
-    {
-      title: '范围',
-      dataIndex: 'export_scope',
-      key: 'export_scope',
-      width: 80,
-      render: (val: ExportScope) => (val === 'batch' ? '批次' : '系统'),
-    },
-    {
-      title: '格式',
-      dataIndex: 'format',
-      key: 'format',
-      width: 100,
-      render: (val: ExportFormat) => (val === 'markdown' ? 'Markdown' : 'Excel'),
+      title: '导出任务',
+      key: 'task',
+      width: 360,
+      render: (_, record) => (
+        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+          <Space size={8} wrap>
+            <Text strong>{SCOPE_LABEL[record.export_scope]}导出</Text>
+            <Tag>{FORMAT_LABEL[record.format]}</Tag>
+            <Text type="secondary">#{record.id.slice(0, 8)}</Text>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            创建于 {new Date(record.created_at).toLocaleString('zh-CN')}
+            {record.total_cases != null ? ` · ${record.total_cases} 条用例` : ''}
+          </Text>
+          <Space size={8} wrap>
+            {record.status === 'completed' && record.file_url ? (
+              <Button
+                type="link"
+                size="small"
+                icon={<DownloadOutlined />}
+                loading={downloadingExportId === record.id}
+                disabled={downloadingExportId !== null && downloadingExportId !== record.id}
+                onClick={() => handleDownload(record)}
+                style={{ paddingInline: 0 }}
+              >
+                下载文件
+              </Button>
+            ) : null}
+            {record.status === 'failed' && (
+              <Text type="danger" style={{ fontSize: 13 }}>
+                {record.error_message || '导出失败，可重新创建任务'}
+              </Text>
+            )}
+          </Space>
+        </Space>
+      ),
     },
     {
       title: '状态',
@@ -203,56 +377,153 @@ const Exports: React.FC = () => {
       },
     },
     {
-      title: '文件',
-      dataIndex: 'file_url',
-      key: 'file_url',
-      width: 100,
-      render: (val: string | null, record: ExportTask) => {
-        if (record.status === 'completed' && val) {
-          return (
-            <a href={val} target="_blank" rel="noopener noreferrer">
-              下载
-            </a>
-          );
-        }
-        return '-';
-      },
+      title: '范围',
+      dataIndex: 'export_scope',
+      key: 'export_scope',
+      width: 90,
+      render: (val: ExportScope) => SCOPE_LABEL[val],
     },
     {
-      title: '创建时间',
-      dataIndex: 'created_at',
-      key: 'created_at',
-      width: 180,
-      render: (val: string) => new Date(val).toLocaleString('zh-CN'),
+      title: '格式',
+      dataIndex: 'format',
+      key: 'format',
+      width: 120,
+      render: (val: ExportFormat) => FORMAT_LABEL[val],
+    },
+    {
+      title: '完成时间',
+      dataIndex: 'completed_at',
+      key: 'completed_at',
+      width: 170,
+      render: (val: string | null) => (val ? new Date(val).toLocaleString('zh-CN') : '-'),
     },
   ];
 
+  const processingCount = data.items.filter((item) => item.status === 'processing').length;
+  const completedCount = data.items.filter((item) => item.status === 'completed').length;
+  const failedCount = data.items.filter((item) => item.status === 'failed').length;
+  const downloadableCount = data.items.filter((item) => item.status === 'completed' && item.file_url).length;
+
   return (
-    <div style={{ padding: 24 }}>
-      {/* ─── 顶部 ─── */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-        <h2 style={{ margin: 0 }}>导出中心</h2>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setModalOpen(true)}>
-          新建导出
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="导出中心"
+        title="用例交付导出"
+        description="从已审查批次或系统资产生成交付文件；Markdown 适合评审归档，Excel 适合同步外部测试管理工具。"
+        actions={
+          <>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => fetchList(data.page, data.per_page, statusFilter)}>
+              刷新
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+              新建导出
+            </Button>
+          </>
+        }
+      />
+
+      <Alert
+        type={listError ? 'warning' : processingCount > 0 ? 'info' : 'success'}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={
+          listError
+            ? '导出任务列表暂时无法加载'
+            : processingCount > 0
+              ? '导出任务正在生成，页面会自动刷新状态'
+              : '导出中心用于拿到可交付文件'
+        }
+        description={
+          listError
+            ? '不能据此判断当前没有导出任务或可下载文件；可在下方重试加载。'
+            : '建议先完成批次审查或落库，再从这里导出批次结果或系统资产快照。完成后直接下载文件；失败任务可按相同范围重新创建。'
+        }
+      />
+
+      <MetricStrip
+        items={[
+          { key: 'total', label: '任务总数', value: listError ? '-' : data.total, hint: listError ? '加载失败' : undefined },
+          { key: 'processing', label: '本页处理中', value: listError ? '-' : processingCount, tone: 'primary' },
+          { key: 'completed', label: '本页已完成', value: listError ? '-' : completedCount, tone: 'success' },
+          { key: 'downloadable', label: '可下载文件', value: listError ? '-' : downloadableCount, tone: 'success' },
+          { key: 'failed', label: '本页失败', value: listError ? '-' : failedCount, tone: 'danger' },
+        ]}
+      />
+
+      <FilterBar>
+        <Text strong>任务状态</Text>
+        <Select<ExportStatus | undefined>
+          allowClear
+          placeholder="全部状态"
+          style={{ width: 160 }}
+          value={statusFilter}
+          onChange={handleStatusFilterChange}
+          options={[
+            { value: 'processing', label: '处理中' },
+            { value: 'completed', label: '已完成' },
+            { value: 'failed', label: '失败' },
+          ]}
+        />
+        <Text type="secondary">筛选会请求后端导出列表，不只是当前页过滤。</Text>
+      </FilterBar>
 
       {/* ─── 列表 ─── */}
       <Spin spinning={loading}>
-        <Table<ExportTask>
-          rowKey="id"
-          columns={columns}
-          dataSource={data.items}
-          pagination={{
-            current: data.page,
-            pageSize: data.per_page,
-            total: data.total,
-            showSizeChanger: true,
-            showTotal: (total) => `共 ${total} 条`,
-            onChange: handlePageChange,
-          }}
-          size="middle"
-        />
+        {listError && !loading ? (
+          <EmptyState
+            role="alert"
+            title="导出任务加载失败"
+            description={`无法确认是否有可下载文件或失败任务。${listError}`}
+            action={
+              <Space wrap>
+                <Button onClick={() => fetchList(data.page, data.per_page, statusFilter)}>
+                  重试加载
+                </Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                  新建导出
+                </Button>
+              </Space>
+            }
+          />
+        ) : data.items.length === 0 ? (
+          <EmptyState
+            title={statusFilter ? '当前状态下没有导出任务' : '还没有导出任务'}
+            description={statusFilter ? '可以切换状态筛选，或新建一个导出任务。' : '从已审查批次或系统资产创建一个导出任务，完成后可下载交付文件。'}
+            action={
+              <Space wrap>
+                {statusFilter && <Button onClick={() => handleStatusFilterChange(undefined)}>查看全部</Button>}
+                <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                  新建导出
+                </Button>
+              </Space>
+            }
+          />
+        ) : (
+          <div
+            style={{
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              overflow: 'hidden',
+            }}
+          >
+            <Table<ExportTask>
+              rowKey="id"
+              columns={columns}
+              dataSource={data.items}
+              pagination={{
+                current: data.page,
+                pageSize: data.per_page,
+                total: data.total,
+                showSizeChanger: true,
+                showTotal: (total) => `共 ${total} 条`,
+                onChange: handlePageChange,
+              }}
+              size="middle"
+              scroll={{ x: 760 }}
+            />
+          </div>
+        )}
       </Spin>
 
       {/* ─── 新建导出 Modal ─── */}
@@ -268,9 +539,24 @@ const Exports: React.FC = () => {
         okText="创建"
         cancelText="取消"
       >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message="选择导出范围和交付格式"
+          description="批次导出适合交付单次生成和审查结果；系统导出适合拿到当前系统的资产快照。"
+        />
         <div style={{ marginBottom: 16 }}>
           <div style={{ marginBottom: 8 }}>范围：</div>
-          <Radio.Group value={formScope} onChange={(e) => setFormScope(e.target.value)}>
+          <Radio.Group
+            value={formScope}
+            onChange={(e) => {
+              const v = e.target.value as ExportScope;
+              setFormScope(v);
+              setFormBatchId('');
+              if (v === 'batch' && formSystemId) handleSystemChange(formSystemId);
+            }}
+          >
             <Radio value="batch">批次</Radio>
             <Radio value="system">系统</Radio>
           </Radio.Group>
@@ -282,31 +568,116 @@ const Exports: React.FC = () => {
             <Radio value="markdown">Markdown</Radio>
             <Radio value="excel">Excel</Radio>
           </Radio.Group>
+          <div style={{ marginTop: 8, color: layoutTokens.textSecondary }}>
+            {FORMAT_HELP[formFormat]}
+          </div>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          {formScope === 'batch' ? (
-            <>
-              <div style={{ marginBottom: 8 }}>Batch ID：</div>
-              <Input
-                placeholder="请输入批次 ID"
-                value={formBatchId}
-                onChange={(e) => setFormBatchId(e.target.value)}
+        {formScope === 'batch' ? (
+          <>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}>系统：</div>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder="选择系统"
+                style={{ width: '100%' }}
+                value={formSystemId || undefined}
+                onChange={handleSystemChange}
+                loading={systemOptionsLoading}
+                status={systemOptionsError ? 'warning' : undefined}
+                notFoundContent={systemOptionsError ? '系统列表加载失败' : '暂无系统'}
+                options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
               />
-            </>
-          ) : (
-            <>
-              <div style={{ marginBottom: 8 }}>System ID：</div>
-              <Input
-                placeholder="请输入系统 ID"
-                value={formSystemId}
-                onChange={(e) => setFormSystemId(e.target.value)}
+              {systemOptionsError && (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  message="系统列表加载失败"
+                  description={`不能据此判断没有系统可导出。${systemOptionsError}`}
+                  action={
+                    <Button size="small" loading={systemOptionsLoading} onClick={retrySystemOptions}>
+                      重试
+                    </Button>
+                  }
+                />
+              )}
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ marginBottom: 8 }}>批次：</div>
+              <Select
+                showSearch
+                optionFilterProp="label"
+                placeholder={formSystemId ? '选择批次' : '请先选择系统'}
+                style={{ width: '100%' }}
+                value={formBatchId || undefined}
+                onChange={setFormBatchId}
+                loading={batchLoading}
+                disabled={!formSystemId || Boolean(batchError && !batchLoading)}
+                status={batchError ? 'warning' : undefined}
+                notFoundContent={batchError ? '批次列表加载失败' : '暂无可导出批次'}
+                options={batchOptions.map((b) => {
+                  const date = new Date(b.created_at).toLocaleDateString('zh-CN');
+                  return {
+                    value: b.id,
+                    label: `${b.document_title} · ${date} · ${b.total_cases ?? 0}例 · ${formatViewableBatchStatus(b.status)}`,
+                  };
+                })}
               />
-            </>
-          )}
-        </div>
+              {batchError ? (
+                <Alert
+                  type="warning"
+                  showIcon
+                  style={{ marginTop: 8 }}
+                  message="批次列表加载失败"
+                  description={`${batchSelectHelp}${batchError}`}
+                  action={
+                    <Button size="small" loading={batchLoading} onClick={retryBatchOptions}>
+                      重试批次
+                    </Button>
+                  }
+                />
+              ) : (
+                <Text type="secondary" style={{ display: 'block', marginTop: 8, fontSize: 12 }}>
+                  {batchSelectHelp}
+                </Text>
+              )}
+            </div>
+          </>
+        ) : (
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>系统：</div>
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择系统"
+              style={{ width: '100%' }}
+              value={formSystemId || undefined}
+              onChange={setFormSystemId}
+              loading={systemOptionsLoading}
+              status={systemOptionsError ? 'warning' : undefined}
+              notFoundContent={systemOptionsError ? '系统列表加载失败' : '暂无系统'}
+              options={systemOptions.map((s) => ({ value: s.id, label: s.name }))}
+            />
+            {systemOptionsError && (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginTop: 8 }}
+                message="系统列表加载失败"
+                description={`不能据此判断没有系统可导出。${systemOptionsError}`}
+                action={
+                  <Button size="small" loading={systemOptionsLoading} onClick={retrySystemOptions}>
+                    重试
+                  </Button>
+                }
+              />
+            )}
+          </div>
+        )}
       </Modal>
-    </div>
+    </PageShell>
   );
 };
 

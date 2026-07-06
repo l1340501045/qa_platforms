@@ -3,6 +3,8 @@
 Pipeline worker 通过这些端点通知 API 层阶段完成/失败/挂起等事件。
 实际回调逻辑已在 testcase_generator/tasks/callbacks.py 中直接操作 DB，
 此处提供 HTTP 端点作为备选通信通道（例如跨进程/跨网络部署场景）。
+
+CHG-20260609-001: 在 pipeline 完成/失败/挂起回调中自动创建通知。
 """
 
 from uuid import UUID
@@ -15,6 +17,7 @@ from src.platform_api.core.database import get_session
 from src.platform_api.models.enums import BatchStatus
 from src.platform_api.models.testcase import StageArtifact, TestBatch
 from src.platform_api.repositories.base import BaseRepository
+from src.platform_api.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/internal/callbacks", tags=["内部回调"])
 
@@ -87,6 +90,16 @@ async def pipeline_complete_callback(
         batch.current_stage = "export"
         await session.flush()
 
+        # 创建通知
+        notification_service = NotificationService(session)
+        await notification_service.create_notification(
+            type="batch_completed",
+            title=f"用例生成完成",
+            body=f"共生成 {data.total_cases} 条用例，请前往 Review",
+            target_type="batch",
+            target_id=batch.id,
+        )
+
     return {"code": "OK", "message": "pipeline complete callback received"}
 
 
@@ -102,6 +115,16 @@ async def pipeline_failed_callback(
         batch.status = BatchStatus.FAILED
         batch.current_stage = data.stage
         await session.flush()
+
+        # 创建通知
+        notification_service = NotificationService(session)
+        await notification_service.create_notification(
+            type="batch_failed",
+            title=f"用例生成失败",
+            body=f"在 {data.stage} 阶段发生错误，可尝试重试",
+            target_type="batch",
+            target_id=batch.id,
+        )
 
     # 写入失败 artifact
     artifact = StageArtifact(
@@ -128,6 +151,16 @@ async def pipeline_suspended_callback(
         batch.status = BatchStatus.SUSPENDED
         batch.current_stage = "comprehend"
         await session.flush()
+
+        # 创建通知
+        notification_service = NotificationService(session)
+        await notification_service.create_notification(
+            type="batch_suspended",
+            title=f"用例生成需要人工确认",
+            body=f"有 {len(data.open_questions)} 个问题需要确认",
+            target_type="batch",
+            target_id=batch.id,
+        )
 
     # 写入挂起 artifact
     artifact = StageArtifact(

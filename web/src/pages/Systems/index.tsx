@@ -1,25 +1,80 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
-  Card,
-  Col,
-  Drawer,
   Form,
   Input,
   message,
   Modal,
   Pagination,
-  Row,
+  Select,
+  Space,
   Spin,
+  Table,
+  Tag,
   Typography,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import type { ColumnsType } from 'antd/es/table';
+import {
+  DeleteOutlined,
+  EditOutlined,
+  FolderOpenOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+} from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useKnowledgeStore } from '../../stores/knowledgeStore';
 import type { System } from '../../types';
+import EmptyState from '../../components/common/EmptyState';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import { layoutTokens } from '../../components/layout/tokens';
+import { getErrorMessage } from '../../utils/errorMessage';
 
-const { Meta } = Card;
-const { Text } = Typography;
+const { Text, Link } = Typography;
+
+type SystemStage = 'empty' | 'with_docs' | 'with_batches' | 'unknown';
+type SystemStageFilter = 'all' | SystemStage;
+type SystemSort = 'updated_desc' | 'name_asc' | 'documents_desc' | 'batches_desc';
+
+const SYSTEM_STAGE_META: Record<SystemStage, { label: string; color: string; nextAction: string }> = {
+  empty: { label: '待上传资料', color: 'default', nextAction: '上传资料' },
+  with_docs: { label: '已有资料', color: 'blue', nextAction: '发起生成' },
+  with_batches: { label: '已有批次', color: 'green', nextAction: '进入知识库' },
+  unknown: { label: '统计不可用', color: 'orange', nextAction: '进入知识库' },
+};
+
+function renderCount(count?: number): number | string {
+  return typeof count === 'number' ? count : '--';
+}
+
+function numericCount(count?: number): number {
+  return typeof count === 'number' ? count : 0;
+}
+
+function hasSystemCounts(
+  system: System,
+): system is System & Required<Pick<System, 'document_count' | 'batch_count'>> {
+  return typeof system.document_count === 'number' && typeof system.batch_count === 'number';
+}
+
+function getSystemStage(system: System): SystemStage {
+  if (!hasSystemCounts(system)) return 'unknown';
+  if (system.batch_count > 0) return 'with_batches';
+  if (system.document_count > 0) return 'with_docs';
+  return 'empty';
+}
+
+function formatDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return date.toLocaleDateString();
+}
+
+function nowrapTitle(text: string): React.ReactNode {
+  return <span style={{ whiteSpace: 'nowrap' }}>{text}</span>;
+}
 
 const SystemsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -35,30 +90,98 @@ const SystemsPage: React.FC = () => {
     deleteSystem,
   } = useKnowledgeStore();
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [editingSystem, setEditingSystem] = useState<System | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [keyword, setKeyword] = useState('');
+  const [stageFilter, setStageFilter] = useState<SystemStageFilter>('all');
+  const [sortBy, setSortBy] = useState<SystemSort>('updated_desc');
+  const [systemsError, setSystemsError] = useState<string | null>(null);
   const [form] = Form.useForm();
 
+  const loadSystems = useCallback(
+    async (page: number, pageSize: number) => {
+      setSystemsError(null);
+      try {
+        await fetchSystems({ page, per_page: pageSize });
+      } catch (err) {
+        setSystemsError(getErrorMessage(err, '系统列表暂时无法加载，请重试。'));
+      }
+    },
+    [fetchSystems],
+  );
+
+  const knownDocumentTotal = systems.reduce(
+    (sum, system) => sum + (typeof system.document_count === 'number' ? system.document_count : 0),
+    0,
+  );
+  const knownBatchTotal = systems.reduce(
+    (sum, system) => sum + (typeof system.batch_count === 'number' ? system.batch_count : 0),
+    0,
+  );
+  const statsUnavailable = systems.some((system) => !hasSystemCounts(system));
+  const activeSystems = systems.filter((system) => {
+    if (!hasSystemCounts(system)) return false;
+    return system.document_count > 0 || system.batch_count > 0;
+  }).length;
+  const waitingSystems = systems.filter((system) => getSystemStage(system) === 'empty').length;
+  const generatedSystems = systems.filter((system) => getSystemStage(system) === 'with_batches').length;
+  const metricUnavailable = Boolean(systemsError) || statsUnavailable;
+
+  const visibleSystems = useMemo(() => {
+    const normalizedKeyword = keyword.trim().toLocaleLowerCase();
+    const filtered = systems.filter((system) => {
+      const stage = getSystemStage(system);
+      const matchesStage = stageFilter === 'all' || stage === stageFilter;
+      const matchesKeyword =
+        !normalizedKeyword ||
+        system.name.toLocaleLowerCase().includes(normalizedKeyword) ||
+        (system.description || '').toLocaleLowerCase().includes(normalizedKeyword);
+
+      return matchesStage && matchesKeyword;
+    });
+
+    return [...filtered].sort((a, b) => {
+      switch (sortBy) {
+        case 'name_asc':
+          return a.name.localeCompare(b.name, 'zh-Hans-CN');
+        case 'documents_desc':
+          return numericCount(b.document_count) - numericCount(a.document_count);
+        case 'batches_desc':
+          return numericCount(b.batch_count) - numericCount(a.batch_count);
+        case 'updated_desc':
+        default:
+          return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+      }
+    });
+  }, [keyword, sortBy, stageFilter, systems]);
+
   useEffect(() => {
-    fetchSystems({ page: 1, per_page: systemsPerPage });
-  }, []);
+    loadSystems(1, systemsPerPage);
+    // 仅初始加载；分页变化由 Pagination.onChange 驱动。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadSystems]);
 
   const handlePageChange = (page: number, pageSize: number) => {
-    fetchSystems({ page, per_page: pageSize });
+    loadSystems(page, pageSize);
   };
 
-  const openCreateDrawer = () => {
+  const openKnowledgeBase = (system: System, e?: React.MouseEvent<HTMLElement>) => {
+    e?.stopPropagation();
+    navigate(`/systems/${system.id}/documents`);
+  };
+
+  const openCreateModal = () => {
     setEditingSystem(null);
     form.resetFields();
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
-  const openEditDrawer = (system: System, e: React.MouseEvent) => {
+  const openEditModal = (system: System, e: React.MouseEvent) => {
     e.stopPropagation();
     setEditingSystem(system);
     form.setFieldsValue({ name: system.name, description: system.description || '' });
-    setDrawerOpen(true);
+    setModalOpen(true);
   };
 
   const handleSubmit = async () => {
@@ -72,7 +195,7 @@ const SystemsPage: React.FC = () => {
         await createSystem(values);
         message.success('系统创建成功');
       }
-      setDrawerOpen(false);
+      setModalOpen(false);
       form.resetFields();
     } catch (err: any) {
       if (err?.errorFields) return; // form validation error
@@ -101,55 +224,243 @@ const SystemsPage: React.FC = () => {
     });
   };
 
+  const clearFilters = () => {
+    setKeyword('');
+    setStageFilter('all');
+    setSortBy('updated_desc');
+  };
+
+  const columns: ColumnsType<System> = [
+    {
+      title: nowrapTitle('系统'),
+      key: 'system',
+      render: (_, system) => (
+        <div style={{ minWidth: 0 }}>
+          <Link strong onClick={(event) => openKnowledgeBase(system, event)}>
+            {system.name}
+          </Link>
+          <Text
+            style={{
+              display: 'block',
+              marginTop: 4,
+              color: layoutTokens.textSecondary,
+              maxWidth: 420,
+            }}
+            ellipsis={{ tooltip: system.description || '暂无描述' }}
+          >
+            {system.description || '暂无描述'}
+          </Text>
+          <Space size={12} wrap style={{ marginTop: 4 }}>
+            <Button
+              size="small"
+              type="link"
+              icon={<FolderOpenOutlined />}
+              style={{ padding: 0, height: 24 }}
+              onClick={(event) => openKnowledgeBase(system, event)}
+            >
+              {SYSTEM_STAGE_META[getSystemStage(system)].nextAction}
+            </Button>
+            <Button
+              aria-label={`编辑 ${system.name}`}
+              size="small"
+              type="link"
+              icon={<EditOutlined />}
+              style={{ padding: 0, height: 24 }}
+              onClick={(event) => openEditModal(system, event)}
+            >
+              编辑
+            </Button>
+            <Button
+              aria-label={`删除 ${system.name}`}
+              size="small"
+              type="link"
+              danger
+              icon={<DeleteOutlined />}
+              style={{ padding: 0, height: 24 }}
+              onClick={(event) => handleDelete(system, event)}
+            >
+              删除
+            </Button>
+          </Space>
+        </div>
+      ),
+    },
+    {
+      title: nowrapTitle('资料状态'),
+      key: 'stage',
+      width: 104,
+      render: (_, system) => {
+        const stage = getSystemStage(system);
+        const meta = SYSTEM_STAGE_META[stage];
+        return <Tag color={meta.color}>{meta.label}</Tag>;
+      },
+    },
+    {
+      title: nowrapTitle('文档数'),
+      dataIndex: 'document_count',
+      key: 'document_count',
+      width: 72,
+      align: 'right',
+      render: (count: number | undefined) => renderCount(count),
+    },
+    {
+      title: nowrapTitle('批次数'),
+      dataIndex: 'batch_count',
+      key: 'batch_count',
+      width: 72,
+      align: 'right',
+      render: (count: number | undefined) => renderCount(count),
+    },
+    {
+      title: nowrapTitle('最近活动'),
+      dataIndex: 'updated_at',
+      key: 'updated_at',
+      width: 104,
+      render: (value: string) => formatDate(value),
+    },
+  ];
+
   return (
-    <div style={{ padding: 24 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 24 }}>
-        <Typography.Title level={3} style={{ margin: 0 }}>
-          系统列表
-        </Typography.Title>
-        <Button type="primary" icon={<PlusOutlined />} onClick={openCreateDrawer}>
-          新建系统
-        </Button>
-      </div>
+    <PageShell>
+      <PageHeader
+        eyebrow="项目入口"
+        title="项目/系统"
+        description="先选择业务系统，再进入知识库上传需求资料、发起生成或查看已有批次。"
+        actions={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+            新建系统
+          </Button>
+        }
+      />
+
+      <MetricStrip
+        items={[
+          {
+            key: 'systems',
+            label: '系统总数',
+            value: systemsError ? '-' : systemsTotal,
+            tone: metricUnavailable ? 'warning' : 'default',
+            hint: systemsError ? '加载失败' : statsUnavailable ? '统计字段缺失' : undefined,
+          },
+          {
+            key: 'active',
+            label: '当前页有资料/批次',
+            value: metricUnavailable ? '-' : activeSystems,
+            tone: metricUnavailable ? 'warning' : 'primary',
+          },
+          {
+            key: 'waiting',
+            label: '当前页待上传资料',
+            value: metricUnavailable ? '-' : waitingSystems,
+            tone: !metricUnavailable && waitingSystems > 0 ? 'warning' : 'default',
+          },
+          {
+            key: 'generated',
+            label: '当前页已有批次',
+            value: metricUnavailable ? '-' : generatedSystems,
+            tone: !metricUnavailable && generatedSystems > 0 ? 'success' : 'default',
+          },
+          { key: 'documents', label: '当前页文档数', value: metricUnavailable ? '-' : knownDocumentTotal },
+          { key: 'batches', label: '当前页批次数', value: metricUnavailable ? '-' : knownBatchTotal },
+        ]}
+      />
+
+      <FilterBar>
+        <Input.Search
+          allowClear
+          placeholder="按系统名称或描述筛选当前页"
+          style={{ width: 280 }}
+          value={keyword}
+          onChange={(event) => setKeyword(event.target.value)}
+        />
+        <Select<SystemStageFilter>
+          value={stageFilter}
+          style={{ width: 170 }}
+          onChange={setStageFilter}
+          options={[
+            { value: 'all', label: '全部资料状态' },
+            { value: 'empty', label: '待上传资料' },
+            { value: 'with_docs', label: '已有资料' },
+            { value: 'with_batches', label: '已有批次' },
+            { value: 'unknown', label: '统计不可用' },
+          ]}
+        />
+        <Select<SystemSort>
+          value={sortBy}
+          style={{ width: 170 }}
+          onChange={setSortBy}
+          options={[
+            { value: 'updated_desc', label: '按最近活动' },
+            { value: 'name_asc', label: '按系统名称' },
+            { value: 'documents_desc', label: '按文档数' },
+            { value: 'batches_desc', label: '按批次数' },
+          ]}
+        />
+        {(keyword || stageFilter !== 'all' || sortBy !== 'updated_desc') && (
+          <Button onClick={clearFilters}>重置</Button>
+        )}
+      </FilterBar>
 
       <Spin spinning={systemsLoading}>
-        <Row gutter={[16, 16]}>
-          {systems.map((system) => (
-            <Col key={system.id} xs={24} sm={12} md={8} lg={6}>
-              <Card
-                hoverable
-                onClick={() => navigate(`/systems/${system.id}/documents`)}
-                actions={[
-                  <EditOutlined key="edit" onClick={(e) => openEditDrawer(system, e)} />,
-                  <DeleteOutlined key="delete" onClick={(e) => handleDelete(system, e)} />,
-                ]}
-              >
-                <Meta
-                  title={system.name}
-                  description={system.description || '暂无描述'}
-                />
-                <div style={{ marginTop: 12 }}>
-                  <Text type="secondary">文档数：{system.document_count ?? 0}</Text>
-                  <br />
-                  <Text type="secondary">批次数：{system.batch_count ?? 0}</Text>
-                  <br />
-                  <Text type="secondary">
-                    创建时间：{new Date(system.created_at).toLocaleDateString()}
-                  </Text>
-                </div>
-              </Card>
-            </Col>
-          ))}
-        </Row>
+        {systemsError && !systemsLoading && (
+          <EmptyState
+            role="alert"
+            title="系统列表加载失败"
+            description={systemsError}
+            action={
+              <Button icon={<ReloadOutlined />} onClick={() => loadSystems(systemsPage || 1, systemsPerPage)}>
+                重试加载
+              </Button>
+            }
+          />
+        )}
 
-        {systems.length === 0 && !systemsLoading && (
-          <div style={{ textAlign: 'center', padding: 48 }}>
-            <Text type="secondary">暂无系统，请点击右上角「新建系统」</Text>
+        {!systemsError && systems.length > 0 && visibleSystems.length > 0 && (
+          <div
+            style={{
+              border: `1px solid ${layoutTokens.border}`,
+              borderRadius: layoutTokens.radius,
+              background: layoutTokens.surface,
+              overflow: 'hidden',
+            }}
+          >
+            <Table<System>
+              rowKey="id"
+              columns={columns}
+              dataSource={visibleSystems}
+              pagination={false}
+              size="middle"
+              scroll={{ x: 720 }}
+              onRow={(system) => ({
+                onClick: () => openKnowledgeBase(system),
+                style: { cursor: 'pointer' },
+              })}
+            />
           </div>
+        )}
+
+        {!systemsError && systems.length === 0 && !systemsLoading && (
+          <EmptyState
+            title="还没有项目/系统"
+            description="先创建一个业务系统，再上传 PRD、技术文档或测试规则。"
+            action={
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreateModal}>
+                新建系统
+              </Button>
+            }
+          />
+        )}
+
+        {!systemsError && systems.length > 0 && visibleSystems.length === 0 && !systemsLoading && (
+          <EmptyState
+            title="当前页没有匹配的系统"
+            description="筛选只作用于当前分页；可以重置筛选或切换分页继续查找。"
+            action={<Button onClick={clearFilters}>重置筛选</Button>}
+          />
         )}
       </Spin>
 
-      {systemsTotal > 0 && (
+      {!systemsError && systemsTotal > 0 && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24 }}>
           <Pagination
             current={systemsPage}
@@ -162,16 +473,15 @@ const SystemsPage: React.FC = () => {
         </div>
       )}
 
-      <Drawer
+      <Modal
         title={editingSystem ? '编辑系统' : '新建系统'}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        width={400}
-        extra={
-          <Button type="primary" onClick={handleSubmit} loading={submitting}>
-            {editingSystem ? '保存' : '创建'}
-          </Button>
-        }
+        open={modalOpen}
+        onCancel={() => setModalOpen(false)}
+        onOk={handleSubmit}
+        confirmLoading={submitting}
+        okText={editingSystem ? '保存' : '创建'}
+        cancelText="取消"
+        destroyOnHidden
       >
         <Form form={form} layout="vertical">
           <Form.Item
@@ -185,8 +495,8 @@ const SystemsPage: React.FC = () => {
             <Input.TextArea rows={4} placeholder="请输入系统描述（可选）" />
           </Form.Item>
         </Form>
-      </Drawer>
-    </div>
+      </Modal>
+    </PageShell>
   );
 };
 

@@ -7,7 +7,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 SectionKind = Literal["spec", "summary", "flow", "mock", "future", "tbd"]
 """章节性质分类，决定下游可生成何种 oracle：
 - spec   可验证规范（有明确字段/数值/状态/文案）→ 允许完整行为断言
@@ -29,6 +28,11 @@ class SectionExtract(BaseModel):
         default="spec",
         description="章节性质分类，决定下游 oracle 策略（spec/summary/flow/mock/future/tbd）",
     )
+    is_global: bool = Field(
+        default=False,
+        description="是否为适用于所有/多个功能点的全局·横切规则章节（由 section_classifier 语义判定，"
+                    "落点⑧；global_section_llm_enabled 开时替代关键词识别全局章节）",
+    )
 
 
 class PrototypeObservation(BaseModel):
@@ -49,6 +53,11 @@ class FeatureItem(BaseModel):
     source_refs: list[str] = Field(default_factory=list, description="来源引用列表")
     feature_type: str = Field(default="general", description="功能类型标签")
     sub_features: list[FeatureItem] = Field(default_factory=list, description="子功能")
+    section_kind: SectionKind = Field(
+        default="spec",
+        description="对应 PRD 章节性质（透传自 SectionExtract.section_kind），决定下游"
+                    "维度增强是否跳过：summary/flow/mock/future/tbd 章节不再做维度展开",
+    )
 
 
 class SourceItem(BaseModel):
@@ -67,3 +76,8 @@ class ParsedContext(BaseModel):
     sources: list[SourceItem] = Field(default_factory=list, description="所有源文档")
     features: list[FeatureItem] = Field(default_factory=list, description="提取的功能点列表")
     prototype_observations: list[PrototypeObservation] | None = Field(default=None, description="原型观察记录（可选）")
+    entity_graph_hints: list[dict] = Field(
+        default_factory=list,
+        description="实体图谱关系提示（section_priority/mutually_exclusive/unreachable），"
+                    "entity_retrieval_enabled 关时为空列表",
+    )

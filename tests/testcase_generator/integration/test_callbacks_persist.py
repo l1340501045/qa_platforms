@@ -9,7 +9,11 @@ import os
 import pytest
 from uuid import uuid4, UUID
 
+from tests.testcase_generator.integration.conftest import requires_db
+
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5434/qa_platforms")
+
+pytestmark = requires_db
 
 from sqlalchemy import text
 from src.platform_api.core.database import get_session_factory
@@ -169,6 +173,79 @@ async def test_on_pipeline_complete_real_fk_mapping():
         )
         status = result.scalar()
         assert status == "pending_review", f"batch status 应为 pending_review, got {status}"
+
+
+@pytest.mark.asyncio
+async def test_on_pipeline_complete_persists_rules_and_resolves_rule_id():
+    """Chunk 1 验收：规则台账落库 + test_points.rule_id 由规则码解析为 rules.id(uuid)。"""
+    from src.testcase_generator.tasks.callbacks import on_pipeline_complete
+
+    system_id = uuid4()
+    doc_id = uuid4()
+    batch_id = uuid4()
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
+        await session.execute(
+            text("INSERT INTO public.systems (id, name) VALUES (:id, :name)"),
+            {"id": str(system_id), "name": f"rule_test_{system_id.hex[:8]}"},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO knowledge.documents (id, system_id, title, doc_type, trust_level, content, storage_path, content_hash, embedding_status, image_refs) "
+                "VALUES (:id, :sid, '规则台账测试', 'prd', 1, '内容', '/r.md', :hash, 'done', '[]')"
+            ),
+            {"id": str(doc_id), "sid": str(system_id), "hash": uuid4().hex[:64]},
+        )
+        await session.execute(
+            text(
+                "INSERT INTO testcase.test_batches (id, document_id, system_id, status) VALUES (:id, :did, :sid, 'running')"
+            ),
+            {"id": str(batch_id), "did": str(doc_id), "sid": str(system_id)},
+        )
+        await session.commit()
+
+    rules = [
+        {"rule_code": "R-001", "module": "5.1 授权", "rule": "高级别包含低级别", "source_quote": "q", "category": "权限"},
+        {"rule_code": "R-002", "module": "5.1 授权", "rule": "变更实时生效", "source_quote": "q", "category": "状态"},
+    ]
+    test_points = [
+        {"id": "TP-001", "feature_id": "F001", "dimension": "permission", "description": "tp1",
+         "priority": "P0", "derived_from": ["PRD §1"], "rule_id": "R-001"},
+        {"id": "TP-002", "feature_id": "F001", "dimension": "functional_correctness", "description": "tp2",
+         "priority": "P1", "derived_from": ["PRD §1"]},  # 无 rule_id（维度增强测试点）
+    ]
+    final_cases = [
+        {"test_point_id": "TP-001", "title": "用例A", "preconditions": [], "steps": [],
+         "expected_results": [], "priority": "P0", "dimensions": ["permission"], "provenance": {}, "trust_level": 1},
+    ]
+
+    await on_pipeline_complete(
+        batch_id=str(batch_id),
+        final_cases=final_cases,
+        audit_report={"coverage": 1.0},
+        test_points=test_points,
+        rules=rules,
+    )
+
+    async with session_factory() as session:
+        # 规则台账落库
+        result = await session.execute(
+            text("SELECT rule_code, id FROM testcase.rules WHERE batch_id = :bid ORDER BY rule_code"),
+            {"bid": str(batch_id)},
+        )
+        rule_rows = result.fetchall()
+        assert len(rule_rows) == 2, f"规则台账应落 2 条, got {len(rule_rows)}"
+        code_to_id = {r[0]: r[1] for r in rule_rows}
+
+        # TP-001 的 rule_id 解析为 R-001 的真实 uuid；TP-002 为 NULL
+        result = await session.execute(
+            text("SELECT description, rule_id FROM testcase.test_points WHERE batch_id = :bid"),
+            {"bid": str(batch_id)},
+        )
+        tp_rule = {row[0]: row[1] for row in result.fetchall()}
+        assert str(tp_rule["tp1"]) == str(code_to_id["R-001"]), "TP-001.rule_id 未解析为 R-001 的 uuid"
+        assert tp_rule["tp2"] is None, "维度增强测试点 rule_id 应为 NULL"
 
 
 # ─── Test: PersistService.archive_batch 真调 ──────────────────────────────────

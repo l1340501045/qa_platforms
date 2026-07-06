@@ -6,12 +6,15 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.testcase_generator.pipeline.edges import MAX_RECONCILE, review_router
 from src.testcase_generator.schemas.parsed_context import (
     ParsedContext,
     SectionExtract,
     SourceItem,
 )
+from src.testcase_generator.stages import context_utils
 from src.testcase_generator.stages.context_utils import CrossFeatureIndex
 from src.testcase_generator.stages.dedup.clustering import DedupCase, find_duplicates
 from src.testcase_generator.stages.verify.verifier import _VERDICT_BUCKET, _normalize_verdict
@@ -125,6 +128,41 @@ def test_dedup_intra_dim_respects_boundary_protection():
     assert "x1" not in dup_map and "x2" not in dup_map
 
 
+def test_dedup_folds_cross_tp_same_dim_near_equivalent():
+    # 根因2b：不同测试点、同维度、语义近等价(功能点被切散后残留的换皮重复)→ 折叠。
+    # 显式阈值：跨维度严到 0.99 几乎不并，同维度放宽 → 验证走的是「同维度低阈值」路径。
+    cases = [
+        DedupCase("u1", "TP-101", "非超管用户仅能查看本人负责的CP商选书数据",
+                  text="他人CP商数据不可见", dimension="permission_denied"),
+        DedupCase("u2", "TP-207", "非超管用户只能查看本人负责的CP商的选书数据",
+                  text="他人CP商数据不展示", dimension="permission_denied"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.70, min_shared_bigrams=2)
+    assert dup_map.get("u2") == "u1"
+
+
+def test_dedup_cross_tp_diff_dim_not_folded():
+    # 跨测试点 + 不同维度：同样的措辞也走严阈值，不折叠(避免误并不同维度用例)
+    cases = [
+        DedupCase("v1", "TP-101", "非超管用户仅能查看本人负责的CP商选书数据",
+                  text="他人CP商数据不可见", dimension="permission_denied"),
+        DedupCase("v2", "TP-207", "非超管用户只能查看本人负责的CP商的选书数据",
+                  text="他人CP商数据不展示", dimension="access_control"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.70, min_shared_bigrams=2)
+    assert "v2" not in dup_map
+
+
+def test_dedup_cross_tp_same_dim_respects_boundary():
+    # 跨测试点 + 同维度，但数字不同且含边界语义 → 受边界保护，不折叠
+    cases = [
+        DedupCase("w1", "TP-101", "上传恰好10MB文件时成功", text="提示上传成功", dimension="boundary_value"),
+        DedupCase("w2", "TP-207", "上传恰好11MB文件时成功", text="提示上传成功", dimension="boundary_value"),
+    ]
+    dup_map = find_duplicates(cases, sim_threshold=0.99, cross_dim_threshold=0.50, min_shared_bigrams=2)
+    assert "w1" not in dup_map and "w2" not in dup_map
+
+
 def _ctx_with_sections(*sections):
     import uuid
     return ParsedContext(
@@ -143,25 +181,31 @@ def _ctx_with_sections(*sections):
     )
 
 
-def test_cross_feature_index_retrieves_spec_defined_elsewhere():
+@pytest.mark.asyncio
+async def test_cross_feature_index_retrieves_spec_defined_elsewhere(monkeypatch):
+    # 固定走关键词路（不受 hybrid 灰度开关状态影响），测确定性词项检索
+    monkeypatch.setattr(context_utils.settings, "hybrid_cross_retrieval_enabled", False)
     # F-024 段定义了"任务状态机：草稿/提交/审核/驳回"；F-023 的测试点引用它 → 应被检索到
     ctx = _ctx_with_sections(
         ("F-023 批量提交", "用户在批量提交页发起提交动作", "PRD §5.8"),
         ("F-024 任务状态机", "任务状态机定义：草稿可提交，提交后进入审核，审核驳回回到草稿，终态为已发布",
          "PRD §5.9.3"),
     )
-    index = CrossFeatureIndex(ctx)
+    index = await CrossFeatureIndex.build(ctx)
     query = "状态机 校验批量提交后任务状态机草稿提交审核驳回的状态流转是否正确"
-    hits = index.query(query, exclude_keys={("PRD §5.8", "F-023 批量提交")}, top_k=3)
+    hits = await index.query(query, exclude_keys={("PRD §5.8", "F-023 批量提交")}, top_k=3)
     assert any(h.source_ref == "PRD §5.9.3" for h in hits)
 
 
-def test_cross_feature_index_excludes_own_and_low_score():
+@pytest.mark.asyncio
+async def test_cross_feature_index_excludes_own_and_low_score(monkeypatch):
+    # 固定走关键词路：本测试断言"低分无关章节不召回"，仅在 hybrid 关时成立
+    monkeypatch.setattr(context_utils.settings, "hybrid_cross_retrieval_enabled", False)
     ctx = _ctx_with_sections(
         ("F-001 登录", "登录页输入账号密码点击登录", "PRD §1"),
         ("F-002 完全无关", "本章描述结算账单导出报表的字段格式", "PRD §2"),
     )
-    index = CrossFeatureIndex(ctx)
-    hits = index.query("登录页输入账号密码点击登录", exclude_keys={("PRD §1", "F-001 登录")}, top_k=3)
+    index = await CrossFeatureIndex.build(ctx)
+    hits = await index.query("登录页输入账号密码点击登录", exclude_keys={("PRD §1", "F-001 登录")}, top_k=3)
     # 自身已排除；无关章节词项重叠低于阈值 → 不召回
     assert hits == []

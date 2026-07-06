@@ -3,38 +3,81 @@
  * 核心页面：阶段进度 + 用例 Review + Gate 澄清 + 迭代/落库
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
+  Alert,
   Badge,
   Button,
+  Card,
   Input,
   Modal,
+  Progress,
+  Radio,
   Select,
   Space,
   Spin,
   Steps,
-  Table,
   Tag,
+  Typography,
   message,
 } from 'antd';
 import {
+  ArrowLeftOutlined,
   CheckOutlined,
   CloseOutlined,
   ExclamationCircleOutlined,
   LoadingOutlined,
 } from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
 
 import { useTestcaseStore } from '../../stores/testcaseStore';
+import CaseTreeReview from '../../components/CaseTreeReview';
+import EmptyState from '../../components/common/EmptyState';
+import {
+  BUCKET_FILTER_OPTIONS,
+  BUCKET_TAG,
+  REVIEW_ISSUE_TAG,
+  REVIEW_ISSUE_FILTER_OPTIONS,
+  VERDICT_FILTER_OPTIONS,
+  VERDICT_TAG,
+} from '../../components/case-assets/caseDisplay';
+import {
+  getCasesForNode,
+  normalizeCaseTreeDocuments,
+} from '../../components/case-assets/caseAssetModel';
+import FilterBar from '../../components/layout/FilterBar';
+import MetricStrip from '../../components/layout/MetricStrip';
+import PageHeader from '../../components/layout/PageHeader';
+import PageShell from '../../components/layout/PageShell';
+import { getCaseTree } from '../../services/systemApi';
+import { layoutTokens } from '../../components/layout/tokens';
+import { buildDocumentReturnUrl, buildKnowledgeReturnUrl } from '../../utils/batchReturn';
+import { getErrorMessage } from '../../utils/errorMessage';
+import { buildSearchReturnUrl } from '../../utils/searchReturn';
+import { getFailedStageDetail } from '../../utils/stageFailure';
+import {
+  buildWorkbenchQualityStats,
+  getHumanReviewCount,
+} from '../../utils/workbenchQuality';
 import type {
   BatchStatus,
+  CaseBucket,
+  CaseTreeCase,
+  CaseVerdict,
   ClarifyAnswer,
   OpenQuestion,
+  ReviewIssueType,
   ReviewStatus,
-  TestCase,
 } from '../../types';
 
 const { TextArea } = Input;
+const { Text } = Typography;
+
+export function answerFromChoice(q: OpenQuestion, choice: string, custom: string): string {
+  const d = q.conflict_detail;
+  if (choice === 'side_a' && d) return `以 ${d.side_a.location} 为准：${d.side_a.statement}`;
+  if (choice === 'side_b' && d) return `以 ${d.side_b.location} 为准：${d.side_b.statement}`;
+  return custom.trim();
+}
 
 // ─── 阶段配置 ───
 const STAGE_ORDER = [
@@ -69,31 +112,105 @@ const STATUS_BADGE_MAP: Record<BatchStatus, { status: 'default' | 'processing' |
   failed: { status: 'error', text: '失败' },
 };
 
-// ─── 优先级颜色 ───
-const PRIORITY_COLOR: Record<string, string> = {
-  P0: 'red',
-  P1: 'orange',
-  P2: 'blue',
-  P3: 'default',
+const REVIEW_STATUS_LABELS: Record<ReviewStatus, string> = {
+  pending: '待审',
+  confirmed: '已确认',
+  needs_modification: '需修改',
+  deleted: '已删除',
 };
 
-// ─── 可信度颜色 ───
-function getTrustColor(level: number): string {
-  if (level >= 0.8) return '#52c41a';
-  if (level >= 0.6) return '#faad14';
-  return '#f5222d';
+const REVIEW_RETURN_STATUS_LABELS: Partial<Record<BatchStatus, string>> = {
+  suspended: '待澄清',
+  failed: '失败',
+  running: '生成中',
+  pending_review: '待审核',
+  pending: '排队中',
+  reviewing: '审核中',
+  completed: '已完成',
+  archived: '已落库',
+};
+
+const GUIDANCE_BY_STATUS: Record<BatchStatus, { type: 'success' | 'info' | 'warning' | 'error'; message: string; description: string }> = {
+  pending: {
+    type: 'info',
+    message: '任务已创建，等待 Worker 处理',
+    description: '批次还没进入生成流水线；如果长时间无进展，可以重新入队。',
+  },
+  running: {
+    type: 'info',
+    message: '生成流水线正在执行',
+    description: '先观察阶段进度；进入待审后再逐模块审查用例。',
+  },
+  suspended: {
+    type: 'warning',
+    message: '质量门需要澄清',
+    description: '先回答阻塞问题，流水线才会继续生成后续用例。',
+  },
+  completed: {
+    type: 'success',
+    message: '生成阶段已完成',
+    description: '系统正在切换到审查阶段；如果页面未自动更新，请稍后刷新或回到工作台查看。',
+  },
+  pending_review: {
+    type: 'info',
+    message: '进入用例审查',
+    description: '按模块/分支浏览候选用例：正确的确认，有问题的标记需修改，废弃的删除。',
+  },
+  reviewing: {
+    type: 'info',
+    message: '审查进行中',
+    description: '继续处理待审用例；需修改项确认完后可触发迭代，全部可接受后落库归档。',
+  },
+  archived: {
+    type: 'success',
+    message: '批次已落库',
+    description: '本批次已经进入用例资产库，可去用例资产或导出中心继续使用。',
+  },
+  failed: {
+    type: 'error',
+    message: '生成任务失败',
+    description: '可重新入队整批重跑；重跑前建议确认 Worker、Redis 和模型网关状态。',
+  },
+};
+
+const qualitySummaryStyle: React.CSSProperties = {
+  marginBottom: 16,
+  padding: 16,
+  border: `1px solid ${layoutTokens.border}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surface,
+};
+
+const qualitySummaryHeaderStyle: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 16,
+  marginBottom: 12,
+};
+
+const qualityPillStyle: React.CSSProperties = {
+  minWidth: 136,
+  padding: '10px 12px',
+  border: `1px solid ${layoutTokens.borderSubtle}`,
+  borderRadius: layoutTokens.radius,
+  background: layoutTokens.surfaceMuted,
+};
+
+function getStageLabel(stageName?: string | null): string {
+  if (!stageName) return '未开始';
+  return STAGE_LABELS[stageName] || stageName;
 }
 
-// ─── Review 状态 Tag ───
-const REVIEW_TAG: Record<ReviewStatus, { color: string; label: string }> = {
-  pending: { color: 'default', label: '待审' },
-  confirmed: { color: 'green', label: '已确认' },
-  needs_modification: { color: 'orange', label: '需修改' },
-  deleted: { color: 'red', label: '已删除' },
-};
+function normalizeReviewReturnStatus(value: string | null): BatchStatus | undefined {
+  if (!value) return undefined;
+  return value in REVIEW_RETURN_STATUS_LABELS ? (value as BatchStatus) : undefined;
+}
 
 const Workbench: React.FC = () => {
   const { batchId } = useParams<{ batchId: string }>();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   // Store
   const {
@@ -101,10 +218,6 @@ const Workbench: React.FC = () => {
     stages,
     openQuestions,
     batchLoading,
-    cases,
-    casesTotal,
-    casesPage,
-    casesPerPage,
     reviewFilter,
     setReviewFilter,
     fetchBatchDetail,
@@ -113,6 +226,7 @@ const Workbench: React.FC = () => {
     submitClarification,
     reviewCase,
     triggerIterate,
+    retryBatch,
     archiveBatch,
     clearBatch,
   } = useTestcaseStore();
@@ -120,11 +234,18 @@ const Workbench: React.FC = () => {
   // Local state
   const [gateModalOpen, setGateModalOpen] = useState(false);
   const [clarifyAnswers, setClarifyAnswers] = useState<Record<string, string>>({});
+  const [choices, setChoices] = useState<Record<string, string>>({});
   const [clarifySubmitting, setClarifySubmitting] = useState(false);
-  const [modifyModalOpen, setModifyModalOpen] = useState(false);
-  const [modifyCaseId, setModifyCaseId] = useState<string | null>(null);
-  const [modifyComment, setModifyComment] = useState('');
-  const [modifySubmitting, setModifySubmitting] = useState(false);
+  const [retrySubmitting, setRetrySubmitting] = useState(false);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [bucketFilter, setBucketFilter] = useState<CaseBucket | undefined>();
+  const [verdictFilter, setVerdictFilter] = useState<CaseVerdict | undefined>();
+  const [reviewIssueTypeFilter, setReviewIssueTypeFilter] = useState<ReviewIssueType | undefined>();
+  const [allCasesForIterate, setAllCasesForIterate] = useState<CaseTreeCase[]>([]);
+  const [qualityOverviewCases, setQualityOverviewCases] = useState<CaseTreeCase[]>([]);
+  const [qualityOverviewLoading, setQualityOverviewLoading] = useState(false);
+  const [qualityOverviewError, setQualityOverviewError] = useState<string | null>(null);
+  const [treeReloadSignal, setTreeReloadSignal] = useState(0);
 
   // Ref to track if gate modal was auto-shown for current suspended state
   const gateAutoShownRef = useRef(false);
@@ -136,7 +257,7 @@ const Workbench: React.FC = () => {
     const init = async () => {
       try {
         await fetchBatchDetail(batchId);
-      } catch (err: unknown) {
+      } catch {
         message.error('加载批次详情失败');
       }
     };
@@ -152,7 +273,12 @@ const Workbench: React.FC = () => {
   // ─── 根据状态决定是否轮询 ───
   useEffect(() => {
     if (!batchId || !batch) return;
-    if (batch.status === 'running' || batch.status === 'suspended' || batch.status === 'completed') {
+    if (
+      batch.status === 'pending' ||
+      batch.status === 'running' ||
+      batch.status === 'suspended' ||
+      batch.status === 'completed'
+    ) {
       startPolling(batchId);
     }
     return () => {
@@ -177,31 +303,43 @@ const Workbench: React.FC = () => {
     }
   }, [batch?.status, openQuestions]);
 
-  // ─── 分页/筛选变化 ───
-  const handlePageChange = useCallback(
-    (page: number, pageSize: number) => {
-      if (!batchId) return;
-      fetchBatchDetail(batchId, {
-        page,
-        per_page: pageSize,
-        review_status: reviewFilter,
-      }).catch(() => message.error('加载用例列表失败'));
-    },
-    [batchId, fetchBatchDetail, reviewFilter],
-  );
-
+  // ─── 筛选/搜索（交给 CaseTreeReview：reviewFilter 走后端 case-tree，searchKeyword 前端跨模块过滤） ───
   const handleFilterChange = useCallback(
     (value: ReviewStatus | undefined) => {
       setReviewFilter(value);
-      if (!batchId) return;
-      fetchBatchDetail(batchId, {
-        page: 1,
-        per_page: casesPerPage,
-        review_status: value,
-      }).catch(() => message.error('加载用例列表失败'));
     },
-    [batchId, casesPerPage, fetchBatchDetail],
+    [setReviewFilter],
   );
+
+  const handleSearch = useCallback((value: string) => {
+    setSearchKeyword(value.trim());
+  }, []);
+
+  // ─── 全批质量总览：不受下方筛选影响，只用于批次级质量结构判断 ───
+  const loadQualityOverview = useCallback(async () => {
+    if (!batchId || !batch?.system_id) {
+      setQualityOverviewCases([]);
+      setQualityOverviewError(null);
+      return;
+    }
+
+    setQualityOverviewLoading(true);
+    setQualityOverviewError(null);
+    try {
+      const data = await getCaseTree(batch.system_id, { batch_id: batchId });
+      const overviewTree = normalizeCaseTreeDocuments(data, { rootTitle: '全部模块' });
+      setQualityOverviewCases(getCasesForNode(overviewTree.root.key, overviewTree));
+    } catch (err) {
+      setQualityOverviewCases([]);
+      setQualityOverviewError(getErrorMessage(err, '质量总览暂时无法加载，请稍后重试。'));
+    } finally {
+      setQualityOverviewLoading(false);
+    }
+  }, [batch?.system_id, batchId]);
+
+  useEffect(() => {
+    loadQualityOverview();
+  }, [loadQualityOverview, treeReloadSignal]);
 
   // ─── 澄清提交 ───
   const handleClarifySubmit = useCallback(async () => {
@@ -209,7 +347,10 @@ const Workbench: React.FC = () => {
 
     const answers: ClarifyAnswer[] = openQuestions.map((q) => ({
       question_id: q.id,
-      answer: clarifyAnswers[q.id] || '',
+      answer:
+        q.question_type === 'conflict' && q.conflict_detail
+          ? answerFromChoice(q, choices[q.id] ?? '', clarifyAnswers[q.id] ?? '')
+          : (clarifyAnswers[q.id] ?? ''),
     }));
 
     const unanswered = answers.filter((a) => !a.answer.trim());
@@ -224,66 +365,32 @@ const Workbench: React.FC = () => {
       message.success('澄清已提交，流水线恢复运行');
       setGateModalOpen(false);
       setClarifyAnswers({});
+      setChoices({});
     } catch {
       // 错误 toast 已由全局拦截器处理
     } finally {
       setClarifySubmitting(false);
     }
-  }, [batchId, openQuestions, clarifyAnswers, submitClarification]);
+  }, [batchId, openQuestions, clarifyAnswers, choices, submitClarification]);
 
-  // ─── Review 操作 ───
-  const handleConfirm = useCallback(
-    async (caseId: string) => {
-      try {
-        await reviewCase(caseId, 'confirmed');
-        message.success('已确认');
-      } catch {
-        // 错误 toast 已由全局拦截器处理
-      }
-    },
-    [reviewCase],
-  );
-
-  const handleDelete = useCallback(
-    async (caseId: string) => {
-      try {
-        await reviewCase(caseId, 'deleted');
-        message.success('已删除');
-      } catch {
-        // 错误 toast 已由全局拦截器处理
-      }
-    },
-    [reviewCase],
-  );
-
-  const handleNeedsModification = useCallback((caseId: string) => {
-    setModifyCaseId(caseId);
-    setModifyComment('');
-    setModifyModalOpen(true);
-  }, []);
-
-  const handleModifySubmit = useCallback(async () => {
-    if (!modifyCaseId) return;
-    if (!modifyComment.trim()) {
-      message.warning('请输入修改意见');
-      return;
-    }
-    setModifySubmitting(true);
+  // ─── 重试/重新入队 ───
+  const handleRetry = useCallback(async () => {
+    if (!batchId) return;
+    setRetrySubmitting(true);
     try {
-      await reviewCase(modifyCaseId, 'needs_modification', modifyComment.trim());
-      message.success('已标记需修改');
-      setModifyModalOpen(false);
+      await retryBatch(batchId);
+      message.success('任务已重新入队，等待 Worker 处理');
     } catch {
       // 错误 toast 已由全局拦截器处理
     } finally {
-      setModifySubmitting(false);
+      setRetrySubmitting(false);
     }
-  }, [modifyCaseId, modifyComment, reviewCase]);
+  }, [batchId, retryBatch]);
 
   // ─── 触发迭代 ───
   const handleIterate = useCallback(async () => {
     if (!batchId) return;
-    const modifiedIds = cases
+    const modifiedIds = allCasesForIterate
       .filter((c) => c.review_status === 'needs_modification')
       .map((c) => c.id);
 
@@ -295,10 +402,11 @@ const Workbench: React.FC = () => {
     try {
       await triggerIterate(batchId, modifiedIds);
       message.success(`已触发迭代，${modifiedIds.length} 条用例将重新生成`);
+      setTreeReloadSignal((n) => n + 1);
     } catch {
       // 错误 toast 已由全局拦截器处理
     }
-  }, [batchId, cases, triggerIterate]);
+  }, [batchId, allCasesForIterate, triggerIterate]);
 
   // ─── 落库 ───
   const handleArchive = useCallback(() => {
@@ -359,81 +467,143 @@ const Workbench: React.FC = () => {
     });
   }, [stages]);
 
-  // ─── Table Columns ───
-  const columns: ColumnsType<TestCase> = useMemo(
-    () => [
-      {
-        title: '标题',
-        dataIndex: 'title',
-        key: 'title',
-        ellipsis: true,
-        width: '30%',
-      },
-      {
-        title: '优先级',
-        dataIndex: 'priority',
-        key: 'priority',
-        width: 80,
-        render: (val: string) => <Tag color={PRIORITY_COLOR[val] || 'default'}>{val}</Tag>,
-      },
-      {
-        title: '可信度',
-        dataIndex: 'trust_level',
-        key: 'trust_level',
-        width: 80,
-        render: (val: number) => (
-          <span style={{ color: getTrustColor(val), fontWeight: 600 }}>
-            {(val * 100).toFixed(0)}%
-          </span>
-        ),
-      },
-      {
-        title: 'Review 状态',
-        dataIndex: 'review_status',
-        key: 'review_status',
-        width: 100,
-        render: (val: ReviewStatus) => {
-          const cfg = REVIEW_TAG[val];
-          return <Tag color={cfg.color}>{cfg.label}</Tag>;
-        },
-      },
-      {
-        title: '操作',
-        key: 'actions',
-        width: 220,
-        render: (_: unknown, record: TestCase) => (
-          <Space size="small">
-            <Button
-              size="small"
-              type="link"
-              disabled={record.review_status === 'confirmed'}
-              onClick={() => handleConfirm(record.id)}
-            >
-              确认
-            </Button>
-            <Button
-              size="small"
-              type="link"
-              disabled={record.review_status === 'needs_modification'}
-              onClick={() => handleNeedsModification(record.id)}
-            >
-              需修改
-            </Button>
-            <Button
-              size="small"
-              type="link"
-              danger
-              disabled={record.review_status === 'deleted'}
-              onClick={() => handleDelete(record.id)}
-            >
-              删除
-            </Button>
-          </Space>
-        ),
-      },
-    ],
-    [handleConfirm, handleDelete, handleNeedsModification],
+  const stageSummary = useMemo(() => {
+    const completed = stages.filter((stage) => stage.status === 'completed').length;
+    const failed = stages.some((stage) => stage.status === 'failed');
+    const suspended = stages.some((stage) => stage.status === 'suspended');
+    const activeStage =
+      stages.find((stage) => ['running', 'suspended', 'failed'].includes(stage.status)) ||
+      stages.find((stage) => stage.name === batch?.current_stage);
+    const activeProgress = activeStage?.progress ? activeStage.progress / 100 : 0;
+    const percent = Math.min(
+      100,
+      Math.round(((completed + activeProgress) / STAGE_ORDER.length) * 100),
+    );
+
+    return {
+      completed,
+      percent,
+      activeStageLabel: getStageLabel(activeStage?.name || batch?.current_stage),
+      progressStatus: failed ? 'exception' as const : suspended ? 'exception' as const : 'active' as const,
+    };
+  }, [batch?.current_stage, stages]);
+  const failedStageDetail = useMemo(
+    () => (batch?.status === 'failed' ? getFailedStageDetail(stages, batch.current_stage) : null),
+    [batch?.current_stage, batch?.status, stages],
   );
+
+  const caseReviewStats = useMemo(() => {
+    const stats: Record<ReviewStatus, number> = {
+      pending: 0,
+      confirmed: 0,
+      needs_modification: 0,
+      deleted: 0,
+    };
+
+    for (const item of allCasesForIterate) {
+      stats[item.review_status] += 1;
+    }
+
+    return stats;
+  }, [allCasesForIterate]);
+
+  const qualityOverviewStats = useMemo(
+    () => buildWorkbenchQualityStats(qualityOverviewCases),
+    [qualityOverviewCases],
+  );
+
+  const currentQueueCount = useMemo(() => {
+    const kw = searchKeyword.trim();
+    if (!kw) return allCasesForIterate.length;
+    return allCasesForIterate.filter((item) => item.title.includes(kw)).length;
+  }, [allCasesForIterate, searchKeyword]);
+
+  const totalCasesForDisplay = allCasesForIterate.length || batch?.total_cases || 0;
+  const openQuestionCount = openQuestions?.length ?? 0;
+  const highPriorityQuestionCount = openQuestions?.filter((item) => item.priority === 'high').length ?? 0;
+  const cameFromReview = searchParams.get('from') === 'review';
+  const cameFromSearch = searchParams.get('from') === 'search';
+  const cameFromKnowledge = searchParams.get('from') === 'knowledge';
+  const cameFromDocument = searchParams.get('from') === 'document';
+  const searchHighlightedCaseId = cameFromSearch ? searchParams.get('case_id') || undefined : undefined;
+  const reviewReturnStatus = cameFromReview
+    ? normalizeReviewReturnStatus(searchParams.get('status'))
+    : undefined;
+  const reviewReturnUrl = reviewReturnStatus
+    ? `/review?status=${reviewReturnStatus}`
+    : '/review';
+  const reviewReturnLabel = reviewReturnStatus
+    ? `返回工作台（${REVIEW_RETURN_STATUS_LABELS[reviewReturnStatus]}）`
+    : '返回工作台';
+  const knowledgeReturnUrl = cameFromKnowledge ? buildKnowledgeReturnUrl(searchParams.get('system_id')) : null;
+  const documentReturnUrl = cameFromDocument ? buildDocumentReturnUrl(searchParams) : null;
+  const contextualReturn = cameFromReview
+    ? { url: reviewReturnUrl, label: reviewReturnLabel }
+    : cameFromSearch
+      ? { url: buildSearchReturnUrl(searchParams), label: '返回搜索结果' }
+      : knowledgeReturnUrl
+        ? { url: knowledgeReturnUrl, label: '返回知识库' }
+        : documentReturnUrl
+          ? { url: documentReturnUrl, label: '返回文档详情' }
+          : null;
+
+  const metricItems = useMemo(() => {
+    if (!batch) return [];
+
+    return [
+      {
+        key: 'status',
+        label: '批次状态',
+        value: STATUS_BADGE_MAP[batch.status].text,
+        hint: `当前阶段：${stageSummary.activeStageLabel}`,
+        tone: batch.status === 'failed' ? 'danger' as const : batch.status === 'suspended' ? 'warning' as const : 'primary' as const,
+      },
+      {
+        key: 'stage',
+        label: '阶段进度',
+        value: `${stageSummary.completed}/${STAGE_ORDER.length}`,
+        hint: `${stageSummary.percent}%`,
+      },
+      {
+        key: 'total',
+        label: '用例总数',
+        value: totalCasesForDisplay || '—',
+        hint: allCasesForIterate.length ? '来自当前用例树' : '等待用例树加载',
+      },
+      {
+        key: 'pending',
+        label: REVIEW_STATUS_LABELS.pending,
+        value: caseReviewStats.pending,
+        hint: '需要人工判断',
+        tone: caseReviewStats.pending > 0 ? 'warning' as const : 'default' as const,
+      },
+      {
+        key: 'needs_modification',
+        label: REVIEW_STATUS_LABELS.needs_modification,
+        value: caseReviewStats.needs_modification,
+        hint: '可触发迭代',
+        tone: caseReviewStats.needs_modification > 0 ? 'warning' as const : 'default' as const,
+      },
+      {
+        key: 'questions',
+        label: '待澄清',
+        value: openQuestionCount,
+        hint: highPriorityQuestionCount > 0 ? `${highPriorityQuestionCount} 个高优先级` : '质量门问题',
+        tone: openQuestionCount > 0 ? 'danger' as const : 'success' as const,
+      },
+    ];
+  }, [
+    allCasesForIterate.length,
+    batch,
+    caseReviewStats.needs_modification,
+    caseReviewStats.pending,
+    highPriorityQuestionCount,
+    openQuestionCount,
+    stageSummary.activeStageLabel,
+    stageSummary.completed,
+    stageSummary.percent,
+    totalCasesForDisplay,
+  ]);
 
   // ─── 是否展示底部操作栏 ───
   const showBottomActions = batch?.status === 'pending_review' || batch?.status === 'reviewing';
@@ -441,37 +611,257 @@ const Workbench: React.FC = () => {
   // ─── 渲染 ───
   if (batchLoading && !batch) {
     return (
-      <div style={{ textAlign: 'center', padding: 80 }}>
-        <Spin size="large" tip="加载中..." />
-      </div>
+      <PageShell style={{ textAlign: 'center', padding: 80 }}>
+        <Spin size="large" />
+        <div style={{ marginTop: 12, color: layoutTokens.textSecondary }}>加载中...</div>
+      </PageShell>
     );
   }
 
   if (!batch) {
-    return <div style={{ textAlign: 'center', padding: 80 }}>批次不存在</div>;
+    return (
+      <PageShell>
+        <EmptyState
+          title="批次不存在"
+          description="请从工作台或系统批次列表重新进入。"
+        />
+      </PageShell>
+    );
   }
 
   const badgeCfg = STATUS_BADGE_MAP[batch.status];
+  const statusGuidance = GUIDANCE_BY_STATUS[batch.status];
+  const canIterate = caseReviewStats.needs_modification > 0;
+  const currentQueueLabels = [
+    reviewFilter ? REVIEW_STATUS_LABELS[reviewFilter] : null,
+    bucketFilter ? BUCKET_TAG[bucketFilter].label : null,
+    verdictFilter ? VERDICT_TAG[verdictFilter].label : null,
+    reviewIssueTypeFilter ? REVIEW_ISSUE_TAG[reviewIssueTypeFilter].label : null,
+    searchKeyword.trim() ? `标题包含「${searchKeyword.trim()}」` : null,
+  ].filter(Boolean);
+  const hasQueueFilter = currentQueueLabels.length > 0;
+  const focusQualityBucket = (bucket: CaseBucket) => {
+    setBucketFilter(bucket);
+    setVerdictFilter(undefined);
+    setReviewIssueTypeFilter(undefined);
+  };
+  const focusVerdict = (verdict: CaseVerdict) => {
+    setBucketFilter(undefined);
+    setVerdictFilter(verdict);
+    setReviewIssueTypeFilter(undefined);
+  };
+  const renderPrimaryActions = () => (
+    <>
+      {batch.status === 'suspended' && openQuestionCount > 0 && (
+        <Button type="primary" onClick={() => setGateModalOpen(true)}>
+          处理澄清
+        </Button>
+      )}
+      {(batch.status === 'pending' || batch.status === 'failed') && (
+        <Button danger={batch.status === 'failed'} loading={retrySubmitting} onClick={handleRetry}>
+          重新入队
+        </Button>
+      )}
+      {showBottomActions && (
+        <>
+          <Button type={canIterate ? 'primary' : 'default'} disabled={!canIterate} onClick={handleIterate}>
+            触发迭代
+          </Button>
+          <Button type={canIterate ? 'default' : 'primary'} onClick={handleArchive}>
+            落库归档
+          </Button>
+        </>
+      )}
+    </>
+  );
+  const renderHeaderActions = () => (
+    <>
+      {contextualReturn && (
+        <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(contextualReturn.url)}>
+          {contextualReturn.label}
+        </Button>
+      )}
+      {renderPrimaryActions()}
+    </>
+  );
+  const renderQualityCount = (value: number, color: string) => (
+    <div style={{ marginTop: 6, fontSize: 22, fontWeight: 650, color }}>
+      {qualityOverviewLoading ? <Spin size="small" /> : qualityOverviewError ? '—' : value}
+    </div>
+  );
 
   return (
-    <div style={{ padding: 24 }}>
-      {/* ─── 顶部：批次信息 ─── */}
-      <div style={{ marginBottom: 24, display: 'flex', alignItems: 'center', gap: 16 }}>
-        <h2 style={{ margin: 0 }}>{batch.document_title || '用例工作台'}</h2>
-        <Badge status={badgeCfg.status} text={badgeCfg.text} />
-      </div>
-
-      {/* ─── 阶段进度条 ─── */}
-      <Steps
-        size="small"
-        items={stepsItems}
-        style={{ marginBottom: 24 }}
+    <PageShell>
+      <PageHeader
+        eyebrow="生成与审查"
+        title={batch.document_title || '用例工作台'}
+        description="集中查看批次状态、质量门澄清和候选用例审查；先处理阻塞，再按模块逐块确认、修改或落库。"
+        meta={<Badge status={badgeCfg.status} text={badgeCfg.text} />}
+        actions={renderHeaderActions()}
       />
 
+      <MetricStrip items={metricItems} />
+
+      <Alert
+        type={statusGuidance.type}
+        showIcon
+        style={{ marginBottom: 16 }}
+        message={statusGuidance.message}
+        description={statusGuidance.description}
+        action={<Space wrap>{renderPrimaryActions()}</Space>}
+      />
+
+      {/* ─── 阶段进度条 ─── */}
+      <div
+        style={{
+          marginBottom: 20,
+          padding: 16,
+          border: `1px solid ${layoutTokens.border}`,
+          borderRadius: layoutTokens.radius,
+          background: layoutTokens.surface,
+        }}
+      >
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            gap: 16,
+            alignItems: 'center',
+            marginBottom: 12,
+          }}
+        >
+          <div>
+            <Text strong>生成阶段</Text>
+            <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+              当前：{stageSummary.activeStageLabel}
+            </Text>
+          </div>
+          <Text style={{ color: layoutTokens.textMuted }}>
+            {stageSummary.completed}/{STAGE_ORDER.length} 已完成
+          </Text>
+        </div>
+        <Progress
+          percent={stageSummary.percent}
+          size="small"
+          status={stageSummary.progressStatus}
+          style={{ marginBottom: 16 }}
+        />
+        <Steps size="small" items={stepsItems} />
+        {failedStageDetail && (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginTop: 16 }}
+            message={`失败阶段：${getStageLabel(failedStageDetail.stageName)}`}
+            description={
+              <Space direction="vertical" size={4}>
+                <Text>
+                  {failedStageDetail.errorMessage ||
+                    '后端没有返回详细错误；重试前建议检查 Worker、Redis 和模型网关日志。'}
+                </Text>
+                <Text type="secondary">
+                  重新入队会优先尝试从失败阶段恢复；如果缺少检查点，系统会降级为整批重跑。
+                </Text>
+              </Space>
+            }
+          />
+        )}
+      </div>
+
+      <div style={qualitySummaryStyle}>
+        <div style={qualitySummaryHeaderStyle}>
+          <div>
+            <Text strong>质量分流</Text>
+            <Text style={{ display: 'block', marginTop: 4, color: layoutTokens.textSecondary }}>
+              全批质量总览，不随下方筛选变化；快捷入口只改变当前筛选队列。
+            </Text>
+          </div>
+          <Space wrap size={8}>
+            <Button size="small" onClick={() => focusQualityBucket('main')}>
+              只看主集
+            </Button>
+            <Button size="small" onClick={() => focusQualityBucket('needs_spec')}>
+              处理待澄清
+            </Button>
+            <Button size="small" onClick={() => focusQualityBucket('to_fix')}>
+              查看待修正
+            </Button>
+            <Button size="small" onClick={() => focusVerdict('conflict')}>
+              查看冲突
+            </Button>
+          </Space>
+        </div>
+        {qualityOverviewError && (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="质量总览暂时不可用"
+            description={qualityOverviewError}
+            action={
+              <Button size="small" loading={qualityOverviewLoading} onClick={loadQualityOverview}>
+                重试总览
+              </Button>
+            }
+          />
+        )}
+        {hasQueueFilter && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`当前筛选队列：${currentQueueLabels.join(' / ')}`}
+            description={`下方用例树和表格正在按该队列展示，当前队列约 ${currentQueueCount} 条；上方质量总览仍表示全批结构。`}
+          />
+        )}
+        <Space wrap size={8}>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.main.color}>{BUCKET_TAG.main.label}</Tag>
+            {renderQualityCount(qualityOverviewStats.main, layoutTokens.success)}
+            <Text type="secondary">可继续审查</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.needs_spec.color}>{BUCKET_TAG.needs_spec.label}</Tag>
+            {renderQualityCount(qualityOverviewStats.needs_spec, layoutTokens.warning)}
+            <Text type="secondary">先补规格</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={BUCKET_TAG.to_fix.color}>{BUCKET_TAG.to_fix.label}</Tag>
+            {renderQualityCount(qualityOverviewStats.to_fix, layoutTokens.danger)}
+            <Text type="secondary">先修用例</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={VERDICT_TAG.conflict.color}>{VERDICT_TAG.conflict.label}</Tag>
+            {renderQualityCount(qualityOverviewStats.conflict, layoutTokens.danger)}
+            <Text type="secondary">优先核对</Text>
+          </div>
+          <div style={qualityPillStyle}>
+            <Tag color={VERDICT_TAG.ungrounded.color}>需人工核对</Tag>
+            {renderQualityCount(getHumanReviewCount(qualityOverviewStats), layoutTokens.warning)}
+            <Text type="secondary">无依据/未定义</Text>
+          </div>
+        </Space>
+      </div>
+
       {/* ─── 筛选栏 ─── */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 8 }}>
+        <Text strong>用例审查</Text>
+        <Text style={{ marginLeft: 8, color: layoutTokens.textSecondary }}>
+          通过筛选收敛待处理范围，左侧按文档/模块/分支定位，右侧逐条确认。
+        </Text>
+      </div>
+      <FilterBar>
+        <Input.Search
+          allowClear
+          enterButton
+          placeholder="按用例标题搜索（模糊匹配，回车/点按钮搜索）"
+          style={{ width: 340 }}
+          onSearch={handleSearch}
+        />
         <Select
           allowClear
+          showSearch
+          optionFilterProp="label"
           placeholder="Review 状态筛选"
           style={{ width: 180 }}
           value={reviewFilter}
@@ -483,42 +873,79 @@ const Workbench: React.FC = () => {
             { value: 'deleted', label: '已删除' },
           ]}
         />
-      </div>
+        <Select
+          allowClear
+          placeholder="质量桶"
+          style={{ width: 140 }}
+          value={bucketFilter}
+          onChange={setBucketFilter}
+          options={BUCKET_FILTER_OPTIONS}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="核验结论"
+          style={{ width: 160 }}
+          value={verdictFilter}
+          onChange={setVerdictFilter}
+          options={VERDICT_FILTER_OPTIONS}
+        />
+        <Select
+          allowClear
+          showSearch
+          optionFilterProp="label"
+          placeholder="审查诊断"
+          style={{ width: 160 }}
+          value={reviewIssueTypeFilter}
+          onChange={setReviewIssueTypeFilter}
+          options={REVIEW_ISSUE_FILTER_OPTIONS}
+        />
+      </FilterBar>
 
-      {/* ─── 用例列表 ─── */}
-      <Table<TestCase>
-        rowKey="id"
-        columns={columns}
-        dataSource={cases}
-        pagination={{
-          current: casesPage,
-          pageSize: casesPerPage,
-          total: casesTotal,
-          showSizeChanger: true,
-          showTotal: (total) => `共 ${total} 条`,
-          onChange: handlePageChange,
+      {/* ─── 用例审核树（左模块树 + 右用例表） ─── */}
+      <CaseTreeReview
+        batchId={batchId!}
+        systemId={batch.system_id}
+        reviewFilter={reviewFilter}
+        bucketFilter={bucketFilter}
+        verdictFilter={verdictFilter}
+        reviewIssueTypeFilter={reviewIssueTypeFilter}
+        searchKeyword={searchKeyword}
+        highlightedCaseId={searchHighlightedCaseId}
+        editable={showBottomActions}
+        onReview={async (caseId, status, comment) => {
+          await reviewCase(caseId, status, comment);
         }}
-        loading={batchLoading}
-        size="middle"
+        onAllCasesChange={setAllCasesForIterate}
+        reloadSignal={treeReloadSignal}
       />
 
       {/* ─── 底部操作栏 ─── */}
       {showBottomActions && (
         <div
           style={{
+            position: 'sticky',
+            bottom: 0,
+            zIndex: 5,
             marginTop: 16,
-            padding: '12px 0',
-            borderTop: '1px solid #f0f0f0',
+            padding: '12px 16px',
+            border: `1px solid ${layoutTokens.border}`,
+            borderRadius: layoutTokens.radius,
+            background: layoutTokens.surface,
             display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
             gap: 12,
+            boxShadow: '0 -8px 24px rgba(15, 23, 42, 0.06)',
           }}
         >
-          <Button type="primary" onClick={handleIterate}>
-            触发迭代
-          </Button>
-          <Button danger onClick={handleArchive}>
-            落库
-          </Button>
+          <Text style={{ color: layoutTokens.textSecondary }}>
+            {canIterate
+              ? `已标记 ${caseReviewStats.needs_modification} 条需修改，可触发迭代重写。`
+              : '没有需修改用例时，可将当前批次落库归档。'}
+          </Text>
+          <Space wrap>{renderPrimaryActions()}</Space>
         </div>
       )}
 
@@ -526,55 +953,83 @@ const Workbench: React.FC = () => {
       <Modal
         title="质量门澄清"
         open={gateModalOpen}
-        onCancel={() => setGateModalOpen(false)}
+        onCancel={() => { setGateModalOpen(false); setChoices({}); }}
         onOk={handleClarifySubmit}
         confirmLoading={clarifySubmitting}
         okText="提交澄清"
         cancelText="取消"
-        width={640}
+        width={720}
         maskClosable={false}
       >
         {openQuestions?.map((q: OpenQuestion) => (
-          <div key={q.id} style={{ marginBottom: 20 }}>
+          <div key={q.id} style={{ marginBottom: 24 }}>
             <div style={{ marginBottom: 4 }}>
               <Tag color={q.priority === 'high' ? 'red' : q.priority === 'medium' ? 'orange' : 'blue'}>
-                {q.priority}
+                {q.priority === 'high' ? '高' : q.priority === 'medium' ? '中' : '低'}
               </Tag>
               <strong>{q.question}</strong>
             </div>
             {q.context && (
               <div style={{ color: '#888', fontSize: 12, marginBottom: 8 }}>{q.context}</div>
             )}
-            <TextArea
-              rows={2}
-              placeholder="请输入回答"
-              value={clarifyAnswers[q.id] || ''}
-              onChange={(e) =>
-                setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
-              }
-            />
+
+            {/* 冲突类 + 有结构化 detail → 卡片 + 选项 */}
+            {q.question_type === 'conflict' && q.conflict_detail ? (
+              <>
+                <div style={{ fontWeight: 500, marginBottom: 8 }}>{q.conflict_detail.topic}</div>
+                <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
+                  <Card size="small" style={{ flex: 1 }} title={q.conflict_detail.side_a.location || '方 A'}>
+                    <div>{q.conflict_detail.side_a.statement}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>信任等级: {q.conflict_detail.side_a.trust_level}</div>
+                  </Card>
+                  <Card size="small" style={{ flex: 1 }} title={q.conflict_detail.side_b.location || '方 B'}>
+                    <div>{q.conflict_detail.side_b.statement}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>信任等级: {q.conflict_detail.side_b.trust_level}</div>
+                  </Card>
+                </div>
+                <div style={{ fontSize: 12, color: '#1677ff', marginBottom: 8 }}>
+                  {q.conflict_detail.recommendation === 'neither'
+                    ? `💡 AI 倾向：两者均需修正，建议自定`
+                    : `💡 AI 推荐：以 ${q.conflict_detail.recommendation === 'side_a' ? q.conflict_detail.side_a.location : q.conflict_detail.side_b.location} 为准 — ${q.conflict_detail.recommendation_reason}`}
+                </div>
+                <Radio.Group
+                  value={choices[q.id] || undefined}
+                  onChange={(e) => setChoices((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                >
+                  <Radio value="side_a">以 {q.conflict_detail.side_a.location || '方 A'} 为准</Radio>
+                  <Radio value="side_b">以 {q.conflict_detail.side_b.location || '方 B'} 为准</Radio>
+                  <Radio value="custom">都不对，我来定</Radio>
+                </Radio.Group>
+                {choices[q.id] === 'custom' && (
+                  <TextArea
+                    rows={2}
+                    style={{ marginTop: 8 }}
+                    placeholder="请给出明确结论"
+                    value={clarifyAnswers[q.id] || ''}
+                    onChange={(e) =>
+                      setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                    }
+                  />
+                )}
+              </>
+            ) : (
+              /* 盲区类 / 冲突但无 detail（降级）→ 纯文字 + 输入框 */
+              <TextArea
+                rows={2}
+                placeholder={q.question_type === 'conflict'
+                  ? '请给出明确结论，例：以 ≤50 字为准'
+                  : '请输入回答'}
+                value={clarifyAnswers[q.id] || ''}
+                onChange={(e) =>
+                  setClarifyAnswers((prev) => ({ ...prev, [q.id]: e.target.value }))
+                }
+              />
+            )}
           </div>
         ))}
       </Modal>
 
-      {/* ─── 需修改意见 Modal ─── */}
-      <Modal
-        title="修改意见"
-        open={modifyModalOpen}
-        onCancel={() => setModifyModalOpen(false)}
-        onOk={handleModifySubmit}
-        confirmLoading={modifySubmitting}
-        okText="提交"
-        cancelText="取消"
-      >
-        <TextArea
-          rows={4}
-          placeholder="请输入修改意见（必填）"
-          value={modifyComment}
-          onChange={(e) => setModifyComment(e.target.value)}
-        />
-      </Modal>
-    </div>
+    </PageShell>
   );
 };
 

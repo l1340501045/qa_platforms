@@ -8,12 +8,13 @@ import type {
   SystemDetail,
   Document,
   DocumentDetail,
+  DocType,
   PaginatedData,
   PaginationParams,
   UploadResult,
 } from '../types';
 import { listSystems, getSystem, createSystem, updateSystem, deleteSystem } from '../services/systemApi';
-import { listDocuments, getDocument, batchUploadDocuments } from '../services/documentApi';
+import { listDocuments, getDocument, batchUploadDocuments, updateDocumentType } from '../services/documentApi';
 import type { DocumentFilterParams } from '../services/documentApi';
 import type { CreateSystemRequest, UpdateSystemRequest } from '../types';
 
@@ -52,7 +53,8 @@ interface KnowledgeState {
   deleteSystem: (id: string) => Promise<void>;
   fetchDocuments: (systemId: string, params?: DocumentFilterParams) => Promise<void>;
   fetchDocument: (documentId: string) => Promise<void>;
-  uploadDocuments: (systemId: string, files: File[]) => Promise<UploadResult>;
+  updateDocumentType: (documentId: string, docType: DocType) => Promise<DocumentDetail>;
+  uploadDocuments: (systemId: string, files: File[], docType?: DocType) => Promise<UploadResult>;
   clearUploadResult: () => void;
   clearCurrentSystem: () => void;
 }
@@ -141,10 +143,19 @@ export const useKnowledgeStore = create<KnowledgeState>((set, get) => ({
     set({ currentDocument: doc });
   },
 
-  uploadDocuments: async (systemId: string, files: File[]) => {
+  updateDocumentType: async (documentId: string, docType: DocType) => {
+    const doc = await updateDocumentType(documentId, docType);
+    set((state) => ({
+      currentDocument: state.currentDocument?.id === documentId ? doc : state.currentDocument,
+      documents: state.documents.map((item) => (item.id === documentId ? { ...item, doc_type: doc.doc_type } : item)),
+    }));
+    return doc;
+  },
+
+  uploadDocuments: async (systemId: string, files: File[], docType: DocType = 'prd') => {
     set({ isUploading: true });
     try {
-      const result = await batchUploadDocuments(systemId, files);
+      const result = await batchUploadDocuments(systemId, files, docType);
       set({ uploadResult: result });
       return result;
     } finally {

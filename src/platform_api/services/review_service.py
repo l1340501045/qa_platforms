@@ -11,7 +11,6 @@ from src.platform_api.models.testcase import TestCase
 from src.platform_api.repositories.base import BaseRepository
 from src.platform_api.schemas.testcase import TestCaseListResponse, TestCaseResponse
 
-
 VALID_REVIEW_STATUSES = {s.value for s in ReviewStatus}
 
 
@@ -38,6 +37,21 @@ class ReviewService:
 
         return TestCaseResponse.model_validate(case)
 
+    async def update_case(self, case_id: UUID, data: dict) -> TestCaseResponse:
+        """人工编辑用例（只更新传入的非 None 字段）"""
+        case = await self.repo.get_by_id(case_id)
+        if case is None:
+            raise ApiError("E4041", "用例不存在")
+
+        editable_fields = {"title", "preconditions", "steps", "expected_results", "priority"}
+        for field, value in data.items():
+            if field in editable_fields and value is not None:
+                setattr(case, field, value)
+
+        await self.session.flush()
+        await self.session.refresh(case)
+        return TestCaseResponse.model_validate(case)
+
     async def get_case_detail(self, case_id: UUID) -> TestCaseResponse:
         """获取单条用例详情"""
         case = await self.repo.get_by_id(case_id)
@@ -46,12 +60,19 @@ class ReviewService:
         return TestCaseResponse.model_validate(case)
 
     async def get_cases_by_batch(
-        self, batch_id: UUID, review_status: str | None = None, offset: int = 0, limit: int = 50
+        self,
+        batch_id: UUID,
+        review_status: str | None = None,
+        keyword: str | None = None,
+        offset: int = 0,
+        limit: int = 50,
     ) -> TestCaseListResponse:
-        """获取批次用例列表（支持按 review_status 过滤）"""
+        """获取批次用例列表（支持按 review_status 过滤 + 标题关键词模糊搜索）"""
         filters = [TestCase.batch_id == batch_id]
         if review_status:
             filters.append(TestCase.review_status == review_status)
+        if keyword and keyword.strip():
+            filters.append(TestCase.title.ilike(f"%{keyword.strip()}%"))
 
         # 查询列表
         stmt = select(TestCase).where(*filters).order_by(TestCase.created_at.asc()).offset(offset).limit(limit)

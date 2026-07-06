@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from src.testcase_generator.pipeline.edges import gate_router, review_router
 from src.testcase_generator.schemas.pipeline_state import PipelineState
-from src.testcase_generator.stages.parse.node import parse_node
+from src.testcase_generator.stages.comprehend.apply_clarification import apply_clarification_node
 from src.testcase_generator.stages.comprehend.node import comprehend_node
-from src.testcase_generator.stages.test_points.node import test_points_node
-from src.testcase_generator.stages.write_cases.node import write_cases_node
-from src.testcase_generator.stages.review.node import review_node
-from src.testcase_generator.stages.review.backfill_node import backfill_node
-from src.testcase_generator.stages.verify.node import verify_node
 from src.testcase_generator.stages.dedup.node import dedup_node
 from src.testcase_generator.stages.export.node import export_node
-from src.testcase_generator.pipeline.edges import gate_router, review_router
+from src.testcase_generator.stages.parse.node import parse_node
+from src.testcase_generator.stages.review.backfill_node import backfill_node
+from src.testcase_generator.stages.review.node import review_node
+from src.testcase_generator.stages.rule_extract.node import rule_extract_node
+from src.testcase_generator.stages.test_points.node import test_points_node
+from src.testcase_generator.stages.verify.node import verify_node
+from src.testcase_generator.stages.write_cases.node import write_cases_node
 
 
 async def interrupt_node(state: PipelineState) -> dict:
@@ -54,6 +56,8 @@ def build_pipeline() -> StateGraph:
     graph.add_node("parse", parse_node)
     graph.add_node("comprehend", comprehend_node)
     graph.add_node("interrupt", interrupt_node)
+    graph.add_node("apply_clarification", apply_clarification_node)
+    graph.add_node("rule_extract", rule_extract_node)
     graph.add_node("test_points", test_points_node)
     graph.add_node("write_cases", write_cases_node)
     graph.add_node("review", review_node)
@@ -67,17 +71,26 @@ def build_pipeline() -> StateGraph:
     graph.add_edge("parse", "comprehend")
 
     # comprehend 后走 Gate 路由（硬约束#2: LangGraph 原生 interrupt）
+    # gate_router 仍返回 "test_points"（不改 router），仅把映射目标改为 rule_extract，
+    # 再由 rule_extract → test_points 直连（rule_extract_enabled 关时节点内部直通，拓扑不变）。
     graph.add_conditional_edges(
         "comprehend",
         gate_router,
         {
-            "test_points": "test_points",
+            "test_points": "rule_extract",
             "interrupt": "interrupt",
         },
     )
 
-    # interrupt 恢复后回到 comprehend 重新评估
-    graph.add_edge("interrupt", "comprehend")
+    # interrupt 恢复后走 apply_clarification 消解冲突（不回 comprehend，断死循环）
+    graph.add_edge("interrupt", "apply_clarification")
+    graph.add_conditional_edges(
+        "apply_clarification", gate_router,
+        {"test_points": "rule_extract", "interrupt": "interrupt"},
+    )
+
+    # 规则抽取 → 测试点
+    graph.add_edge("rule_extract", "test_points")
 
     # 正常流
     graph.add_edge("test_points", "write_cases")

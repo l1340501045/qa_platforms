@@ -8,11 +8,16 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.knowledge_base.repositories.entity_repo import EntityRepository
 from src.platform_api.core.database import get_session
+from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
-from src.platform_api.schemas.document import CreateDocumentAssociationRequest
+from src.platform_api.models.knowledge import Document
+from src.platform_api.schemas.document import CreateDocumentAssociationRequest, UpdateDocumentTypeRequest
+from src.platform_api.services.batch_list_service import BatchListService
 from src.platform_api.services.document_service import DocumentService
 
 router = APIRouter(prefix="/documents", tags=["文档管理"])
@@ -23,6 +28,10 @@ systems_doc_router = APIRouter(prefix="/systems", tags=["文档管理"])
 
 def _get_service(session: AsyncSession = Depends(get_session)) -> DocumentService:
     return DocumentService(session)
+
+
+def _get_batch_list_service(session: AsyncSession = Depends(get_session)) -> BatchListService:
+    return BatchListService(session)
 
 
 # ─── 文档列表（契约: GET /systems/:id/documents） ───
@@ -67,6 +76,71 @@ async def get_document(
     """获取文档详情"""
     doc = await service.get_document(document_id)
     return success(doc)
+
+
+@router.patch("/{document_id}/type")
+async def update_document_type(
+    document_id: UUID,
+    data: UpdateDocumentTypeRequest,
+    service: DocumentService = Depends(_get_service),
+):
+    """更新文档类型（人工重标注历史文档）"""
+    doc = await service.update_document_type(document_id, data.doc_type)
+    return success(doc)
+
+
+# ─── 文档解析产物：实体图谱 + 图片理解（Stage 1 GraphRAG 产物） ───
+
+
+@router.get("/{document_id}/knowledge-graph")
+async def get_document_knowledge_graph(
+    document_id: UUID,
+    session: AsyncSession = Depends(get_session),
+):
+    """获取文档解析产物：实体、关系、图片 AI 理解 + 统计概览（只读）。"""
+    doc_result = await session.execute(select(Document).where(Document.id == document_id))
+    doc = doc_result.scalars().first()
+    if doc is None:
+        raise ApiError("E4041", "文档不存在")
+
+    entity_repo = EntityRepository(session)
+    entities = await entity_repo.get_entities_by_document(document_id)
+    relations = await entity_repo.get_relations_by_document(document_id)
+
+    captions = doc.image_captions or {}
+    image_count = len(captions) if isinstance(captions, (dict, list)) else 0
+
+    return success(
+        {
+            "stats": {
+                "entity_count": len(entities),
+                "relation_count": len(relations),
+                "image_count": image_count,
+            },
+            "entities": [
+                {
+                    "id": str(e.id),
+                    "entity_type": e.entity_type,
+                    "name": e.name,
+                    "section_ref": e.section_ref,
+                    "description": e.description,
+                    "source_quote": e.source_quote,
+                }
+                for e in entities
+            ],
+            "relations": [
+                {
+                    "id": str(r.id),
+                    "source_entity_id": str(r.source_entity_id),
+                    "target_entity_id": str(r.target_entity_id),
+                    "relation_type": r.relation_type,
+                    "note": r.note,
+                }
+                for r in relations
+            ],
+            "image_captions": captions,
+        }
+    )
 
 
 # ─── 文档删除 ───
@@ -116,3 +190,20 @@ async def delete_document_association(
 ):
     """删除文档关联（软删除）"""
     await service.delete_association(association_id)
+
+
+# ─── 文档批次列表 ───
+
+
+@router.get("/{document_id}/batches")
+async def list_document_batches(
+    document_id: UUID,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None, description="状态筛选"),
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """获取文档的生成批次列表"""
+    items, total = await service.list_by_document(document_id, status=status, page=page, per_page=per_page)
+    params = PaginationParams(page=page, per_page=per_page)
+    return success(paginated_response(items, total, params))

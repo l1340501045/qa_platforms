@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
+
+import numpy as np
 
 # 归一化：保留中日韩与字母，去数字/标点/空白（数字差异交由 _numset 单独保护）
 _KEEP = re.compile(r"[\u4e00-\u9fffa-zA-Z]+")
@@ -38,6 +40,10 @@ class DedupCase:
     text: str = ""  # 附加 expected_results 拼接，增强判别
     is_placeholder: bool = False  # 是否「需求待确认」占位用例
     dimension: str = ""  # 覆盖维度（同测试点+同维度的近等价断言更激进折叠）
+    # 规则锚点码（如 ["R-001", ...]），仅在用例所属测试点带 rule_id 时有值；
+    # 维度增强测试点的用例为空。safe_dedup 护栏据此判断是否可折叠（绝不删某规则
+    # 最后一条非重复用例）。dedup_node 经 case.test_point_id → tp.rule_id 回填。
+    rule_codes: list[str] = field(default_factory=list)
 
 
 def _normalize(s: str) -> str:
@@ -58,14 +64,38 @@ def find_duplicates(
     *,
     sim_threshold: float = 0.88,
     intra_dim_threshold: float = 0.80,
+    cross_dim_threshold: float = 0.84,
     min_shared_bigrams: int = 4,
+    safe_dedup_enabled: bool = False,
+    embeddings: dict[str, list[float]] | None = None,
+    semantic_threshold: float = 0.86,
+    semantic_cross_tp_threshold: float = 0.90,
 ) -> dict[str, str]:
     """返回 {duplicate_case_id: canonical_case_id}。
 
     canonical 取每个近重复簇中最先出现（输入顺序）的用例；其余标为其重复。
+
+    safe_dedup_enabled：开规则锚定护栏 —— 折叠会让某条规则失去其最后一条非重复
+    用例时，跳过该折叠。关时退回旧行为（无护栏）。维度增强用例（无 rule_codes）
+    不进入护栏检查，按旧行为折叠。
+
+    embeddings：case_id → 向量。提供时在词面候选外**额外**生成语义候选（全局两两
+    cosine）：同 feature_id 用 semantic_threshold、跨 feature_id 用更严的
+    semantic_cross_tp_threshold，超阈值且非 _protected 的对过 _union（含 safe_dedup
+    护栏，自动复用）。不提供（None）/某 case 缺向量 → 该 case 不参与语义候选，行为
+    与改造前一致。向量外部算好传入，本函数保持纯同步可离线单测。
     """
     order = {c.case_id: i for i, c in enumerate(cases)}
     parent: dict[str, str] = {c.case_id: c.case_id for c in cases}
+    rule_codes_of = {c.case_id: list(c.rule_codes or []) for c in cases}
+
+    # 「当前 alive canonical 数」per 规则码：cases 中以自己为根（dup_map 出去时不会
+    # 被列为 duplicate）的、覆盖该规则的用例数。每次成功的 union 会让一个 root 沉
+    # 为 child（变成 duplicate），相应 live_cnt 递减。初值 = 总覆盖数（全 alive）。
+    live_cnt: dict[str, int] = defaultdict(int)
+    for c in cases:
+        for r in rule_codes_of[c.case_id]:
+            live_cnt[r] += 1
 
     def _find(x: str) -> str:
         while parent[x] != x:
@@ -77,10 +107,21 @@ def find_duplicates(
         ra, rb = _find(a), _find(b)
         if ra == rb:
             return
+        # 决定败者根（沉为 child → 成为 duplicate）
+        loser = rb if order[ra] <= order[rb] else ra
+        # 规则锚定护栏：若 loser 是某规则的最后一条 alive canonical，跳过本次折叠
+        if safe_dedup_enabled:
+            for r in rule_codes_of.get(loser, ()):
+                if live_cnt.get(r, 0) <= 1:
+                    return
         if order[ra] <= order[rb]:
             parent[rb] = ra
         else:
             parent[ra] = rb
+        # 更新 live_cnt：loser 不再是 canonical（变成 duplicate）
+        for r in rule_codes_of.get(loser, ()):
+            if live_cnt.get(r, 0) > 0:
+                live_cnt[r] -= 1
 
     # ── 1) 结构化折叠：按 test_point 分组处理占位 vs 断言 ──
     by_tp: dict[str, list[DedupCase]] = defaultdict(list)
@@ -109,6 +150,8 @@ def find_duplicates(
     norm_title = {c.case_id: _normalize(c.title) for c in cases}
     nums = {c.case_id: _numset(c.title + c.text) for c in cases}
     raw = {c.case_id: (c.title or "") + (c.text or "") for c in cases}
+    dim_of = {c.case_id: (c.dimension or "").strip() for c in cases}
+    feature_of = {c.case_id: c.feature_id or "" for c in cases}
 
     def _protected(a: str, b: str) -> bool:
         """边界值保护：数字集不同且任一方含边界语义关键词 → 不同边界值的有效用例，不合并。"""
@@ -155,8 +198,45 @@ def find_duplicates(
         if _protected(a, b):
             continue
         ratio = SequenceMatcher(None, norm[a], norm[b]).ratio()
-        if ratio >= sim_threshold:
+        # 跨测试点/功能点的「同维度」近等价多为换皮重复(同一权限矩阵/校验在多处重复断言)，
+        # 用更低阈值折叠(根因2b：兜底功能点被切散后残留的跨 feature 重复)；跨维度保持严
+        # 阈值，避免不同维度的偶然相似被误并。不同边界值用例已被 _protected 排除。
+        da, db = dim_of[a], dim_of[b]
+        threshold = cross_dim_threshold if (da and da == db) else sim_threshold
+        if ratio >= threshold:
             _union(a, b)
+
+    # ── 3) 语义近重复（全局两两 cosine，抓词面抓不到的换措辞同义）──
+    # embeddings 为 None → 整段跳过，行为与改造前逐字节一致。向量外部算好传入，
+    # 本函数仍纯同步可离线单测。灌水大头是跨 test_point/跨模块的换措辞重复，故语义
+    # 候选须全局（非仅组内）。numpy 矩阵化算 cosine，禁止纯 python 双循环（n²×D 太慢）。
+    if embeddings:
+        # 按输入顺序收集有向量的 case（缺向量者跳过，不参与语义候选）
+        v_ids = [c.case_id for c in cases if c.case_id in embeddings]
+        if len(v_ids) >= 2:
+            mat = np.array([embeddings[cid] for cid in v_ids], dtype=np.float64)
+            # L2 归一化后矩阵内积 = cosine；零向量行归一化后为 0，不会误连
+            norms = np.linalg.norm(mat, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            mat_n = mat / norms
+            sim = mat_n @ mat_n.T
+            n = len(v_ids)
+            for i in range(n):
+                for j in range(i + 1, n):
+                    s = float(sim[i, j])
+                    if s < semantic_threshold:
+                        continue
+                    a, b = v_ids[i], v_ids[j]
+                    if _find(a) == _find(b):
+                        continue
+                    if _protected(a, b):
+                        continue
+                    # 跨 feature_id 用更严阈值（仿词面"跨维严/同维松"控误折叠）。
+                    # same_tp 必须基于当前对 (a,b) 自身判定，禁止引用循环外变量。
+                    same_tp = bool(feature_of[a]) and feature_of[a] == feature_of[b]
+                    thr = semantic_threshold if same_tp else semantic_cross_tp_threshold
+                    if s >= thr:
+                        _union(a, b)
 
     # ── 输出 ──
     dup_map: dict[str, str] = {}

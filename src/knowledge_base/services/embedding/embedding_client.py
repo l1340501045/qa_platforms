@@ -10,8 +10,9 @@ from src.knowledge_base.config import kb_settings
 
 logger = logging.getLogger(__name__)
 
-# 单次 API 调用的最大文本数（OpenAI 限制）
-_MAX_BATCH_SIZE = 2048
+# 单次 API 调用的最大文本数
+# 注：自建网关的 text-embedding-v4(通义) 单批上限为 10，超过会返回 400 InvalidParameter
+_MAX_BATCH_SIZE = 10
 
 
 class EmbeddingClient:

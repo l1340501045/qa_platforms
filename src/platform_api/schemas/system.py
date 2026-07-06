@@ -6,7 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-
 # ─── 系统关联类型枚举 ───
 SYSTEM_RELATION_TYPES = ("api_call", "data_share", "event")
 
@@ -34,8 +33,13 @@ class SystemResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SystemSummaryResponse(SystemResponse):
+    document_count: int = 0
+    batch_count: int = 0
+
+
 class SystemListResponse(BaseModel):
-    items: Sequence[SystemResponse]
+    items: Sequence[SystemSummaryResponse]
     total: int
     offset: int
     limit: int

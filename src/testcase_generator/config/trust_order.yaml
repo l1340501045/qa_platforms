@@ -37,9 +37,11 @@ conflict_resolution:
 gate_config:
   # 初始值，由 golden-set 评估反推校准，非硬编码常量
   go_threshold: 0.8        # 理解覆盖度 >= 80% 则 GO
-  no_go_threshold: 0.6     # 理解覆盖度 < 60% 则 NO_GO
-  # CONDITIONAL: 60% <= coverage < 80%
+  no_go_threshold: 0.2     # 理解覆盖度 < 20% 则 NO_GO（调低：短/精炼 PRD 不再被拦死，
+                           # 薄输入照常生成、由 verify 标「需求待确认」兜底，而非死胡同暂停）
+  # CONDITIONAL: 20% <= coverage < 80%
   max_open_questions: 10   # 单次 NO_GO 最多返回的澄清问题数
+  max_clarification_rounds: 3   # 澄清轮数上限；超过强制放行（verify 兜底）
 
 confidence_rules:
   # 用例置信度由信源信任等级派生，不靠 AI 自评

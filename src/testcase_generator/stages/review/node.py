@@ -13,11 +13,18 @@ import yaml
 from pydantic import BaseModel, Field
 
 from src.platform_api.core.settings import settings
+from src.testcase_generator.pipeline.config import effective_settings
+from src.testcase_generator.schemas.audit_report import AuditReport, CoverageGap
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import GeneratedTestCase
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.schemas.audit_report import AuditReport, CoverageGap
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.review.rule_gate import (
+    DEFAULT_RULE_COVERAGE,
+    DEFAULT_STRUCTURAL_COVERAGE,
+    compute_rule_coverage,
+    compute_structural_coverage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +78,8 @@ REVIEW_SYSTEM_PROMPT = """角色：你是测试评审专家，当前任务是【
    - 有对应用例 = 存在 test_point_id 匹配且步骤实质验证了该测试点描述的场景。
 2. 检查每个用例是否真正验证了其声明的维度（不是只标了维度但步骤没体现）。
    - "真正验证"意味着步骤中有针对该维度的具体操作和预期结果。
-   - 如发现"假覆盖"（标了维度但步骤是泛泛的模板，或步骤=查阅文档/无实质操作），把该用例的 test_point_id 列入 weak_coverage_test_point_ids，并在 dimension_issues 写明原因。
+   - 如发现"假覆盖"（标了维度但步骤是泛泛的模板，或步骤=查阅文档/无实质操作），
+     把该用例的 test_point_id 列入 weak_coverage_test_point_ids，并在 dimension_issues 写明原因。
 3. 识别覆盖缺口（有测试点但无用例，或有维度但步骤没验证），填入 gaps。
 
 重要：你看不到 PRD 原文，因此【绝对不要】生成补充用例（supplement_cases 必须留空）。
@@ -103,6 +111,7 @@ async def review_node(state: PipelineState) -> dict:
     """
     test_points: list[TestPointSchema] = state["test_points"]
     test_cases: list[GeneratedTestCase] = state["test_cases"]
+    runtime = effective_settings(state)
 
     # 1. 按功能点分批审计再聚合。
     #    一次性把全部用例（含步骤）塞进单个审计请求，大 PRD 会达到 100 万+ token、
@@ -120,27 +129,38 @@ async def review_node(state: PipelineState) -> dict:
 
     def _tp_payload(tps: list[TestPointSchema]) -> list[dict]:
         return [
-            {"id": tp.id, "feature_id": tp.feature_id, "dimension": tp.dimension,
-             "description": tp.description, "priority": tp.priority}
+            {
+                "id": tp.id,
+                "feature_id": tp.feature_id,
+                "dimension": tp.dimension,
+                "description": tp.description,
+                "priority": tp.priority,
+            }
             for tp in tps
         ]
 
     def _tc_payload(tcs: list[GeneratedTestCase]) -> list[dict]:
         out = []
         for tc in tcs:
-            out.append({
-                "id": tc.id,
-                "test_point_id": tc.test_point_id,
-                "title": tc.title,
-                "dimensions": tc.dimensions,
-                "steps": [
-                    {"step_number": s.step_number, "action": s.action,
-                     "input_data": s.input_data, "expected_result": s.expected_result}
-                    for s in tc.steps
-                ],
-                "preconditions": tc.preconditions,
-                "expected_results": tc.expected_results,
-            })
+            out.append(
+                {
+                    "id": tc.id,
+                    "test_point_id": tc.test_point_id,
+                    "title": tc.title,
+                    "dimensions": tc.dimensions,
+                    "steps": [
+                        {
+                            "step_number": s.step_number,
+                            "action": s.action,
+                            "input_data": s.input_data,
+                            "expected_result": s.expected_result,
+                        }
+                        for s in tc.steps
+                    ],
+                    "preconditions": tc.preconditions,
+                    "expected_results": tc.expected_results,
+                }
+            )
         return out
 
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
@@ -188,9 +208,7 @@ async def review_node(state: PipelineState) -> dict:
     if audit_failed:
         logger.warning("review: %d/%d 个功能点审计失败，已保留其余结果", audit_failed, len(audit_feature_ids))
 
-    llm_output = AuditLLMOutput(
-        gaps=agg_gaps, dimension_issues=agg_dim_issues, supplement_cases=agg_supplements
-    )
+    llm_output = AuditLLMOutput(gaps=agg_gaps, dimension_issues=agg_dim_issues, supplement_cases=agg_supplements)
 
     # 3. 构建 CoverageGap 列表
     gaps: list[CoverageGap] = []
@@ -255,6 +273,32 @@ async def review_node(state: PipelineState) -> dict:
     if uncovered_tp_ids:
         logger.warning(f"review_node: {len(uncovered_tp_ids)} 个测试点无任何用例覆盖: {uncovered_tp_ids[:10]}")
 
+    # 7c. 规则级覆盖闸（开关控制）：规则「被覆盖」= 其锚点测试点（携 rule_id）至少 1 条用例。
+    #     结构性判定，确定性、无额外 LLM；未覆盖规则码交 backfill 定向补齐。关时为默认值，零影响。
+    rules = state.get("rules") or []
+    rule_cov_fields = dict(DEFAULT_RULE_COVERAGE)
+    if runtime.rule_coverage_gate_enabled and rules:
+        rule_cov_fields = compute_rule_coverage(rules, test_points, covered_tp_ids)
+        logger.info(
+            "review_node: 规则覆盖 %d/%d (%.0f%%)，未覆盖 %d 条",
+            rule_cov_fields["covered_rules"],
+            rule_cov_fields["total_rules"],
+            rule_cov_fields["rule_coverage"] * 100,
+            len(rule_cov_fields["uncovered_rule_codes"]),
+        )
+
+    # 7d. 结构化覆盖闸（开关控制）：结构化点「被覆盖」= 其 structural_key 对应测试点有用例。
+    struct_cov_fields = dict(DEFAULT_STRUCTURAL_COVERAGE)
+    if runtime.structural_coverage_enabled:
+        struct_cov_fields = compute_structural_coverage(test_points, covered_tp_ids)
+        logger.info(
+            "review_node: 结构化覆盖 %d/%d (%.0f%%)，未覆盖 %d 个 key",
+            struct_cov_fields["structural_covered"],
+            struct_cov_fields["structural_total"],
+            struct_cov_fields["structural_coverage"] * 100,
+            len(struct_cov_fields["uncovered_structural_keys"]),
+        )
+
     audit_report = AuditReport(
         total_test_points=len(all_tp_ids),
         per_test_point_covered=len(covered_tp_ids & all_tp_ids),
@@ -265,6 +309,8 @@ async def review_node(state: PipelineState) -> dict:
         dimension_cell_coverage=cell_covered / cell_total if cell_total > 0 else 1.0,
         gaps=gaps,
         additions=additions,
+        **rule_cov_fields,
+        **struct_cov_fields,
     )
     if weak_tp_ids:
         logger.info("review_node: 标记 %d 个假覆盖测试点，交 backfill 接地重做", len(weak_tp_ids))

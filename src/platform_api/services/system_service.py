@@ -2,17 +2,20 @@
 
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.exceptions import ApiError
+from src.platform_api.models.knowledge import Document
 from src.platform_api.models.public import System, SystemAssociation
+from src.platform_api.models.testcase import TestBatch
 from src.platform_api.repositories.base import BaseRepository
 from src.platform_api.schemas.system import (
     SYSTEM_RELATION_TYPES,
     CreateSystemAssociationRequest,
     CreateSystemRequest,
+    SystemSummaryResponse,
     UpdateSystemRequest,
 )
 
@@ -39,12 +42,41 @@ class SystemService:
             raise ApiError("E4041", "系统不存在")
         return system
 
-    async def list_systems(self, offset: int = 0, limit: int = 50) -> tuple[list[System], int]:
-        """分页列表 + 总数"""
-        items = await self.repo.list_all(offset=offset, limit=limit)
+    async def list_systems(self, offset: int = 0, limit: int = 50) -> tuple[list[SystemSummaryResponse], int]:
+        """分页列表 + 文档/批次聚合统计。"""
+        doc_counts = (
+            select(Document.system_id, func.count(Document.id).label("document_count"))
+            .where(Document.deleted_at.is_(None))
+            .group_by(Document.system_id)
+            .subquery()
+        )
+        batch_counts = (
+            select(TestBatch.system_id, func.count(TestBatch.id).label("batch_count"))
+            .group_by(TestBatch.system_id)
+            .subquery()
+        )
+        stmt = (
+            select(
+                System.id,
+                System.name,
+                System.description,
+                System.created_at,
+                System.updated_at,
+                func.coalesce(doc_counts.c.document_count, 0).label("document_count"),
+                func.coalesce(batch_counts.c.batch_count, 0).label("batch_count"),
+            )
+            .outerjoin(doc_counts, doc_counts.c.system_id == System.id)
+            .outerjoin(batch_counts, batch_counts.c.system_id == System.id)
+            .order_by(System.created_at.desc(), System.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        items = [SystemSummaryResponse(**row._mapping) for row in result.all()]
+
         count_stmt = select(func.count()).select_from(System)
-        result = await self.session.execute(count_stmt)
-        total = result.scalar_one()
+        count_result = await self.session.execute(count_stmt)
+        total = count_result.scalar_one()
         return items, total
 
     async def update_system(self, system_id: UUID, data: UpdateSystemRequest) -> System:
@@ -60,16 +92,20 @@ class SystemService:
         return system
 
     async def delete_system(self, system_id: UUID) -> None:
-        """删除系统（存在关联文档/批次时拒绝）"""
+        """删除系统（存在有效文档/批次时拒绝；仅软删除文档不阻塞）"""
         instance = await self.repo.get_by_id(system_id)
         if instance is None:
             raise ApiError("E4041", "系统不存在")
+        blockers = await self._get_delete_blockers(system_id)
+        if blockers:
+            raise ApiError("E4091", f"该系统下仍有{'或'.join(blockers)}，无法删除。请先删除关联数据")
         try:
+            await self._delete_document_tombstones(system_id)
             await self.session.delete(instance)
             await self.session.flush()
         except IntegrityError:
             await self.session.rollback()
-            raise ApiError("E4091", "该系统下仍有文档或批次，无法删除。请先删除关联数据")
+            raise ApiError("E4091", "该系统下仍有关联数据，无法删除。请先删除关联数据")
 
     # ─── 系统关联 CRUD ───
 
@@ -133,3 +169,27 @@ class SystemService:
         result = await self.session.execute(stmt)
         if result.scalar_one_or_none() is not None:
             raise ApiError("E4091", f"系统名称 '{name}' 已存在")
+
+    async def _get_delete_blockers(self, system_id: UUID) -> list[str]:
+        """返回仍应阻止系统删除的有效业务资产。"""
+        active_doc_count = await self.session.scalar(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.system_id == system_id, Document.deleted_at.is_(None))
+        )
+        batch_count = await self.session.scalar(
+            select(func.count()).select_from(TestBatch).where(TestBatch.system_id == system_id)
+        )
+
+        blockers: list[str] = []
+        if active_doc_count:
+            blockers.append("文档")
+        if batch_count:
+            blockers.append("批次")
+        return blockers
+
+    async def _delete_document_tombstones(self, system_id: UUID) -> None:
+        """物理清理软删除文档，避免 tombstone 外键阻止空系统删除。"""
+        await self.session.execute(
+            delete(Document).where(Document.system_id == system_id, Document.deleted_at.is_not(None))
+        )

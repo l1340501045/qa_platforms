@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """verify 关卡的核验判据 — 代码固化的单一 rubric
 
 来源：把人工审计 WORKER_GUIDE 的判据写成统一 prompt，避免多 worker / 多次调用
@@ -33,3 +34,22 @@ VERIFY_SYSTEM_PROMPT = """角色：你是资深 QA 用例审计员。任务：�
 5. unsupported_assertions 列出该用例中无支撑或与 PRD 冲突的具体断言原文（来自用例的 expected_result / title）。
 
 【输出】严格按 JSON Schema 输出，对输入里的每一条用例给出一条 verdict（case_id 必须回填输入中的 case_id）。"""
+
+CONFLICT_ENTITY_GATE_INSTRUCTION = """
+
+【附加规则 · 同实体前置（判 conflict 的必要条件）】
+判 conflict 前必须确认"同一实体"：
+- 只有当"用例断言所讲的对象/字段"与"你要引以反驳的 PRD 条款所讲的对象/字段"是【同一实体】时，才可判 conflict。若二者是不同对象（如用例讲"监测链接"、PRD 条款讲"投放链接"；或不同字段/不同页面/不同投放方式），**不构成 conflict**——应按该用例的实际 PRD 支撑情况判 grounded / ungrounded / undefined。
+- 判 conflict 时必须结构化输出：conflict_subject_case（用例讲的对象）、conflict_subject_prd（PRD 反驳条款讲的对象）、same_entity（二者是否同一实体；不是同一实体时 same_entity=false，并改判为 grounded/ungrounded/undefined）。
+- 其余 verdict（grounded/ungrounded/undefined）这三字段留默认（空串 / true）。"""
+
+CROSS_SECTION_CONFLICT_INSTRUCTION = """
+
+【附加任务 · 跨条款矛盾扫描（PRD 内部自相矛盾）】
+除上面的 verdict 外，对每条用例额外检查：所给 prd_sections 中，是否存在两条 PRD 条款【针对同一字段/同一行为】给出【不可同时成立】的规定，且本用例断言命中其一。
+- 命中则置 cross_section_conflict=true，并在 conflicting_refs 给出互斥的两处：{ref_a,quote_a,ref_b,quote_b}，quote 必须是 PRD 原文直引。
+- 严格控误报：仅「实质互斥」才报。下列情况【不算】矛盾，cross_section_conflict 保持 false：
+  · 一处「未提及」、另一处有规定（缺失≠矛盾）；
+  · 两处只是详略不同、范围包含、措辞差异；
+  · 分属不同字段/不同页面/不同投放方式。
+- 与 verdict 解耦：发现矛盾【不改变】verdict 取值（矛盾是 PRD 的问题，不是用例错）。无矛盾时 cross_section_conflict=false、conflicting_refs=[]。"""

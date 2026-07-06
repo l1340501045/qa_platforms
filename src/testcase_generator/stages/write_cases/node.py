@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """T026: write-cases 节点 — LLM + few-shot 生成具体用例（最重要节点）
 
 硬约束#3: 每条用例必带 provenance
@@ -11,35 +12,52 @@ import json
 import logging
 import re
 from collections import defaultdict
-from typing import List, Literal
+from typing import List
 from uuid import UUID
 
 import yaml
 from pydantic import BaseModel, Field
 
-from src.platform_api.core.settings import settings
-
+from src.knowledge_base.repositories.cheat_sheet_repo import CheatSheetRepository
+from src.platform_api.core.database import async_session_factory
+from src.platform_api.core.settings import settings  # noqa: F401 - 兼容既有测试 monkeypatch 入口
+from src.testcase_generator.pipeline.config import effective_settings
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 from src.testcase_generator.schemas.test_case import (
     GeneratedTestCase,
     TestStep,
-    Provenance,
 )
 from src.testcase_generator.schemas.test_point import TestPointSchema
-from src.testcase_generator.stages.context_utils import (
-    collect_global_sections,
-    CrossFeatureIndex,
-)
-from src.testcase_generator.stages.write_cases.provenance_tagger import (
-    ProvenanceTagger,
-)
-from src.testcase_generator.stages.write_cases.confidence_scorer import (
-    ConfidenceScorer,
-)
 from src.testcase_generator.services.few_shot_retriever import (
     FewShotRetriever,
 )
 from src.testcase_generator.services.llm_client import get_llm_client
+from src.testcase_generator.stages.context_utils import (
+    CrossFeatureIndex,
+    collect_global_sections,
+)
+from src.testcase_generator.stages.write_cases.cheat_sheet_inject import (
+    filter_cheat_sheet_for_feature,
+    format_cheat_sheet_for_prompt,
+)
+from src.testcase_generator.stages.write_cases.confidence_scorer import (
+    ConfidenceScorer,
+)
+from src.testcase_generator.stages.write_cases.convergence import apply_convergence
+from src.testcase_generator.stages.write_cases.dimension_normalizer import (
+    normalize_dimensions,
+)
+from src.testcase_generator.stages.write_cases.length_check import (
+    check_step_lengths,
+)
+from src.testcase_generator.stages.write_cases.priority_calibration import (
+    calibrate_case_priority,
+)
+from src.testcase_generator.stages.write_cases.provenance_tagger import (
+    ProvenanceTagger,
+    build_section_index,
+    derive_grounded_provenance,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,13 +110,18 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 - 步骤中的输入数据要用具体值举例，不能用占位符
 
 【覆盖维度全面性（资深与初级的分水岭——每个 spec 测试点都要系统性过一遍以下清单，凡 PRD 有明文支撑的维度都要成条覆盖，不要只写正向 happy path）】
-- 正常流：典型有效输入下的主流程。
-- 边界值：上限/下限、刚好等于阈值/超出 1、空、0、1、最大长度/超长、最大条数/超量、列表恰好等于每页条数。
-- 异常与逆向：非法/超长/特殊字符输入、必填缺失、格式错误、重复提交、网络失败/超时、部分失败与回滚、操作取消。
-- 状态机：非法/逆向状态转移（不只正向），终态后再操作，并发态。
-- 并发与一致性：多端同时操作、A 改动后 B 是否同步、聚合/计数刷新、缓存/同步延迟。
-- 权限与可见性：水平越权/垂直越权、未登录、Token 过期、数据隔离边界（仅在 PRD 有定义时）。
-- 幂等与重试副作用（仅在 PRD 有定义时）。
+- functional_correctness（正常流/正确性）：典型有效输入下的主流程。
+- boundary_value（边界值）：上限/下限、刚好等于阈值/超出 1、空、0、1、最大长度/超长、最大条数/超量。
+- invalid_input（异常/非法输入）：非法/超长/特殊字符输入、必填缺失、格式错误、重复提交、网络失败/超时。
+- state_transition（状态机）：非法/逆向状态转移（不只正向），终态后再操作，并发态。
+- concurrency_state（并发一致性）：多端同时操作、A 改动后 B 是否同步、聚合/计数刷新。
+- access_control（权限可见性）：水平越权/垂直越权、未登录、Token 过期、数据隔离边界（仅在 PRD 有定义时）。
+- idempotency（幂等重试）：重复提交、重试副作用（仅在 PRD 有定义时）。
+- ui_interaction（UI交互）、api_contract（接口契约）、cross_system（跨模块联动）、recovery（健壮性/恢复）、
+  data_integrity（数据完整性）、functional_completeness（完整性）…（完整以系统 dimensions.yaml 为准）
+
+【dimensions 字段取值约束】dimensions 只能从上述英文 enum name 中选填（可多选）。严禁自创中文标签或上述之外的词；不确定就选 functional_correctness。
+
 说明：以上维度只在 requirement_context 对该行为有明文支撑时才写确定断言；无支撑的维度按下面"需求待确认"规则处理，不要为凑维度编造。
 
 【逆向与联动必出项（资深短板高发区——只要 PRD 对该交互有定义，以下用例就必须成条出现，不能只写正向）】
@@ -166,14 +189,42 @@ WRITE_CASES_SYSTEM_PROMPT = """角色：你是拥有 10 年经验的资深测试
 
 输出要求：严格按指定 JSON Schema 输出。"""
 
+COT_REASONING_SECTION = """
+
+【显式分步推理纪律（CoT —— 写每个测试点的用例前，先在心里按此顺序走一遍，再下笔）】
+对每个测试点，严格按三步推理，但**只输出最终用例 JSON，不要输出推理过程本身**：
+1. 定位：在 requirement_context 中找到支撑该行为的具体章节与原文（优先 scope=own，其次 cross_ref，再 global_default）。
+   · 找到 → 把**逐字摘录的原文**填入该步 source_quote、所在章节填入 source_ref；
+   · 找不到任何明文支撑 → 按上文「需求待确认」唯一用例处理，不要进入第 2/3 步编造。
+2. 推行为：仅从第 1 步定位到的原文推导应覆盖的行为面（正常/边界/异常逆向/状态机/联动，以原文为准），不外推未授予的范围。
+3. 写断言：每个行为面写成可观测、可验证的 expected_result，并确保 source_quote 是
+   requirement_context 里**真实存在、可逐字找到**的片段（不要改写/凝练，否则系统校验会判为存疑）。
+顺序铁律：先有「定位到的原文」才允许写确定断言。此纪律只组织推理、不改变上文产出规则与输出 Schema。"""
+
+CHEAT_SHEET_SYSTEM_PROMPT = """
+
+【如何应用 cheat sheet（审核通过的避坑手册，优先级高于一般联想）】
+- 易混对照：cheat_sheet.confusion_pair 列出的概念必须区分，绝不混写、互套或把同名近义词当成同一字段，
+  除非条目明确说明同一口径。
+- 章节优先级：cheat_sheet.section_priority 给出的局部/同一口径规则必须优先于泛化默认；
+  遇到冲突时按条目的 resolution 处理。
+- PRD 状态：cheat_sheet.prd_status 标记 unreachable/mock/future/tbd 的对象，只能生成
+  “待确认/不可达/本期不实现”类占位或负向断言，绝不编造确定 oracle。
+- 必测清单：cheat_sheet.must_test 是 QA 已确认的必测约束；相关测试点必须覆盖其 rule_text/test_hint，
+  不要把它当成额外灌水来源。
+"""
+
 
 # ─── Constants ─────────────────────────────────────────────────────────────────
 
-_PRIORITY_MAP: dict[str, str] = {"P0": "P0", "P1": "P1", "P2": "P2", "P3": "P3"}
 
 # 单批最多生成的用例条数（控制 LLM 单次输出长度以规避网关 504）。
 # 注意：这是"分几次调用"的切分，不减少测试点/用例总数——各批结果会被聚合。
-MAX_TPS_PER_BATCH = 12
+# 取 7（原 12）：12 个测试点的单批 JSON 输出常达 ~8500 字符，触发 claude 长 JSON 解析
+# 频繁失败 → 子批失败 → backfill 多轮仍残留零覆盖（阶段7 同源功能点合并后单 feature
+# 测试点变多，尤为明显）。降到 7 后单批输出收在 ~5000 字符内，一次成功率显著提升，
+# 消除零覆盖残留；批数变多但失败/重试/backfill 大幅减少，端到端反而更快更稳。
+MAX_TPS_PER_BATCH = 7
 
 
 def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[list]:
@@ -181,6 +232,20 @@ def _split_by_count(tps: list, max_per_batch: int = MAX_TPS_PER_BATCH) -> list[l
     if len(tps) <= max_per_batch:
         return [tps] if tps else []
     return [tps[i : i + max_per_batch] for i in range(0, len(tps), max_per_batch)]
+
+
+async def _load_approved_cheat_sheet(document_id: UUID | None, runtime) -> dict:
+    """按文档加载已审核 cheat sheet；开关关或异常时返回空。"""
+    if not runtime.cheat_sheet_injection_enabled:
+        return {}
+    if document_id is None:
+        return {}
+    try:
+        async with async_session_factory() as session:
+            return await CheatSheetRepository(session).get_approved_for_injection(document_id)
+    except Exception as exc:  # noqa: BLE001 — 注入失败不应阻断用例生成
+        logger.warning("加载 cheat sheet 失败，跳过注入: doc=%s err=%s", document_id, exc)
+        return {}
 
 
 # ─── Node ──────────────────────────────────────────────────────────────────────
@@ -191,12 +256,17 @@ async def generate_cases(
     test_points: list[TestPointSchema],
     system_id: UUID,
     *,
+    document_id: UUID | None = None,
     start_counter: int = 0,
+    feedback: dict | None = None,
+    generation_config: dict | None = None,
 ) -> tuple[list[GeneratedTestCase], list[dict]]:
     """对给定测试点集生成用例的核心例程（write_cases 与 backfill 共用）。
 
     返回 (生成的用例列表, 失败子批列表)。用例编号从 start_counter+1 起递增。
+    feedback: QA 修改意见 {case_id: comment}，注入到 prompt 让 AI 按意见重写。
     """
+    runtime = effective_settings({"generation_config": generation_config or {}})
     # 推断 feature_types 用于 few-shot 查询
     all_feature_types: list[str] = []
     for feature in parsed_context.features:
@@ -206,6 +276,7 @@ async def generate_cases(
     # 加载 few-shot 样本（硬约束#6，冷启动返回空列表不影响流程）
     retriever = FewShotRetriever()
     few_shot_samples = await retriever.retrieve_samples(system_id, all_feature_types)
+    approved_cheat_sheet = await _load_approved_cheat_sheet(document_id, runtime)
 
     # 构建 few-shot 注入段（全局共享，只构建一次）
     few_shot_section = ""
@@ -218,6 +289,7 @@ async def generate_cases(
     tp_by_feature: dict[str, list[TestPointSchema]] = defaultdict(list)
     for tp in test_points:
         tp_by_feature[tp.feature_id].append(tp)
+    feature_by_id = {feature.id: feature for feature in parsed_context.features}
 
     # 构建 feature_id → 相关上下文的映射（给足上下文，不粗暴截断）
     feature_context: dict[str, list[dict]] = defaultdict(list)
@@ -280,12 +352,10 @@ async def generate_cases(
     # 跨功能点规格检索注入（治"假阴性空壳"根因 A2）：某测试点行为可能定义在别的功能点
     # 章节里（深层子节被折进别处）。按本功能点测试点描述检索全 PRD spec，补注 top-K
     # 跨章节参考，让模型据此写确定断言而非误判留白。scope=cross_ref。
-    cross_index = CrossFeatureIndex(parsed_context)
+    cross_index = await CrossFeatureIndex.build(parsed_context)
     for fid, fid_tps in tp_by_feature.items():
-        query_text = "\n".join(
-            f"{tp.dimension} {tp.description}" for tp in fid_tps
-        )
-        for cs in cross_index.query(query_text, ctx_seen[fid], top_k=3):
+        query_text = "\n".join(f"{tp.dimension} {tp.description}" for tp in fid_tps)
+        for cs in await cross_index.query(query_text, ctx_seen[fid], top_k=3):
             key = (cs.source_ref or "", cs.heading or "")
             ctx_seen[fid].add(key)
             feature_context[fid].append(
@@ -302,6 +372,8 @@ async def generate_cases(
 
     provenance_tagger = ProvenanceTagger()
     confidence_scorer = ConfidenceScorer()
+    _grounded_index = build_section_index(parsed_context) if runtime.grounded_provenance_enabled else None
+    _quote_cache: dict = {}
     all_test_cases: list[GeneratedTestCase] = []
     failed_features: list[dict] = []
     case_counter = start_counter
@@ -311,11 +383,9 @@ async def generate_cases(
     # 根因是「单次输出的用例条数」，不是输入大小。故按测试点条数硬切批（_split_by_count）：
     # 每批最多生成 MAX_TPS_PER_BATCH 条用例（输出短、稳返回），各批结果再聚合 —— 测试点一个不少、
     # 用例一条不少。上下文保持完整注入（不截断），保证每条用例都带完整背景，契合"维度全面"的诉求。
-    semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    semaphore = asyncio.Semaphore(runtime.llm_concurrency)
 
-    def _split_feature_if_needed(
-        feature_id: str, tps: list[TestPointSchema]
-    ) -> list[list[TestPointSchema]]:
+    def _split_feature_if_needed(feature_id: str, tps: list[TestPointSchema]) -> list[list[TestPointSchema]]:
         sub_batches = _split_by_count(tps)
         if len(sub_batches) > 1:
             logger.warning(
@@ -344,10 +414,40 @@ async def generate_cases(
                     for tp in batch_tps
                 ]
 
-                full_system_prompt = WRITE_CASES_SYSTEM_PROMPT + few_shot_section
+                cheat_sheet_section = CHEAT_SHEET_SYSTEM_PROMPT if runtime.cheat_sheet_injection_enabled else ""
+                feedback_section = ""
+                if feedback:
+                    feedback_lines = "\n".join(f"- {comment}" for comment in feedback.values() if comment)
+                    if feedback_lines:
+                        feedback_section = (
+                            "\n\n【QA 修改意见（对相关用例的权威纠正，优先级高于原测试点/原用例；"
+                            "请先理解意见的业务含义，冲突时一律以 QA 意见为准，"
+                            "允许推翻原有断言、过滤规则或方向，不要保留与意见相悖的原结论）】\n" + feedback_lines
+                        )
+                cot_section = COT_REASONING_SECTION if runtime.grounded_provenance_enabled else ""
+                full_system_prompt = (
+                    WRITE_CASES_SYSTEM_PROMPT + cot_section + cheat_sheet_section + feedback_section + few_shot_section
+                )
+                prompt_payload = {"test_points": test_points_data, "requirement_context": relevant_context}
+                if runtime.cheat_sheet_injection_enabled:
+                    feature = feature_by_id.get(feature_id)
+                    filtered_cheat_sheet = (
+                        format_cheat_sheet_for_prompt(filter_cheat_sheet_for_feature(feature, approved_cheat_sheet))
+                        if feature
+                        else {}
+                    )
+                    prompt_payload["cheat_sheet"] = filtered_cheat_sheet
+                    _injected = sum(len(v) for v in filtered_cheat_sheet.values())
+                    if _injected:
+                        logger.info(
+                            "cheat sheet 注入: feature=%s 注入 %d 条（类型: %s）",
+                            feature_id,
+                            _injected,
+                            ",".join(filtered_cheat_sheet.keys()),
+                        )
 
                 user_content = json.dumps(
-                    {"test_points": test_points_data, "requirement_context": relevant_context},
+                    prompt_payload,
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -393,8 +493,23 @@ async def generate_cases(
                         logger.warning("LLM generated case for unknown test_point_id: %s", llm_case.test_point_id)
                         continue
 
-                    provenance = provenance_tagger.tag_provenance(tp, parsed_context)
+                    if runtime.grounded_provenance_enabled:
+                        provenance = derive_grounded_provenance(
+                            llm_case, parsed_context, index=_grounded_index, quote_cache=_quote_cache
+                        )
+                    else:
+                        provenance = provenance_tagger.tag_provenance(tp, parsed_context)
                     trust_level, confidence_note = confidence_scorer.score(provenance)
+
+                    length_warnings = check_step_lengths(
+                        [
+                            {"action": s.action, "input_data": s.input_data, "expected_result": s.expected_result}
+                            for s in llm_case.steps
+                        ]
+                    )
+                    if length_warnings:
+                        warn_text = "；".join(length_warnings)
+                        confidence_note = f"{confidence_note} | {warn_text}" if confidence_note else warn_text
 
                     steps = [
                         TestStep(
@@ -407,6 +522,16 @@ async def generate_cases(
                         )
                         for s in llm_case.steps
                     ]
+                    dimensions = normalize_dimensions(llm_case.dimensions)
+                    priority = tp.priority if tp else "P2"
+                    if runtime.p0_quota_enabled:
+                        priority = calibrate_case_priority(
+                            parent_priority=priority,
+                            title=llm_case.title,
+                            expected_results=llm_case.expected_results,
+                            step_expected_results=[s.expected_result for s in steps],
+                            dimensions=dimensions,
+                        )
 
                     feature_cases.append(
                         GeneratedTestCase(
@@ -416,8 +541,8 @@ async def generate_cases(
                             preconditions=llm_case.preconditions,
                             steps=steps,
                             expected_results=llm_case.expected_results,
-                            priority=_PRIORITY_MAP.get(llm_case.priority, "P2"),
-                            dimensions=llm_case.dimensions,
+                            priority=priority,
+                            dimensions=dimensions,
                             provenance=provenance,
                             trust_level=trust_level,
                             confidence_note=confidence_note,
@@ -428,7 +553,7 @@ async def generate_cases(
 
     # 并发执行所有 feature（return_exceptions=True 防止单个异常取消其它）
     feature_ids = list(tp_by_feature.keys())
-    logger.info(f"write-cases: {len(feature_ids)} 个 feature 并发, 并发度={settings.llm_concurrency}")
+    logger.info(f"write-cases: {len(feature_ids)} 个 feature 并发, 并发度={runtime.llm_concurrency}")
     tasks = [_process_feature(fid, tp_by_feature[fid]) for fid in feature_ids]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -455,6 +580,11 @@ async def generate_cases(
     if failed_features:
         logger.warning(f"write-cases: {len(failed_features)} 个子批失败，已保留成功结果")
 
+    # ── 生成侧收敛后处理（roadmap ⑥，灰度、关时逐字节现状）─────────────────────
+    # 先存在性合并（同 tp 同 section 的纯展示用例合 1 条、保留全部检查点）→ 再拆条上限
+    # （每 tp 裁剪到 cap、被裁软标记 duplicate_of）。合并减条后再裁剪更准。
+    all_test_cases = apply_convergence(all_test_cases, runtime)
+
     return all_test_cases, failed_features
 
 
@@ -471,8 +601,20 @@ async def write_cases_node(state: PipelineState) -> dict:
     parsed_context = state["parsed_context"]
     test_points: list[TestPointSchema] = state["test_points"]
     system_id = UUID(state["system_id"])
+    document_id = UUID(state["document_id"]) if state.get("document_id") else None
 
-    all_test_cases, failed_features = await generate_cases(parsed_context, test_points, system_id)
+    # 迭代场景：generation_config.feedback 携带 QA 修改意见
+    generation_config = state.get("generation_config") or {}
+    iteration_feedback = generation_config.get("feedback") if isinstance(generation_config, dict) else None
+
+    all_test_cases, failed_features = await generate_cases(
+        parsed_context,
+        test_points,
+        system_id,
+        document_id=document_id,
+        feedback=iteration_feedback,
+        generation_config=generation_config,
+    )
 
     return {
         "test_cases": all_test_cases,

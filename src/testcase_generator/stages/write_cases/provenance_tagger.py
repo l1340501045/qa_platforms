@@ -2,9 +2,207 @@
 
 from __future__ import annotations
 
-from src.testcase_generator.schemas.parsed_context import ParsedContext, FeatureItem
+import re
+from typing import NamedTuple
+
+from src.testcase_generator.schemas.parsed_context import FeatureItem, ParsedContext
 from src.testcase_generator.schemas.test_case import Provenance
 from src.testcase_generator.schemas.test_point import TestPointSchema
+
+# ── 溯源接地：归一化 + span 对齐（落点⑥）────────────────────────────────────────
+
+_KEEP = re.compile(r"[^0-9a-z一-鿿]+")
+_FUZZY_COVERAGE = 0.8
+_RELOCATE_RATIO = 0.6
+_MIN_QUOTE_LEN_FOR_CROSS_SECTION = 10
+
+SectionIndex = dict[str, tuple[str, int, str, str]]  # norm_ref -> (content, trust_level, raw_ref, norm_content)
+
+
+def _normalize(s: str) -> str:
+    """比对用归一化：全角→半角、小写、仅保留中文+字母数字（标点/空白一律去掉）。"""
+    if not s:
+        return ""
+    s = "".join(chr(ord(c) - 0xFEE0) if "！" <= c <= "～" else c for c in s)
+    return _KEEP.sub("", s.lower())
+
+
+def _bigrams(norm: str) -> set[str]:
+    return {norm[i : i + 2] for i in range(len(norm) - 1)} if len(norm) >= 2 else ({norm} if norm else set())
+
+
+def _align(quote: str, section_content: str, *, threshold: float = _FUZZY_COVERAGE) -> str:
+    """'verified'（归一化子串）/ 'fuzzy'（quote bigram 被章节覆盖≥阈值）/ 'unresolved'。"""
+    nq, nc = _normalize(quote), _normalize(section_content)
+    if not nq:
+        return "unresolved"
+    if nq in nc:
+        return "verified"
+    bq, bc = _bigrams(nq), _bigrams(nc)
+    if not bq:
+        return "unresolved"
+    coverage = len(bq & bc) / len(bq)
+    return "fuzzy" if coverage >= threshold else "unresolved"
+
+
+def _relocate(quote: str, expected: str, section_content: str | None) -> str | None:
+    """章节内找与 quote/expected 最相似的句子作兜底（修复定位）。"""
+    from difflib import SequenceMatcher
+
+    if not section_content:
+        return None
+    target = _normalize(quote or expected)
+    if not target:
+        return None
+    best, best_sent = 0.0, None
+    for sent in re.split(r"[。；;\n]", section_content):
+        s = sent.strip()
+        if not s:
+            continue
+        r = SequenceMatcher(None, target, _normalize(s)).ratio()
+        if r > best:
+            best, best_sent = r, s
+    return best_sent if best >= _RELOCATE_RATIO else None
+
+
+def _find_section_by_quote(quote: str, index: SectionIndex) -> tuple[str, str, int] | None:
+    """绑定失败兜底：跨全章节找能对齐该 quote 的章节，返回 (raw_ref, content, trust_level)。"""
+    nq = _normalize(quote)
+    if len(nq) < _MIN_QUOTE_LEN_FOR_CROSS_SECTION:
+        return None
+    bq = _bigrams(nq)
+    fuzzy_hit = None
+    for content, trust, raw_ref, nc in index.values():
+        if nq in nc:
+            return raw_ref, content, trust
+        if bq:
+            bc = _bigrams(nc)
+            coverage = len(bq & bc) / len(bq)
+            if coverage >= _FUZZY_COVERAGE and fuzzy_hit is None:
+                fuzzy_hit = (raw_ref, content, trust)
+    return fuzzy_hit
+
+
+def build_section_index(parsed_context) -> SectionIndex:
+    """预建章节索引（每个 parsed_context 只需构建一次）。"""
+    index: SectionIndex = {}
+    for src in parsed_context.sources:
+        for sec in src.sections:
+            index[_normalize(sec.source_ref)] = (
+                sec.content, src.trust_level, sec.source_ref, _normalize(sec.content)
+            )
+    return index
+
+
+class _ResolveResult(NamedTuple):
+    """单 step quote 解析结果，供 derive_grounded_provenance 循环消费。
+
+    counts_keys 可含多个键（ref_corrected 路径同时计 verified/fuzzy + ref_corrected）。
+    quote_text / ref / trust 为 None 时不追加到对应列表。
+    """
+
+    counts_keys: list[str]
+    quote_text: str | None
+    ref: str | None
+    trust: int | None
+
+
+def _resolve_quote(q: str, r: str, expected: str, index: SectionIndex) -> _ResolveResult:
+    """对单条 step 的 (quote, ref) 执行绑定→对齐→跨章节兜底→relocate 完整解析链。"""
+    sec = index.get(_normalize(r)) if r else None
+    status = _align(q, sec[0]) if sec else "unresolved"
+    if status in ("verified", "fuzzy"):
+        return _ResolveResult(
+            counts_keys=[status],
+            quote_text=q,
+            ref=r if r else None,
+            trust=sec[1],  # type: ignore[index]
+        )
+    # ── 跨章节兜底（治 ref 失配，诊断 B≈44.7%）──
+    hit = _find_section_by_quote(q, index)
+    if hit:
+        raw_ref, content, trust = hit
+        return _ResolveResult(
+            counts_keys=[_align(q, content), "ref_corrected"],
+            quote_text=q,
+            ref=raw_ref,  # source_ref 由 schema 保证为 str，消费侧 None 守卫不改变此路径行为
+            trust=trust,
+        )
+    # ── 仍找不到 → relocate / unresolved（现状逻辑）──
+    fixed = _relocate(q, expected, sec[0] if sec else None)
+    if fixed:
+        return _ResolveResult(
+            counts_keys=["relocated"],
+            quote_text=fixed,
+            ref=r if r else None,
+            trust=sec[1] if sec else None,
+        )
+    return _ResolveResult(
+        counts_keys=["unresolved"],
+        quote_text=None,
+        ref=None,
+        trust=None,
+    )
+
+
+def derive_grounded_provenance(
+    llm_case,
+    parsed_context,
+    *,
+    index: SectionIndex | None = None,
+    quote_cache: dict | None = None,
+) -> Provenance:
+    """从 step 级 source_quote/source_ref 派生用例级溯源 + 三查校验（绑定/对齐/修复）。
+
+    quote_cache: 传入时，同一归一化 quote 在 batch 内只解析一次，结果复用，消除同源抖动。
+    """
+    if index is None:
+        index = build_section_index(parsed_context)
+
+    counts = {"verified": 0, "fuzzy": 0, "relocated": 0, "unresolved": 0, "ref_corrected": 0}
+    quotes: list[str] = []
+    refs: list[str] = []
+    trusts: list[int] = []
+
+    for step in llm_case.steps:
+        q = (getattr(step, "source_quote", None) or "").strip()
+        r = (getattr(step, "source_ref", None) or "").strip()
+        if not q:
+            continue
+        key = _normalize(q)
+        if quote_cache is not None and key in quote_cache:
+            result = quote_cache[key]
+        else:
+            result = _resolve_quote(q, r, getattr(step, "expected_result", ""), index)
+            if quote_cache is not None:
+                quote_cache[key] = result
+        for k in result.counts_keys:
+            counts[k] += 1
+        if result.quote_text is not None:
+            quotes.append(result.quote_text)
+        if result.ref is not None:
+            refs.append(result.ref)
+        if result.trust is not None:
+            trusts.append(result.trust)
+
+    derived_from = list(dict.fromkeys(refs))
+    total_quoted = counts["verified"] + counts["fuzzy"] + counts["relocated"] + counts["unresolved"]
+    if quotes:
+        excerpt = " / ".join(quotes)[:300]
+    elif total_quoted == 0:
+        excerpt = "[需求待确认：无确定断言，未引用原文]"
+    else:
+        excerpt = f"[未能对齐原文：{counts['unresolved']} 处引文存疑，待人工核对]"
+    trust_level = min(trusts) if trusts else (
+        min((s.trust_level for s in parsed_context.sources), default=5)
+    )
+    return Provenance(
+        derived_from=derived_from or ["unresolved"],
+        source_section=derived_from[0] if derived_from else "unresolved",
+        verbatim_excerpt=excerpt,
+        trust_level=trust_level,
+        grounding=counts,
+    )
 
 
 class ProvenanceTagger:

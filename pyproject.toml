@@ -18,10 +18,12 @@ dependencies = [
     "httpx>=0.25.0",
     "langgraph>=0.2.0",
     "langgraph-checkpoint-redis>=0.1.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
     "playwright>=1.40.0",
     "openai>=1.12.0",
     "tenacity>=8.2.0",
     "pyyaml>=6.0",
+    "openpyxl>=3.1.5",
 ]
 
 [project.optional-dependencies]
@@ -55,4 +57,3 @@ plugins = ["pydantic.mypy"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
-collect_ignore_glob = ["src/*"]

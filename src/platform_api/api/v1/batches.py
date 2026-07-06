@@ -12,15 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.platform_api.core.database import get_session
 from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
-from src.platform_api.core.stage_names import PIPELINE_STAGES, to_canonical
+from src.platform_api.core.stage_names import PIPELINE_STAGES
 from src.platform_api.schemas.batch import (
-    BatchResponse,
     ClarificationRequest,
     GenerateRequest,
     IterateRequest,
 )
+from src.platform_api.services.batch_list_service import BatchListService
 from src.platform_api.services.clarification_service import ClarificationService
 from src.platform_api.services.generation_service import GenerationService
+from src.platform_api.services.retry_service import RetryService
 from src.platform_api.services.review_service import ReviewService
 
 router = APIRouter(tags=["批次管理"])
@@ -28,6 +29,14 @@ router = APIRouter(tags=["批次管理"])
 
 def _get_generation_service(session: AsyncSession = Depends(get_session)) -> GenerationService:
     return GenerationService(session)
+
+
+def _get_batch_list_service(session: AsyncSession = Depends(get_session)) -> BatchListService:
+    return BatchListService(session)
+
+
+def _get_retry_service(session: AsyncSession = Depends(get_session)) -> RetryService:
+    return RetryService(session)
 
 
 def _get_clarification_service(session: AsyncSession = Depends(get_session)) -> ClarificationService:
@@ -67,6 +76,34 @@ async def trigger_generation(
     return JSONResponse(status_code=202, content=success({"batch_id": str(batch_resp.id)}))
 
 
+# ─── 全局批次列表（审核中心） ───
+
+
+@router.get("/batches")
+async def list_batches(
+    status: str | None = Query(None, description="按状态过滤"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """全局批次列表（跨系统，支持按状态过滤 + 分页）"""
+    params = PaginationParams(page=page, per_page=per_page)
+    items, total = await service.list_all(status=status, page=page, per_page=per_page)
+    return success(paginated_response(items, total, params))
+
+
+# ─── 批次选项（导出用下拉） ───
+
+
+@router.get("/batches/options")
+async def list_batch_options(
+    service: BatchListService = Depends(_get_batch_list_service),
+):
+    """获取可导出的批次选项列表（前端下拉选择器）"""
+    options = await service.list_batch_options()
+    return success(options)
+
+
 # ─── 获取批次详情（合并响应：batch + stage_progress + cases + open_questions） ───
 
 
@@ -76,9 +113,14 @@ async def get_batch_detail(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     review_status: str | None = Query(None, description="按 review 状态过滤"),
+    q: str | None = Query(None, description="按用例标题模糊搜索"),
     session: AsyncSession = Depends(get_session),
 ):
     """获取批次完整详情（合并批次信息、阶段进度、用例列表）"""
+    from sqlalchemy import select
+
+    from src.platform_api.models.testcase import StageArtifact
+
     gen_service = GenerationService(session)
     review_service = ReviewService(session)
 
@@ -88,9 +130,30 @@ async def get_batch_detail(
     # 获取阶段进度（获取 batch_status 含 open_questions）
     status_resp = await gen_service.get_batch_status(batch_id)
 
-    # 构建 stage_progress
+    # 查询所有 stage_artifacts 用于可观测性透传
+    artifacts_stmt = select(StageArtifact).where(StageArtifact.batch_id == batch_id).order_by(StageArtifact.created_at)
+    artifacts_result = await session.execute(artifacts_stmt)
+    artifacts_map = {a.stage: a for a in artifacts_result.scalars().all()}
+
+    # 构建 stage_progress（含增强字段）
     current_stage = batch_resp.current_stage
     stages = _build_stage_progress(current_stage, batch_resp.status)
+
+    # 透传 stage_artifacts 的可观测性字段
+    for stage in stages:
+        artifact = artifacts_map.get(stage["name"])
+        if artifact:
+            stage["duration_ms"] = artifact.duration_ms
+            stage["started_at"] = artifact.started_at.isoformat() if artifact.started_at else None
+            stage["completed_at"] = artifact.completed_at.isoformat() if artifact.completed_at else None
+            stage["error_message"] = (
+                artifact.artifact.get("error") if artifact.status == "failed" and artifact.artifact else None
+            )
+        else:
+            stage["duration_ms"] = None
+            stage["started_at"] = None
+            stage["completed_at"] = None
+            stage["error_message"] = None
 
     # 计算进度汇总字段
     completed_stages = sum(1 for s in stages if s["status"] == "completed")
@@ -102,6 +165,7 @@ async def get_batch_detail(
     cases_resp = await review_service.get_cases_by_batch(
         batch_id=batch_id,
         review_status=review_status,
+        keyword=q,
         offset=params.offset,
         limit=params.limit,
     )
@@ -166,11 +230,11 @@ async def trigger_iterate(
     body: IterateRequest,
     session: AsyncSession = Depends(get_session),
 ):
-    """触发迭代 — 基于人工反馈重跑部分用例生成"""
+    """触发迭代 — 基于人工反馈重跑部分用例生成（异步 Celery 派发）"""
+    from src.platform_api.core.celery_app import celery_app
     from src.platform_api.models.enums import BatchStatus
     from src.platform_api.models.testcase import TestBatch
     from src.platform_api.repositories.base import BaseRepository
-    from src.testcase_generator.services.iteration_service import IterationService
 
     # 验证 batch 存在并检查状态
     batch_repo = BaseRepository(session, TestBatch)
@@ -181,22 +245,23 @@ async def trigger_iterate(
     if batch.status not in (BatchStatus.PENDING_REVIEW, BatchStatus.REVIEWING):
         raise ApiError("E4001", f"批次当前状态为 '{batch.status}'，仅 pending_review/reviewing 可迭代")
 
-    # 调用迭代服务
-    iteration_service = IterationService()
-    await iteration_service.iterate(
-        batch_id=batch_id,
-        modified_case_ids=body.modified_case_ids,
-        feedback=body.feedback or {},
+    # 异步派发到 Celery（不在 HTTP 请求中 await LLM 执行）
+    celery_app.send_task(
+        "testcase_generator.iterate_batch",
+        kwargs={
+            "batch_id": str(batch_id),
+            "modified_case_ids": body.modified_case_ids,
+            "feedback": body.feedback or {},
+        },
+        queue="testcase_generation",
     )
 
-    # 刷新 batch 状态
-    await session.refresh(batch)
     return JSONResponse(
         status_code=202,
         content=success(
             {
                 "batch_id": str(batch.id),
-                "status": batch.status,
+                "status": "reviewing",
                 "iteration": getattr(batch, "iteration", 2),
                 "cases_to_regenerate": len(body.modified_case_ids),
             }
@@ -251,6 +316,7 @@ async def archive_batch(
 async def get_batch_cases(
     batch_id: UUID,
     review_status: str | None = Query(None, description="按 review 状态过滤"),
+    q: str | None = Query(None, description="按用例标题模糊搜索"),
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     service: ReviewService = Depends(_get_review_service),
@@ -260,6 +326,7 @@ async def get_batch_cases(
     result = await service.get_cases_by_batch(
         batch_id=batch_id,
         review_status=review_status,
+        keyword=q,
         offset=params.offset,
         limit=params.limit,
     )
@@ -306,3 +373,16 @@ def _build_stage_progress(current_stage: str | None, batch_status: str) -> list[
                 stages.append({"name": stage_name, "status": "completed"})
 
     return stages
+
+
+# ─── 失败重试 ───
+
+
+@router.post("/batches/{batch_id}/retry")
+async def retry_batch(
+    batch_id: UUID,
+    service: RetryService = Depends(_get_retry_service),
+):
+    """从失败阶段重试批次生成任务"""
+    result = await service.retry_batch(batch_id)
+    return success(result)

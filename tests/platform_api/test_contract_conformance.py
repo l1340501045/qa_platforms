@@ -10,6 +10,10 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 
+from tests.platform_api.conftest import requires_db
+
+pytestmark = requires_db
+
 from src.platform_api.main import app
 from src.platform_api.core.exceptions import ERROR_CODES
 from src.platform_api.core.stage_names import PIPELINE_STAGES
@@ -72,9 +76,7 @@ async def test_error_response_format(client: AsyncClient):
     assert "request_id" in body, f"错误响应缺少 request_id: {body.keys()}"
 
     # 资源不存在的确定性错误码
-    assert body["error_code"] == "E4041", (
-        f"不存在资源的 error_code 应为 E4041, got '{body['error_code']}'"
-    )
+    assert body["error_code"] == "E4041", f"不存在资源的 error_code 应为 E4041, got '{body['error_code']}'"
     # 且必须在契约集合内
     assert body["error_code"] in ERROR_CODES
 
@@ -95,3 +97,27 @@ async def test_stage_names_are_canonical(client: AsyncClient):
     # 验证 PIPELINE_STAGES 全是 canonical
     for stage in PIPELINE_STAGES:
         assert "_" not in stage, f"PIPELINE_STAGES 含下划线: '{stage}'"
+
+
+@pytest.mark.asyncio
+async def test_systems_options_not_shadowed_by_path_param(client: AsyncClient):
+    """GET /systems/options 不能被 /{system_id} 路由遮蔽 → 必须返回 200 + 数组"""
+    resp = await client.get("/api/v1/systems/options")
+    assert resp.status_code == 200, (
+        f"/systems/options 应返回 200，实际 {resp.status_code}；可能被 /{'{system_id}'} 路由抢匹配导致 422"
+    )
+    body = resp.json()
+    assert body["code"] == 0
+    assert isinstance(body["data"], list)
+
+
+@pytest.mark.asyncio
+async def test_batches_options_not_shadowed_by_path_param(client: AsyncClient):
+    """GET /batches/options 不能被 /batches/{batch_id} 路由遮蔽 → 必须返回 200 + 数组"""
+    resp = await client.get("/api/v1/batches/options")
+    assert resp.status_code == 200, (
+        f"/batches/options 应返回 200，实际 {resp.status_code}；可能被 /batches/{'{batch_id}'} 路由抢匹配导致 422"
+    )
+    body = resp.json()
+    assert body["code"] == 0
+    assert isinstance(body["data"], list)

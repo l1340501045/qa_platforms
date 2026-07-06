@@ -1,0 +1,25 @@
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100%;
+  margin: 0;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+.case-asset-table-row-highlight > td {
+  background: #fff7e6 !important;
+}
+
+.case-asset-table-row-highlight > td:first-child {
+  box-shadow: inset 3px 0 0 #faad14;
+}
+
+.case-asset-table-row-highlight:hover > td {
+  background: #fff1b8 !important;
+}

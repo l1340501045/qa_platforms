@@ -17,6 +17,24 @@ class FeatureUnderstanding(BaseModel):
     assumptions: list[str] = Field(default_factory=list, description="做出的假设")
 
 
+class ConflictSide(BaseModel):
+    """冲突一方"""
+
+    location: str = Field(default="", description="章节定位，如 '§5.6.1' / '§9.2 表'；定位不到留空")
+    statement: str = Field(default="", description="该处说法")
+    trust_level: int = Field(default=1, ge=1, le=5, description="信任等级（同文档跨章节时两方相同）")
+
+
+class ConflictDetail(BaseModel):
+    """结构化冲突（前端选项化渲染；亦作 LLM identified_conflicts 元素）"""
+
+    topic: str = Field(description="冲突点标题，如 '角色名称字数上限'")
+    side_a: ConflictSide
+    side_b: ConflictSide
+    recommendation: Literal["side_a", "side_b", "neither"] = Field(description="AI 推荐方")
+    recommendation_reason: str = Field(default="", description="推荐理由（一句话）")
+
+
 class SourceConflict(BaseModel):
     """不同来源间的冲突"""
 
@@ -28,6 +46,7 @@ class SourceConflict(BaseModel):
     source_b_trust_level: int = Field(ge=1, le=5, description="来源 B 信任等级")
     resolution: str = Field(description="仲裁结果描述")
     resolution_basis: str = Field(description="仲裁依据（如 'higher_level_wins'）")
+    conflict_detail: "ConflictDetail | None" = Field(default=None, description="结构化时有；规则法/降级时 None")
 
 
 class BlindSpot(BaseModel):
@@ -47,6 +66,10 @@ class OpenQuestion(BaseModel):
     context: str = Field(description="问题上下文")
     related_features: list[str] = Field(default_factory=list, description="关联功能 ID")
     blocking: bool = Field(default=False, description="是否为阻塞性问题")
+    question_type: Literal["conflict", "blind_spot"] = Field(default="blind_spot", description="问题类型判别")
+    conflict_detail: "ConflictDetail | None" = Field(default=None, description="冲突且结构化时才有")
+    severity: Literal["high", "medium", "low"] = Field(default="medium", description="透传前端 priority")
+    conflict_id: str | None = Field(default=None, description="冲突类问题关联的 SourceConflict.conflict_id")
 
 
 class ComprehensionReport(BaseModel):

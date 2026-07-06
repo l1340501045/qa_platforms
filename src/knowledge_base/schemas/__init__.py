@@ -1,11 +1,16 @@
 """knowledge-base DTO schemas"""
 
+from src.knowledge_base.schemas.cheat_sheet import (
+    CheatSheetInjectionItem,
+    CheatSheetItemCreate,
+    CheatSheetItemSchema,
+)
 from src.knowledge_base.schemas.common import (
-    DocumentDTO,
     AssociationDTO,
+    DocumentDTO,
+    RetrievalContext,
     SearchRequest,
     SearchResult,
-    RetrievalContext,
 )
 
 __all__ = [
@@ -14,4 +19,7 @@ __all__ = [
     "SearchRequest",
     "SearchResult",
     "RetrievalContext",
+    "CheatSheetItemCreate",
+    "CheatSheetItemSchema",
+    "CheatSheetInjectionItem",
 ]

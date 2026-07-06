@@ -159,6 +159,7 @@ export interface Document {
   doc_type: DocType;
   folder_path: string | null;
   status: DocStatus;
+  embedding_status?: string;
   association_count?: number;
   created_at: string;
   updated_at: string;
@@ -242,6 +243,9 @@ export interface StageInfo {
   progress?: number;
   duration_ms?: number;
   gate_result?: GateResult;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
 }
 
 export interface StageProgress {
@@ -265,11 +269,27 @@ export interface BatchInfo {
   created_at: string;
 }
 
+export interface ConflictSide {
+  location: string;
+  statement: string;
+  trust_level: number;
+}
+
+export interface ConflictDetail {
+  topic: string;
+  side_a: ConflictSide;
+  side_b: ConflictSide;
+  recommendation: 'side_a' | 'side_b' | 'neither';
+  recommendation_reason: string;
+}
+
 export interface OpenQuestion {
   id: string;
   question: string;
   context: string;
   priority: 'high' | 'medium' | 'low';
+  question_type?: 'conflict' | 'blind_spot';
+  conflict_detail?: ConflictDetail | null;
 }
 
 /** 批次详情合并响应（实际 API 返回结构）
@@ -316,6 +336,24 @@ export interface TestCase {
   iteration: number;
   created_at: string;
   updated_at: string;
+}
+
+export type CaseBucket = 'main' | 'needs_spec' | 'to_fix';
+export type CaseVerdict = 'grounded' | 'ungrounded' | 'undefined' | 'conflict';
+export type ReviewIssueType = 'case_wrong' | 'prd_conflict' | 'verify_uncertain';
+
+// ─── 审核中心批次（全局列表） ───
+
+export interface ReviewBatch {
+  id: string;
+  document_id: string;
+  document_title: string;
+  system_id: string;
+  system_name: string;
+  status: BatchStatus;
+  total_cases: number | null;
+  created_at: string;
+  completed_at: string | null;
 }
 
 // ─── 生成/澄清/迭代/归档响应 ───
@@ -402,7 +440,7 @@ export interface ClarifyRequest {
 }
 
 export interface ReviewRequest {
-  action: 'confirmed' | 'needs_modification' | 'deleted';
+  status: 'confirmed' | 'needs_modification' | 'deleted';
   comment?: string;
 }
 
@@ -416,4 +454,189 @@ export interface CreateExportRequest {
   batch_id?: string;
   system_id?: string;
   format: ExportFormat;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 搜索相关类型（契约 §3.8）
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 搜索结果条目 */
+export interface SearchResultItem {
+  id: string;
+  title: string;
+  priority: Priority;
+  trust_level: number;
+  review_status: ReviewStatus;
+  system_id: string;
+  system_name: string;
+  document_id: string;
+  document_title: string;
+  batch_id: string;
+  score: number;
+  created_at: string;
+}
+
+/** 搜索响应 */
+export interface SearchResponse extends PaginatedData<SearchResultItem> {
+  query: string;
+}
+
+/** 搜索请求参数 */
+export interface SearchParams {
+  q: string;
+  system_id?: string;
+  priority?: Priority;
+  review_status?: ReviewStatus;
+  page?: number;
+  per_page?: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 通知相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 通知类型 */
+export type NotificationType = 'batch_completed' | 'batch_failed' | 'batch_suspended';
+
+/** 通知条目 */
+export interface Notification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  read: boolean;
+  actor: string;
+  created_at: string;
+}
+
+/** 未读数响应 */
+export interface UnreadCountResponse {
+  count: number;
+}
+
+/** 全部标记已读响应 */
+export interface MarkAllReadResponse {
+  updated_count: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 用例树相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 用例树节点 — 用例级 */
+export interface CaseTreeCase {
+  id: string;
+  title: string;
+  priority: Priority;
+  trust_level: number;
+  review_status: ReviewStatus;
+  iteration: number;
+  verdict?: CaseVerdict | null;
+  bucket?: CaseBucket | null;
+  review_issue_type?: ReviewIssueType | null;
+  duplicate_of?: string | null;
+  is_duplicate?: boolean;
+  branch_path?: string[];
+  source_refs?: string[];
+  classification_confidence?: string;
+}
+
+/** 用例树节点 — 分支级 */
+export interface CaseTreeBranch {
+  branch_name: string;
+  branch_path: string[];
+  case_count: number;
+  cases: CaseTreeCase[];
+}
+
+/** 用例树节点 — 模块级 */
+export interface CaseTreeModule {
+  module_name: string;
+  case_count: number;
+  cases: CaseTreeCase[];
+  branches?: CaseTreeBranch[];
+}
+
+/** 用例树节点 — 文档级 */
+export interface CaseTreeDocument {
+  document_id: string;
+  document_title: string;
+  modules: CaseTreeModule[];
+}
+
+export type CaseTreeView = 'all' | 'stable' | 'review_required';
+
+/** 用例树请求参数 */
+export interface CaseTreeParams {
+  batch_id?: string;
+  priority?: Priority;
+  review_status?: ReviewStatus;
+  bucket?: CaseBucket;
+  verdict?: CaseVerdict;
+  review_issue_type?: ReviewIssueType;
+  view?: CaseTreeView;
+  include_duplicates?: boolean;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Cheat Sheet（知识速查表）相关类型
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** cheat sheet 条目类型 */
+export type CheatSheetType = 'must_test' | 'confusion_pair' | 'section_priority' | 'prd_status';
+
+/** cheat sheet 审核状态 */
+export type CheatSheetReviewStatus = 'pending' | 'approved' | 'rejected';
+
+/** cheat sheet 条目（对齐后端 _serialize_item） */
+export interface CheatSheetItem {
+  id: string;
+  sheet_id: string;
+  sheet_type: CheatSheetType;
+  title: string;
+  dedup_key: string;
+  ai_content: Record<string, unknown>;
+  qa_content: Record<string, unknown> | null;
+  review_status: CheatSheetReviewStatus;
+  review_tier: string | null;
+  review_comment: string | null;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  source_entity_ids: string[] | null;
+  source_relation_ids: string[] | null;
+  source_section_refs: string[] | null;
+  sort_order: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 解析产物（知识图谱）相关类型 — Stage 1 GraphRAG
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** 实体（knowledge.entities） */
+export interface KgEntity {
+  id: string;
+  entity_type: string;
+  name: string;
+  section_ref: string | null;
+  description: string | null;
+  source_quote: string | null;
+}
+
+/** 实体关系（knowledge.entity_relations） */
+export interface KgRelation {
+  id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relation_type: string;
+  note: string | null;
+}
+
+/** 文档解析产物聚合 */
+export interface KnowledgeGraph {
+  stats: { entity_count: number; relation_count: number; image_count: number };
+  entities: KgEntity[];
+  relations: KgRelation[];
+  image_captions: Record<string, unknown>;
 }
