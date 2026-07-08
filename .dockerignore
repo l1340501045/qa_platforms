@@ -28,6 +28,8 @@ dist
 .claude
 .codex
 .cursor
+.agents
+.trellis
 .idea
 .vscode
 .runtime
@@ -39,3 +41,17 @@ scripts/backups
 
 *.log
 *.pid
+
+AGENTS.md
+CLAUDE.md
+opencode.json
+task_plan.md
+progress.md
+findings.md
+backup_*.content.md
+xspec
+docs/plans
+docs/spec
+docs/acceptance
+docs/2026-*.md
+docs/testcase-generation-best-practice-roadmap.md

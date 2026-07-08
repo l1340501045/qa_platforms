@@ -1,6 +1,0 @@
-{"file": ".trellis/spec/backend/index.md", "reason": "审查时对照项目后端与测试规范。"}
-{"file": ".trellis/spec/guides/index.md", "reason": "审查 coverage debt、复用和跨层风险时使用。"}
-{"file": ".trellis/tasks/07-01-generation-convergence/research/coverage-preserving-cap.md", "reason": "判断实现是否真正对齐覆盖保持而非边界垄断。"}
-{"file": ".trellis/tasks/07-01-generation-convergence/prd.md", "reason": "审查实现是否满足验收标准。"}
-{"file": ".trellis/tasks/07-01-generation-convergence/design.md", "reason": "审查算法、兼容性和离线报告设计是否落地。"}
-{"file": ".trellis/tasks/07-01-generation-convergence/implement.md", "reason": "审查 Claude Code 是否按步骤完成并执行验证。"}

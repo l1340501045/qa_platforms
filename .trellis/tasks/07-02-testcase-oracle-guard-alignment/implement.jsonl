@@ -1,3 +1,0 @@
-{"file":".trellis/spec/backend/testing-pattern.md","reason":"pytest、ruff、纯函数测试和后端测试约定"}
-{"file":".trellis/spec/guides/index.md","reason":"跨层和复用思考触发器，防止新增不必要抽象"}
-{"file":"/Users/echo_lacey/.agents/skills/testcase-generator/SKILL.md","reason":"测试用例生成的项目级业务原则：不臆造、无技术方案不写技术派生、需澄清分流"}
