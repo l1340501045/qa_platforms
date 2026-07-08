@@ -71,3 +71,40 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Docker Desktop部署文档与本地库备注收尾
+
+**Date**: 2026-07-08
+**Task**: Docker Desktop部署文档与本地库备注收尾
+**Branch**: `main`
+
+### Summary
+
+补充 README 顶部 AI 直接部署 Docker Desktop 指令，明确生产 compose 会自动部署 Postgres、Redis、MinIO、api、worker、web；归档本地数据库表字段备注补齐任务。
+
+### Main Changes
+
+- README 顶部新增 AI 直接部署入口，指明整站部署必须使用 `docker-compose.prod.yml`。
+- 补充数据库和依赖部署说明：Postgres 首次启动创建 `qa_platforms` 库，api 容器启动时执行 `alembic upgrade head`，MinIO 自动创建 `qa-documents` bucket。
+- 明确生产部署只暴露宿主机 `3000` 端口，同事访问 `http://<部署机器IP>:3000` 即可打开前端。
+- 归档 `07-07-local-db-comments` Trellis 任务。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3bcc501` | docs(部署): 补充Docker Desktop直接部署说明 |
+| `9c3cbd0` | docs(部署): 补充数据库自动部署说明 |
+
+### Testing
+
+- [OK] 文档改动已人工核对 README 部署步骤和 compose/entrypoint 事实一致。
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
