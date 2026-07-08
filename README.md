@@ -21,6 +21,28 @@ docker-compose.prod.yml
   - 本机访问：`http://127.0.0.1:3000`
   - 内网访问：`http://<部署机器IP>:3000`
 
+### 数据库和依赖怎么部署
+
+AI 不需要单独安装数据库，也不需要让用户手工建库建表。生产 compose 会自动启动这些容器：
+
+| 容器服务 | 作用 | Docker 内网地址 | 是否暴露给同事 |
+|---|---|---|---|
+| `postgres` | PostgreSQL + pgvector 数据库 | `postgres:5432` | 不暴露 |
+| `redis` | Celery 队列和结果缓存 | `redis:6379` | 不暴露 |
+| `minio` | 上传文档、导出文件等对象存储 | `minio:9000` | 不暴露 |
+| `api` | 后端接口，并在启动时自动执行数据库迁移 | `api:8000` | 只通过 web 反向代理访问 |
+| `worker` | 后台解析、生成、导出任务 | Docker 内网 | 不暴露 |
+| `web` | 前端页面和 Nginx 入口 | 宿主机 `3000` | 暴露 |
+
+数据库初始化规则：
+
+- `docker-compose.prod.yml` 会创建 `postgres` 容器。
+- `.env.prod` 中的 `POSTGRES_DB=qa_platforms` 会让 PostgreSQL 首次启动时创建业务库。
+- `api` 容器启动时会自动执行 `alembic upgrade head`，创建或升级表结构。
+- `minio-init` 容器会自动创建 `MINIO_BUCKET=qa-documents`。
+- 数据库、Redis、MinIO 数据保存在 Docker volume 中：`prod_pgdata`、`prod_redisdata`、`prod_miniodata`。
+- 只要不执行 `docker compose down -v`，重启或升级容器不会清空数据。
+
 ### AI 执行顺序
 
 1. 确认 Docker Desktop 已启动。
@@ -50,9 +72,18 @@ LLM_CONCURRENCY=8
 4. 保持 `.env.prod` 中 Docker 内网地址不变：
 
 ```text
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=qa_platforms
 DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/qa_platforms
 REDIS_URL=redis://redis:6379/0
+CELERY_BROKER_URL=redis://redis:6379/1
+CELERY_RESULT_BACKEND=redis://redis:6379/2
 MINIO_ENDPOINT=minio:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=qa-documents
+MINIO_SECURE=false
 ```
 
 5. 构建并启动完整服务：
@@ -66,6 +97,12 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```powershell
 docker compose --env-file .env.prod -f docker-compose.prod.yml ps
 curl http://127.0.0.1:3000/health
+```
+
+`ps` 中至少要看到 `postgres`、`redis`、`minio`、`api`、`worker`、`web` 正常运行；`api` 健康后，同事就可以直接打开：
+
+```text
+http://<部署机器IP>:3000
 ```
 
 ### AI 不要做的事
