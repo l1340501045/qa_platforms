@@ -17,6 +17,7 @@ _RED_PNG_DATA_URL = (
     "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/"
     "Afnh+ngAAAAASUVORK5CYII="
 )
+_CHAT_PROBE_MAX_TOKENS = 256
 
 
 class ModelCapabilityError(RuntimeError):
@@ -122,7 +123,7 @@ class ModelConnectionTester:
         response = await client.chat.completions.create(
             model=endpoint.model_name,
             messages=messages,
-            max_tokens=24,
+            max_tokens=_CHAT_PROBE_MAX_TOKENS,
             temperature=0,
         )
         content = self._response_text(response)
