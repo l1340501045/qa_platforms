@@ -1,6 +1,5 @@
 """用例生成编排 service — 触发生成、查询状态、获取详情"""
 
-from datetime import datetime, timezone
 from uuid import UUID
 
 from sqlalchemy import select
@@ -30,7 +29,7 @@ class GenerationService:
         3. 更新 status=running, celery_task_id
         4. 返回 BatchResponse
         """
-        # 1. 创建批次记录
+        # 1. 批次不永久绑定模型版本；Worker 真正开始执行时读取当前有效配置。
         batch = await self.repo.create(
             document_id=document_id,
             system_id=system_id,

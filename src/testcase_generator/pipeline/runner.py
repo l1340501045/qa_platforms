@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any
-
-from typing import Optional
+from typing import Any, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import Command
 
+from src.platform_api.core.model_runtime import ModelConfigBundle, model_runtime_scope
 from src.testcase_generator.pipeline.graph import build_pipeline
 from src.testcase_generator.schemas.pipeline_state import PipelineState
 
@@ -30,6 +29,8 @@ async def run_pipeline(
     batch_id: str,
     generation_config: dict | None = None,
     thread_id: str | None = None,
+    *,
+    model_bundle: ModelConfigBundle,
 ) -> dict[str, Any]:
     """端到端运行流水线
 
@@ -39,29 +40,34 @@ async def run_pipeline(
         batch_id: 批次 ID
         generation_config: 生成配置（可选）
         thread_id: LangGraph thread ID（断点续跑时传入已有 ID）
+        model_bundle: 本次执行开始时读取并固定的完整模型配置
 
     Returns:
         最终 PipelineState 字典，含 yaml_output / markdown_output
         如果被 interrupt 挂起，返回的是挂起时的 state（需检查 snapshot.next）
     """
-    app = compile_pipeline()
+    if model_bundle is None:
+        raise ValueError("model_bundle 必须显式提供，不能回退环境变量")
 
-    initial_state: PipelineState = {
-        "document_id": document_id,
-        "system_id": system_id,
-        "batch_id": batch_id,
-        "generation_config": generation_config or {},
-    }
+    with model_runtime_scope(model_bundle):
+        app = compile_pipeline()
 
-    config = {"configurable": {"thread_id": thread_id or batch_id}}
+        initial_state: PipelineState = {
+            "document_id": document_id,
+            "system_id": system_id,
+            "batch_id": batch_id,
+            "generation_config": generation_config or {},
+        }
 
-    # 异步流式执行
-    final_state: dict[str, Any] = {}
-    async for event in app.astream(initial_state, config=config):
-        # LangGraph astream 输出格式: {"node_name": {state_updates}}
-        for _node_name, node_output in event.items():
-            if isinstance(node_output, dict):
-                final_state.update(node_output)
+        config = {"configurable": {"thread_id": thread_id or batch_id}}
+
+        # 异步流式执行
+        final_state: dict[str, Any] = {}
+        async for event in app.astream(initial_state, config=config):
+            # LangGraph astream 输出格式: {"node_name": {state_updates}}
+            for _node_name, node_output in event.items():
+                if isinstance(node_output, dict):
+                    final_state.update(node_output)
 
     return final_state
 
@@ -69,6 +75,8 @@ async def run_pipeline(
 async def resume_pipeline(
     thread_id: str,
     clarification_answers: list[dict],
+    *,
+    model_bundle: ModelConfigBundle,
 ) -> dict[str, Any]:
     """从 interrupt 恢复流水线执行
 
@@ -78,21 +86,26 @@ async def resume_pipeline(
     Args:
         thread_id: 原始 thread_id（与 batch_id 相同或自定义）
         clarification_answers: 人工澄清答案列表
+        model_bundle: 本次恢复开始时读取并固定的最新完整模型配置
 
     Returns:
         恢复后的最终 PipelineState
     """
-    app = compile_pipeline()
-    config = {"configurable": {"thread_id": thread_id}}
+    if model_bundle is None:
+        raise ValueError("model_bundle 必须显式提供，不能回退环境变量")
 
-    # 使用 LangGraph Command(resume=...) 恢复中断
-    # interrupt_node 中 interrupt() 的返回值 = Command.resume 的值
-    resume_cmd = Command(resume={"clarification_answers": clarification_answers})
+    with model_runtime_scope(model_bundle):
+        app = compile_pipeline()
+        config = {"configurable": {"thread_id": thread_id}}
 
-    final_state: dict[str, Any] = {}
-    async for event in app.astream(resume_cmd, config=config):
-        for _node_name, node_output in event.items():
-            if isinstance(node_output, dict):
-                final_state.update(node_output)
+        # 使用 LangGraph Command(resume=...) 恢复中断
+        # interrupt_node 中 interrupt() 的返回值 = Command.resume 的值
+        resume_cmd = Command(resume={"clarification_answers": clarification_answers})
+
+        final_state: dict[str, Any] = {}
+        async for event in app.astream(resume_cmd, config=config):
+            for _node_name, node_output in event.items():
+                if isinstance(node_output, dict):
+                    final_state.update(node_output)
 
     return final_state

@@ -52,7 +52,24 @@ async def _clear_old_records(batch_id_str: str) -> tuple[int, int, int]:
     return tc_n, tp_n, r_n
 
 
+async def _load_current_model_bundle():
+    """在本次复核开始时加载当前有效模型配置。"""
+    from src.platform_api.services.task_model_runtime import load_active_model_bundle
+    from src.testcase_generator.db import async_session_factory
+
+    async with async_session_factory() as session:
+        return await load_active_model_bundle(session)
+
+
 async def main(batch_id: str) -> None:
+    from src.platform_api.core.model_runtime import model_runtime_scope
+
+    model_bundle = await _load_current_model_bundle()
+    with model_runtime_scope(model_bundle):
+        await _reverify_batch(batch_id)
+
+
+async def _reverify_batch(batch_id: str) -> None:
     from src.testcase_generator.pipeline.persistence import open_async_checkpointer
     from src.testcase_generator.pipeline.runner import compile_pipeline
     from src.testcase_generator.schemas.parsed_context import ParsedContext
@@ -76,10 +93,7 @@ async def main(batch_id: str) -> None:
     final_cases_orig = state.get("final_test_cases") or []
     test_points = state.get("test_points") or []
     rules = state.get("rules") or []
-    print(
-        f"  已加载：final_test_cases={len(final_cases_orig)}, "
-        f"test_points={len(test_points)}, rules={len(rules)}"
-    )
+    print(f"  已加载：final_test_cases={len(final_cases_orig)}, test_points={len(test_points)}, rules={len(rules)}")
 
     if not final_cases_orig:
         print("ERROR: checkpoint 内 final_test_cases 为空，无法重跑 verify。")
@@ -110,8 +124,7 @@ async def main(batch_id: str) -> None:
     state.update(dedup_result)
     dedup_summary = state.get("dedup_summary", {})
     print(
-        f"  dedup 完成：total={dedup_summary.get('total', '?')}, "
-        f"duplicates={dedup_summary.get('duplicate_count', 0)}"
+        f"  dedup 完成：total={dedup_summary.get('total', '?')}, duplicates={dedup_summary.get('duplicate_count', 0)}"
     )
 
     # ── 4. 清旧数据（verify+dedup 均成功后才删，防数据空窗）──────────────────

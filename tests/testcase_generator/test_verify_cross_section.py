@@ -164,27 +164,35 @@ def test_conflict_true_but_no_refs_treated_as_false():
     assert summ["prd_conflict_list"] == []
 
 
-async def test_generate_structured_passes_explicit_model(monkeypatch):
-    """传入 model 时，_call 必须收到该 model（而非 primary）。"""
-    from pydantic import BaseModel
-
-    class _Out(BaseModel):
-        ok: bool
-
-    client = LLMClient.__new__(LLMClient)  # 跳过 __init__ 避免连真网关
-    client.primary_model = "claude-primary"
-    client._json_mode = False
+async def test_verify_uses_locked_role_model_without_environment_override(monkeypatch):
+    """校验端点的模型名来自任务锁定配置，不能被旧环境变量覆盖。"""
+    from src.platform_api.core.model_runtime import ModelRole
+    from src.platform_api.core.settings import Settings
+    from src.testcase_generator.stages.verify import verifier as vmod
+    from src.testcase_generator.stages.verify.verifier import PrdSection, VerifyCase, verify_cases
 
     seen = {}
 
-    async def fake_call(model, system_prompt, user_content, output_schema, temperature, images=None):
-        seen["model"] = model
-        return _Out(ok=True)
+    class _FakeClient:
+        async def generate_structured(self, **kwargs):
+            seen.update(kwargs)
+            return vmod._VerifyLLMOutput(verdicts=[vmod._CaseVerdict(case_id="V0", verdict="grounded")])
 
-    monkeypatch.setattr(client, "_call", fake_call)
+    monkeypatch.setattr(vmod, "get_llm_client", lambda: _FakeClient())
+    runtime = Settings(_env_file=None, llm_verify_model="stale-environment-model")
 
-    await client.generate_structured("sys", "usr", _Out, model="deepseek-x")
-    assert seen["model"] == "deepseek-x"
+    await verify_cases(
+        [VerifyCase(case_id="V0", feature_id="F1", title="可保存")],
+        {"F1": [PrdSection("保存", "点击保存后成功", "§1")]},
+        runtime_settings=runtime,
+    )
 
-    await client.generate_structured("sys", "usr", _Out)  # 不传 → 回退 primary
-    assert seen["model"] == "claude-primary"
+    assert seen["model_role"] is ModelRole.VERIFY
+    assert "model" not in seen
+
+
+def test_generate_structured_does_not_expose_model_name_override():
+    """业务调用只能选职责，模型名必须来自任务锁定配置。"""
+    import inspect
+
+    assert "model" not in inspect.signature(LLMClient.generate_structured).parameters

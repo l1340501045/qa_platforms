@@ -10,7 +10,8 @@
 
 用法（cwd=项目根）：
   PYTHONPATH=. .venv/bin/python -m src.testcase_generator.cli.rule_coverage_probe --batch-id dd03218e --freeze
-  PYTHONPATH=. .venv/bin/python -m src.testcase_generator.cli.rule_coverage_probe --batch-id <id> --ledger .qa_probe/rule_extract/rules_ledger_dd03218e.json
+  PYTHONPATH=. .venv/bin/python -m src.testcase_generator.cli.rule_coverage_probe --batch-id <id> \
+    --ledger .qa_probe/rule_extract/rules_ledger_dd03218e.json
 """
 
 from __future__ import annotations
@@ -47,12 +48,14 @@ async def _fetch_cases(session, batch_uuid) -> list[dict]:
     res = await session.execute(stmt)
     cases = []
     for c in res.scalars().all():
-        cases.append({
-            "title": c.title,
-            "steps": c.steps,
-            "expected_results": c.expected_results,
-            "dimensions": c.dimensions,
-        })
+        cases.append(
+            {
+                "title": c.title,
+                "steps": c.steps,
+                "expected_results": c.expected_results,
+                "dimensions": c.dimensions,
+            }
+        )
     return cases
 
 
@@ -72,8 +75,7 @@ async def _build_ledger(document_id, client, ledger_path: str | None) -> dict:
     print(f"切分完成：{len(units)} 单元（全文 {len(md)} 字），开始抽取...", flush=True)
     ledger = await extract_rules(units, digest, client, concurrency=4)
     print(f"抽取完成：{ledger.total} 条规则（失败单元 {ledger.failed_units}）", flush=True)
-    return {"total": ledger.total, "failed_units": ledger.failed_units,
-            "rules": [r.model_dump() for r in ledger.rules]}
+    return {"total": ledger.total, "failed_units": ledger.failed_units, "rules": [r.model_dump() for r in ledger.rules]}
 
 
 async def _judge_all(ledger: dict, cases: list[dict], client) -> dict:
@@ -90,13 +92,23 @@ async def _judge_all(ledger: dict, cases: list[dict], client) -> dict:
             try:
                 res = await judge_rule_coverage(rules, cases, client, topk=110)
                 res["module"] = module
-                print(f"  [{module}] 规则{res['total']} 覆盖{res['covered']} 漏{res['missed']} "
-                      f"漏测率={res['miss_rate']:.0%}", flush=True)
+                print(
+                    f"  [{module}] 规则{res['total']} 覆盖{res['covered']} 漏{res['missed']} "
+                    f"漏测率={res['miss_rate']:.0%}",
+                    flush=True,
+                )
                 return res
             except Exception as e:  # noqa: BLE001 — 单模块判定失败隔离，不拖垮整批基线
                 print(f"  [{module}] 判定失败（已隔离）: {type(e).__name__}: {str(e)[:80]}", flush=True)
-                return {"module": module, "total": len(rules), "covered": 0, "missed": 0,
-                        "miss_rate": 0.0, "error": str(e), "judged": False}
+                return {
+                    "module": module,
+                    "total": len(rules),
+                    "covered": 0,
+                    "missed": 0,
+                    "miss_rate": 0.0,
+                    "error": str(e),
+                    "judged": False,
+                }
 
     module_results = await asyncio.gather(*[_one(m, rs) for m, rs in by_module.items()])
     ok = [r for r in module_results if not r.get("error")]
@@ -116,18 +128,25 @@ async def _judge_all(ledger: dict, cases: list[dict], client) -> dict:
 
 
 async def _run(args: argparse.Namespace) -> None:
+    from src.platform_api.core.model_runtime import model_runtime_scope
+    from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
     from src.testcase_generator.services.llm_client import get_llm_client
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    client = get_llm_client()
 
     async with async_session_factory() as session:
         batch = await _resolve_batch(session, args.batch_id)
         cases = await _fetch_cases(session, batch.id)
+        model_bundle = await load_active_model_bundle(session)
     print(f"批次 {str(batch.id)[:8]}：seed 文档 {batch.document_id}，用例 {len(cases)} 条", flush=True)
 
-    ledger = await _build_ledger(batch.document_id, client, args.ledger)
+    with model_runtime_scope(model_bundle):
+        client = get_llm_client()
+        ledger = await _build_ledger(batch.document_id, client, args.ledger)
+
+        print("开始规则级覆盖判定（按模块）...", flush=True)
+        summary = await _judge_all(ledger, cases, client)
 
     short = str(batch.id)[:8]
     if args.freeze and not args.ledger:
@@ -135,13 +154,11 @@ async def _run(args: argparse.Namespace) -> None:
         ledger_out.write_text(json.dumps(ledger, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"已冻结台账 → {ledger_out}", flush=True)
 
-    print("开始规则级覆盖判定（按模块）...", flush=True)
-    summary = await _judge_all(ledger, cases, client)
-
     probe_out = OUT_DIR / f"probe_{short}.json"
-    probe_out.write_text(json.dumps(
-        {"batch_id": str(batch.id), "case_count": len(cases), **summary},
-        ensure_ascii=False, indent=2), encoding="utf-8")
+    probe_out.write_text(
+        json.dumps({"batch_id": str(batch.id), "case_count": len(cases), **summary}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     print("\n==================== 体检结果 ====================", flush=True)
     print(f"批次：{batch.id}", flush=True)

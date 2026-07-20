@@ -19,6 +19,7 @@ def run_pipeline_task(
     document_id: str,
     system_id: str,
     config: dict | None = None,
+    resume_from: str | None = None,
 ) -> dict:
     """启动 LangGraph 流水线 Celery 任务
 
@@ -29,6 +30,7 @@ def run_pipeline_task(
     5. 完成后 status → completed；Gate NO_GO → status=suspended
     6. 失败 → status=failed + 错误信息
     """
+    _ = resume_from  # 兼容 RetryService 的历史任务参数；恢复点仍由 checkpoint 决定。
     return asyncio.run(
         _execute_pipeline(
             celery_task_id=self.request.id,
@@ -56,19 +58,14 @@ async def _execute_pipeline(
     """
     from sqlalchemy import update
 
+    from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestBatch
+    from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
-    from src.testcase_generator.pipeline.persistence import open_async_checkpointer
-    from src.testcase_generator.pipeline.runner import compile_pipeline
-    from src.testcase_generator.tasks.callbacks import (
-        on_pipeline_complete,
-        on_pipeline_failed,
-        on_pipeline_suspended,
-        on_stage_complete,
-    )
 
     # 1. 更新 batch status → running
     async with async_session_factory() as session:
+        model_bundle = await load_active_model_bundle(session)
         stmt = (
             update(TestBatch)
             .where(TestBatch.id == batch_id)
@@ -81,6 +78,27 @@ async def _execute_pipeline(
         )
         await session.execute(stmt)
         await session.commit()
+
+    with model_runtime_scope(model_bundle):
+        return await _execute_pipeline_graph(batch_id, document_id, system_id, config)
+
+
+async def _execute_pipeline_graph(
+    batch_id: str,
+    document_id: str,
+    system_id: str,
+    config: dict | None,
+) -> dict:
+    """在已绑定模型配置版本的上下文中运行完整流水线。"""
+
+    from src.testcase_generator.pipeline.persistence import open_async_checkpointer
+    from src.testcase_generator.pipeline.runner import compile_pipeline
+    from src.testcase_generator.tasks.callbacks import (
+        on_pipeline_complete,
+        on_pipeline_failed,
+        on_pipeline_suspended,
+        on_stage_complete,
+    )
 
     try:
         # 2-4. 在任务自身事件循环内打开 checkpointer，编译并运行流水线
@@ -146,8 +164,9 @@ async def _execute_pipeline(
         return {"status": "completed", "batch_id": batch_id}
 
     except Exception as e:
-        error_msg = f"{type(e).__name__}: {str(e)}"
-        logger.exception("Pipeline failed for batch %s", batch_id)
+        error_type = type(e).__name__
+        error_msg = f"{error_type}: 模型流水线执行失败"
+        logger.error("Pipeline failed for batch %s error_type=%s", batch_id, error_type)
         await on_pipeline_failed(batch_id=batch_id, error=error_msg, stage="unknown")
         return {"status": "failed", "error": error_msg}
 
@@ -166,11 +185,28 @@ def resume_pipeline_task(batch_id: str, clarification_answers: list[dict]) -> di
 
 async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> dict:
     """内部异步恢复逻辑"""
-    from langgraph.types import Command
     from sqlalchemy import update
 
+    from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestBatch
+    from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
+
+    # 1. 更新 status → running
+    async with async_session_factory() as session:
+        model_bundle = await load_active_model_bundle(session)
+        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(status=BatchStatus.RUNNING)
+        await session.execute(stmt)
+        await session.commit()
+
+    with model_runtime_scope(model_bundle):
+        return await _resume_pipeline_graph(batch_id, clarification_answers)
+
+
+async def _resume_pipeline_graph(batch_id: str, clarification_answers: list[dict]) -> dict:
+    """在本次恢复开始时读取的最新模型配置上下文中执行流水线。"""
+    from langgraph.types import Command
+
     from src.testcase_generator.pipeline.persistence import open_async_checkpointer
     from src.testcase_generator.pipeline.runner import compile_pipeline
     from src.testcase_generator.tasks.callbacks import (
@@ -178,12 +214,6 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
         on_pipeline_failed,
         on_pipeline_suspended,
     )
-
-    # 1. 更新 status → running
-    async with async_session_factory() as session:
-        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(status=BatchStatus.RUNNING)
-        await session.execute(stmt)
-        await session.commit()
 
     try:
         # 2-3. 在任务自身事件循环内打开 checkpointer，使用 Command(resume=...) 恢复 LangGraph
@@ -233,8 +263,9 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
         return {"status": "completed", "batch_id": batch_id}
 
     except Exception as e:
-        error_msg = f"{type(e).__name__}: {str(e)}"
-        logger.exception("Pipeline resume failed for batch %s", batch_id)
+        error_type = type(e).__name__
+        error_msg = f"{error_type}: 模型流水线恢复失败"
+        logger.error("Pipeline resume failed for batch %s error_type=%s", batch_id, error_type)
         await on_pipeline_failed(batch_id=batch_id, error=error_msg, stage="unknown")
         return {"status": "failed", "error": error_msg}
 

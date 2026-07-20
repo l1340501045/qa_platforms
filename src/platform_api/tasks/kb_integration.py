@@ -1,7 +1,4 @@
-"""KB 集成：文档上传后发布解析+向量化任务
-
-对 knowledge_base 解析服务的封装，作为 Celery 任务独立运行。
-"""
+"""遗留 KB Celery 入口：安全委托正式解析任务。"""
 
 from __future__ import annotations
 
@@ -14,53 +11,38 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="platform_api.trigger_kb_parse")
 def trigger_kb_parse(document_id: str) -> dict:
-    """调用 knowledge_base 解析文档
+    """将遗留调用安全委托给正式 KB 解析任务。
 
-    触发链路：
-    1. 解析文档内容（Markdown → 结构化）
-    2. 生成 embedding 向量
-    3. 更新 document.embedding_status
+    正式任务会在 Worker 真正开始执行时读取最新模型版本，并在该次执行期间
+    固定运行时作用域。
     """
-    import asyncio
-
-    return asyncio.run(_execute_kb_parse(document_id))
-
-
-async def _execute_kb_parse(document_id: str) -> dict:
-    """内部异步执行逻辑"""
-    from uuid import UUID
-
-    from sqlalchemy import update
-
-    from src.platform_api.core.database import get_session_factory
-    from src.platform_api.models.knowledge import Document
-
-    session_factory = get_session_factory()
-
     try:
-        # 尝试调用 knowledge_base 解析服务
-        try:
-            from src.knowledge_base.services.parse_service import ParseService
+        result = celery_app.send_task(
+            "knowledge_base.parse_document",
+            kwargs={"document_id": document_id},
+            queue="kb_parsing",
+        )
+    except Exception as exc:  # noqa: BLE001 — 遗留任务必须返回固定、可序列化的安全错误
+        error_type = type(exc).__name__
+        logger.error(
+            "KB parse delegation failed for document %s error_type=%s",
+            document_id,
+            error_type,
+        )
+        return {
+            "status": "failed",
+            "document_id": document_id,
+            "error": "KB_PARSE_DELEGATION_FAILED",
+            "error_type": error_type,
+        }
 
-            parse_service = ParseService()
-            await parse_service.parse_document(document_id=UUID(document_id))
-        except ImportError:
-            logger.warning(
-                "knowledge_base.services.parse_service not available, "
-                "falling back to status update only for document %s",
-                document_id,
-            )
-
-        # 更新 embedding_status
-        async with session_factory() as session:
-            stmt = update(Document).where(Document.id == UUID(document_id)).values(embedding_status="processing")
-            await session.execute(stmt)
-            await session.commit()
-
-        logger.info("KB parse triggered for document %s", document_id)
-        return {"status": "triggered", "document_id": document_id}
-
-    except Exception as e:
-        error_msg = f"{type(e).__name__}: {str(e)}"
-        logger.exception("KB parse failed for document %s", document_id)
-        return {"status": "failed", "document_id": document_id, "error": error_msg}
+    logger.info(
+        "KB parse delegated for document %s task_id=%s",
+        document_id,
+        result.id,
+    )
+    return {
+        "status": "delegated",
+        "document_id": document_id,
+        "task_id": result.id,
+    }
