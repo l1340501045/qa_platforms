@@ -1,5 +1,6 @@
 """应用配置管理 — 通过环境变量加载所有配置"""
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings
 
 
@@ -54,10 +55,18 @@ class Settings(BaseSettings):
 
     # verify 关卡专用模型：留空则回退 llm_primary_model（行为不变）。
     # 设为非 Claude 族（如 deepseek-v4-pro-office）以消除 generator/judge 同族的 self-enhancement bias。
+    llm_verify_base_url: str = ""  # 留空回退 llm_base_url
+    llm_verify_api_key: str = ""  # 留空回退 llm_api_key / openai_api_key
     llm_verify_model: str = ""
 
     # LLM 视觉模型（图解析用，OpenAI 兼容视觉接口；留空则传 images 时报错）
+    llm_vision_base_url: str = ""  # 留空回退 llm_base_url
+    llm_vision_api_key: str = ""  # 留空回退 llm_api_key / openai_api_key
     llm_vision_model: str = ""
+
+    # 页面化模型配置使用的服务器总密钥（Fernet）；缺失时旧环境变量链路仍可运行，但不能持久化保存。
+    model_config_encryption_key: SecretStr | None = None
+    model_connection_test_timeout: float = 20.0
 
     # ── 图解析（Image Caption）灰度开关 ──────────────────────────────────────
     # 开：parse 时调视觉 LLM 描述图片并插回 content
@@ -208,6 +217,22 @@ class Settings(BaseSettings):
     @property
     def resolved_llm_api_key(self) -> str:
         return self.llm_api_key or self.openai_api_key
+
+    @property
+    def resolved_vision_base_url(self) -> str | None:
+        return self.llm_vision_base_url or self.llm_base_url or None
+
+    @property
+    def resolved_vision_api_key(self) -> str:
+        return self.llm_vision_api_key or self.llm_api_key or self.openai_api_key
+
+    @property
+    def resolved_verify_base_url(self) -> str | None:
+        return self.llm_verify_base_url or self.llm_base_url or None
+
+    @property
+    def resolved_verify_api_key(self) -> str:
+        return self.llm_verify_api_key or self.llm_api_key or self.openai_api_key
 
     @property
     def resolved_embedding_base_url(self) -> str | None:

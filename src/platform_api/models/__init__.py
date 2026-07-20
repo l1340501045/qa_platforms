@@ -8,6 +8,7 @@ from src.platform_api.models.knowledge import (
     DocumentEmbedding,
     PrototypeLink,
 )
+from src.platform_api.models.model_settings import AIModelConfigEntry, AIModelConfigState, AIModelConfigVersion
 from src.platform_api.models.public import Base, System, SystemAssociation
 from src.platform_api.models.testcase import (
     ExportTask,
@@ -23,6 +24,9 @@ __all__ = [
     "Base",
     "System",
     "SystemAssociation",
+    "AIModelConfigVersion",
+    "AIModelConfigEntry",
+    "AIModelConfigState",
     "Document",
     "DocumentAssociation",
     "DocumentEmbedding",

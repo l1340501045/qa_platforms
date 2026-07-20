@@ -12,6 +12,12 @@ from src.testcase_generator.schemas.test_point import TestPointSchema
 from src.testcase_generator.stages.write_cases import node as write_cases_node
 
 
+@pytest.fixture(autouse=True)
+def _disable_hybrid_cross_retrieval(monkeypatch):
+    """本文件只验证 cheat sheet 行为，不允许本机 .env 触发真实向量请求。"""
+    monkeypatch.setattr(write_cases_node.settings, "hybrid_cross_retrieval_enabled", False)
+
+
 def _parsed_context(doc_id):
     return ParsedContext(
         sources=[

@@ -640,3 +640,61 @@ export interface KnowledgeGraph {
   relations: KgRelation[];
   image_captions: Record<string, unknown>;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// 全平台 AI 模型设置
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export type AIModelRole = 'primary' | 'vision' | 'verify' | 'embedding';
+export type AIModelSource = 'environment' | 'database';
+export type AIModelKeyStatus = 'missing' | 'configured' | 'unreadable';
+export type AIModelValidationStatus = 'untested' | 'passed' | 'key_unreadable';
+export type ModelConnectionCategory =
+  | 'success'
+  | 'network'
+  | 'authentication'
+  | 'model_not_found'
+  | 'rate_limit'
+  | 'capability_mismatch'
+  | 'dimension_mismatch'
+  | 'unknown';
+
+export interface AIModelSetting {
+  role: AIModelRole;
+  display_name: string;
+  description: string;
+  base_url: string;
+  model_name: string;
+  api_key_status: AIModelKeyStatus;
+  source: AIModelSource;
+  validation_status: AIModelValidationStatus;
+  tested_at: string | null;
+  vector_dimension: number | null;
+}
+
+export interface AIModelSettings {
+  version_id: string | null;
+  revision: number;
+  source: AIModelSource;
+  persistence_ready: boolean;
+  transport_security: 'trusted_intranet_http';
+  models: AIModelSetting[];
+}
+
+export interface ModelConnectionRequest {
+  base_url: string;
+  model_name: string;
+  api_key?: string;
+}
+
+export interface SaveModelSettingRequest extends ModelConnectionRequest {
+  expected_revision: number;
+}
+
+export interface ModelConnectionTestResult {
+  ok: boolean;
+  category: ModelConnectionCategory;
+  message: string;
+  latency_ms: number;
+  embedding_dimension: number | null;
+}

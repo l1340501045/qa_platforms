@@ -29,8 +29,20 @@ FEATURES = [
 ]
 
 RULES = [
-    {"rule_code": "R-001", "module": "5.1 头条账户授权管理 › 5.1.2 字段说明", "rule": "高级别权限包含低级别", "category": "权限", "source_quote": "q1"},
-    {"rule_code": "R-002", "module": "5.8 批量创建", "rule": "单次批量上限一千条", "category": "边界", "source_quote": "q2"},
+    {
+        "rule_code": "R-001",
+        "module": "5.1 头条账户授权管理 › 5.1.2 字段说明",
+        "rule": "高级别权限包含低级别",
+        "category": "权限",
+        "source_quote": "q1",
+    },
+    {
+        "rule_code": "R-002",
+        "module": "5.8 批量创建",
+        "rule": "单次批量上限一千条",
+        "category": "边界",
+        "source_quote": "q2",
+    },
 ]
 
 
@@ -67,6 +79,7 @@ def test_empty_rules_yield_no_anchors():
 
 # ── 节点级集成：开关控制规则锚点是否进入 test_points ──────────────────────────────
 
+
 def _state_with_rules() -> dict:
     parsed = ParsedContext(
         sources=[
@@ -80,7 +93,13 @@ def _state_with_rules() -> dict:
         ],
         features=FEATURES,
     )
-    return {"parsed_context": parsed, "rules": RULES}
+    return {
+        "parsed_context": parsed,
+        "rules": RULES,
+        # 本组只验证规则锚点；显式关闭会发起真实 LLM 调用的结构化覆盖路径，
+        # 避免测试结果依赖开发机 .env 中的全局开关和模型连接。
+        "generation_config": {"structural_coverage_enabled": False},
+    }
 
 
 async def _run_node(monkeypatch, enabled: bool) -> list:
@@ -111,6 +130,7 @@ async def test_node_no_anchors_when_disabled(monkeypatch):
 
 
 # ── Task 3.2 收编旧 trim：维度门控只裁增强维度，绝不剥夺规则锚点 ─────────────────
+
 
 @pytest.mark.asyncio
 async def test_dimension_gating_never_drops_rule_anchored_tps(monkeypatch):

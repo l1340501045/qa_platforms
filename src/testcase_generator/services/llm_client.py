@@ -1,14 +1,10 @@
-"""LLM 客户端 — 单一 OpenAI 兼容网关 + 主模型重试 + structured output + 调用统计
-
-通过 settings.llm_base_url 指向自建网关（OpenAI 兼容协议）。
-只调主模型，失败重试主模型，重试耗尽才报错；不切备用模型。
-支持多模态：传 images 参数时用 vision model + multimodal messages。
-"""
+"""LLM 客户端 — 按模型职责路由独立 OpenAI 兼容端点。"""
 
 import base64
 import json
 import logging
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Type, TypeVar
 
@@ -16,6 +12,12 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from src.platform_api.core.model_runtime import (
+    ModelConfigBundle,
+    ModelRole,
+    build_environment_model_bundle,
+    get_current_model_bundle,
+)
 from src.platform_api.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,9 @@ class CallStats:
     success: bool
     duration_ms: float
     error: str | None = None
+    model_role: str = ModelRole.PRIMARY.value
+    model_name: str = ""
+    config_revision: int = 0
 
 
 @dataclass
@@ -161,27 +166,55 @@ class _GatewayJSONError(Exception):
         self.content = content
 
 
+class ModelInvocationError(RuntimeError):
+    """对外只保留异常类型，不携带供应商响应正文或请求细节。"""
+
+    def __init__(self, cause_type: str) -> None:
+        self.cause_type = cause_type
+        super().__init__(f"{cause_type}: 模型调用失败")
+
+
 class LLMClient:
     """统一 LLM 调用封装
 
-    - 单一 OpenAI 兼容客户端：base_url / api_key / model 全部可配，指向自建网关
-    - 只调主模型：失败按 LLM_MAX_RETRIES 重试主模型，重试耗尽才报错；不切备用模型
+    - primary / vision / verify 各自使用独立的 base_url、api_key 和 model
+    - 失败按 LLM_MAX_RETRIES 重试同一职责模型，重试耗尽才报错；不切备用模型
     - Structured output：传入 Pydantic model，schema 注入 prompt 强约束并校验
     - 调用统计：记录每次调用的尝试次数和耗时
     - 质量优先不设 token/时间上限
     """
 
-    def __init__(self):
-        self.client = AsyncOpenAI(
-            api_key=settings.resolved_llm_api_key,
-            base_url=settings.resolved_llm_base_url,
-            timeout=settings.llm_timeout,
-        )
-        self.primary_model = settings.llm_primary_model
+    def __init__(self, bundle: ModelConfigBundle | None = None):
+        fallback = build_environment_model_bundle(settings)
+        self.bundle = bundle or get_current_model_bundle(fallback)
+        self.primary_model = self.bundle.for_role(ModelRole.PRIMARY).model_name
         if not self.primary_model:
             raise ValueError("LLM_PRIMARY_MODEL 未配置：请在 .env 中设置 LLM_PRIMARY_MODEL")
-        # JSON mode 开关：网关/后端不支持 response_format 时自动置 False 永久回退
-        self._json_mode = settings.llm_json_mode
+        self._clients: dict[ModelRole, AsyncOpenAI] = {}
+        # 每个端点独立记录 JSON mode 兼容性，避免一个网关的能力影响其他网关。
+        self._json_mode = {
+            role: settings.llm_json_mode for role in (ModelRole.PRIMARY, ModelRole.VISION, ModelRole.VERIFY)
+        }
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        """兼容旧调用方：返回 primary 客户端。"""
+
+        return self._client_for_role(ModelRole.PRIMARY)
+
+    def _client_for_role(self, role: ModelRole) -> AsyncOpenAI:
+        if role is ModelRole.EMBEDDING:
+            raise ValueError("Embedding 调用必须使用 EmbeddingClient")
+        client = self._clients.get(role)
+        if client is None:
+            endpoint = self.bundle.for_role(role)
+            client = AsyncOpenAI(
+                api_key=endpoint.api_key or "local-no-key",
+                base_url=endpoint.base_url,
+                timeout=settings.llm_timeout,
+            )
+            self._clients[role] = client
+        return client
 
     async def generate_structured(
         self,
@@ -190,16 +223,22 @@ class LLMClient:
         output_schema: Type[T],
         temperature: float = 0.3,
         images: list[bytes] | None = None,
-        model: str | None = None,
+        model_role: ModelRole | str | None = None,
     ) -> T:
-        """调用主模型并强制输出为指定 schema；失败重试主模型，不切备用模型。
+        """调用指定职责模型并强制输出为 schema；失败只重试同一端点。
 
-        传 images 时使用 vision model + multimodal messages；不传时走纯文本路径。
+        传 images 时强制使用 vision；不传且未指定职责时使用 primary。
         """
-        if images and not settings.llm_vision_model:
+        role = ModelRole.VISION if images else ModelRole(model_role or ModelRole.PRIMARY)
+        if role is ModelRole.EMBEDDING:
+            raise ValueError("Embedding 调用必须使用 EmbeddingClient")
+        endpoint = self.bundle.for_role(role)
+        if role is ModelRole.VISION and not endpoint.model_name:
             raise ValueError("图解析需配置 LLM_VISION_MODEL 环境变量")
 
-        model = model or (settings.llm_vision_model if images else self.primary_model)
+        selected_model = endpoint.model_name
+        if not selected_model:
+            raise ValueError(f"{role.value} 模型名称未配置")
         schema_name = output_schema.__name__
         attempt_count = 0
         start_time = time.monotonic()
@@ -208,15 +247,25 @@ class LLMClient:
             stop=stop_after_attempt(settings.llm_max_retries),
             wait=wait_exponential(min=1, max=10),
             before_sleep=lambda rs: logger.warning(
-                f"model {model} attempt {rs.attempt_number} failed, "
-                f"retrying: {rs.outcome.exception()}"
+                "LLM 调用失败，将重试: role=%s model=%s attempt=%d",
+                role.value,
+                selected_model,
+                rs.attempt_number,
             ),
             reraise=True,
         )
         async def _attempt() -> T:
             nonlocal attempt_count
             attempt_count += 1
-            return await self._call(model, system_prompt, user_content, output_schema, temperature, images=images)
+            return await self._call(
+                role,
+                selected_model,
+                system_prompt,
+                user_content,
+                output_schema,
+                temperature,
+                images=images,
+            )
 
         try:
             result = await _attempt()
@@ -227,12 +276,17 @@ class LLMClient:
                     attempts=attempt_count,
                     success=True,
                     duration_ms=duration_ms,
+                    model_role=role.value,
+                    model_name=selected_model,
+                    config_revision=self.bundle.revision,
                 )
             )
             logger.info(
-                "LLM 调用成功: schema=%s model=%s attempts=%d duration=%.1fs",
+                "LLM 调用成功: schema=%s role=%s model=%s revision=%d attempts=%d duration=%.1fs",
                 schema_name,
-                model,
+                role.value,
+                selected_model,
+                self.bundle.revision,
                 attempt_count,
                 duration_ms / 1000,
             )
@@ -254,6 +308,9 @@ class LLMClient:
                             success=True,
                             duration_ms=duration_ms,
                             error="salvaged_truncated_json",
+                            model_role=role.value,
+                            model_name=selected_model,
+                            config_revision=self.bundle.revision,
                         )
                     )
                     logger.warning(
@@ -269,25 +326,33 @@ class LLMClient:
                     attempts=attempt_count,
                     success=False,
                     duration_ms=duration_ms,
-                    error=str(e),
+                    error=type(e).__name__,
+                    model_role=role.value,
+                    model_name=selected_model,
+                    config_revision=self.bundle.revision,
                 )
             )
             raise
         except Exception as e:
             duration_ms = (time.monotonic() - start_time) * 1000
+            error_type = type(e).__name__
             llm_stats.record(
                 CallStats(
                     schema_name=schema_name,
                     attempts=attempt_count,
                     success=False,
                     duration_ms=duration_ms,
-                    error=str(e),
+                    error=error_type,
+                    model_role=role.value,
+                    model_name=selected_model,
+                    config_revision=self.bundle.revision,
                 )
             )
-            raise
+            raise ModelInvocationError(error_type) from None
 
     async def _call(
         self,
+        role: ModelRole,
         model: str,
         system_prompt: str,
         user_content: str,
@@ -296,6 +361,7 @@ class LLMClient:
         images: list[bytes] | None = None,
     ) -> T:
         """单次调用（OpenAI 兼容 JSON mode + 加强 schema 约束 + 校验）"""
+        client = self._client_for_role(role)
         schema_json = json.dumps(output_schema.model_json_schema(), ensure_ascii=False, indent=2)
 
         # 加强 JSON 约束：明确禁止解释性文字 + 给极简合法样例骨架
@@ -314,10 +380,12 @@ class LLMClient:
             user_msg_content: list[dict] = [{"type": "text", "text": user_content}]
             for img_bytes in images:
                 b64 = base64.b64encode(img_bytes).decode()
-                user_msg_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{b64}"},
-                })
+                user_msg_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{b64}"},
+                    }
+                )
             messages = [
                 {"role": "system", "content": system_prompt + schema_instruction},
                 {"role": "user", "content": user_msg_content},
@@ -330,9 +398,9 @@ class LLMClient:
 
         # JSON mode：让网关/后端在解码层就只产出合法 JSON，根治长输出的分隔符/截断错误。
         # 网关不支持 response_format 时（通常报 400/不识别参数）一次性永久回退到纯 prompt 约束。
-        if self._json_mode:
+        if self._json_mode[role]:
             try:
-                response = await self.client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=temperature,
@@ -340,17 +408,19 @@ class LLMClient:
                 )
             except Exception as e:  # noqa: BLE001 — 仅针对 response_format 不被支持的回退
                 if _is_response_format_unsupported(e):
-                    logger.warning("网关不支持 response_format=json_object，永久回退纯 prompt 约束: %s", e)
-                    self._json_mode = False
-                    response = await self.client.chat.completions.create(
+                    logger.warning(
+                        "网关不支持 response_format=json_object，回退纯 prompt 约束: role=%s error=%s",
+                        role.value,
+                        type(e).__name__,
+                    )
+                    self._json_mode[role] = False
+                    response = await client.chat.completions.create(
                         model=model, messages=messages, temperature=temperature
                     )
                 else:
                     raise
         else:
-            response = await self.client.chat.completions.create(
-                model=model, messages=messages, temperature=temperature
-            )
+            response = await client.chat.completions.create(model=model, messages=messages, temperature=temperature)
 
         content = response.choices[0].message.content or ""
         finish_reason = response.choices[0].finish_reason
@@ -380,13 +450,36 @@ class LLMClient:
         return output_schema.model_validate(parsed)
 
 
-# 延迟初始化单例（避免 import 时因缺少配置报错）
+# 每个 ContextVar 任务上下文按 bundle 缓存客户端；兼容旧测试通过 _llm_client=None 主动重置。
 _llm_client: LLMClient | None = None
+_context_llm_client: ContextVar[tuple[ModelConfigBundle, LLMClient] | None] = ContextVar(
+    "context_llm_client",
+    default=None,
+)
+
+
+def reset_llm_client_cache() -> None:
+    """清空当前上下文客户端缓存，供测试和显式配置切换使用。"""
+
+    global _llm_client
+    _llm_client = None
+    _context_llm_client.set(None)
 
 
 def get_llm_client() -> LLMClient:
-    """获取 LLM 客户端单例（首次调用时初始化）"""
+    """获取当前任务配置版本对应的 LLM 客户端。"""
+
     global _llm_client
+    fallback = build_environment_model_bundle(settings)
+    bundle = get_current_model_bundle(fallback)
+    cached = _context_llm_client.get()
     if _llm_client is None:
-        _llm_client = LLMClient()
-    return _llm_client
+        cached = None
+        _context_llm_client.set(None)
+    if cached is not None and cached[0] == bundle:
+        _llm_client = cached[1]
+        return cached[1]
+    client = LLMClient(bundle)
+    _context_llm_client.set((bundle, client))
+    _llm_client = client
+    return client

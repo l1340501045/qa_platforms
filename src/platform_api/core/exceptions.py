@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from fastapi import Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 ERROR_CODES: dict[str, tuple[int, str]] = {
     "E4001": (400, "请求参数无效"),
     "E4002": (400, "搜索参数无效"),
+    "E4031": (403, "禁止跨站访问"),
     "E4041": (404, "资源不存在"),
     "E4042": (404, "通知不存在"),
     "E4043": (404, "逻辑用例不存在"),
@@ -49,9 +51,32 @@ async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
     )
 
 
+async def request_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """统一返回不含原始输入的校验错误，避免 Key 被 FastAPI 默认详情回显。"""
+
+    logger.warning(
+        "Request validation failed: path=%s error_types=%s",
+        request.url.path,
+        [error.get("type", "unknown") for error in exc.errors()],
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error_code": "E4221",
+            "message": "请求格式错误，请检查填写内容",
+            "request_id": getattr(request.state, "request_id", None),
+        },
+    )
+
+
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """未捕获异常处理器"""
-    logger.error("Unhandled exception: %s: %s", type(exc).__name__, exc, exc_info=True)
+    logger.error(
+        "Unhandled exception: path=%s request_id=%s error_type=%s",
+        request.url.path,
+        getattr(request.state, "request_id", None),
+        type(exc).__name__,
+    )
     return JSONResponse(
         status_code=500,
         content={

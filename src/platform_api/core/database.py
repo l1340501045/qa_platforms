@@ -26,6 +26,7 @@ def get_engine() -> AsyncEngine:
                 settings.database_url,
                 poolclass=NullPool,
                 echo=settings.debug,
+                hide_parameters=True,
             )
         else:
             _engine = create_async_engine(
@@ -33,6 +34,7 @@ def get_engine() -> AsyncEngine:
                 pool_size=settings.db_pool_size,
                 max_overflow=settings.db_max_overflow,
                 echo=settings.debug,
+                hide_parameters=True,
             )
     return _engine
 

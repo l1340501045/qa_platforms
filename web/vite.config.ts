@@ -14,7 +14,8 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
-        changeOrigin: true,
+        // 保留浏览器侧 Host，确保无鉴权阶段的模型设置接口可做同源校验。
+        changeOrigin: false,
       },
     },
   },

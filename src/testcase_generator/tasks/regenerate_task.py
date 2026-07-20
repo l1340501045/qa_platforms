@@ -27,7 +27,9 @@ def regenerate_case_task(self, case_id: str, comment: str) -> dict:
 async def _regenerate_case(case_id: str, comment: str) -> dict:
     from sqlalchemy import select
 
+    from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestCase, TestPoint
+    from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
     from src.testcase_generator.services.llm_client import get_llm_client
     from src.testcase_generator.stages.write_cases.node import WRITE_CASES_SYSTEM_PROMPT, LLMGeneratedCase
@@ -38,6 +40,7 @@ async def _regenerate_case(case_id: str, comment: str) -> dict:
         if case is None:
             logger.error("regenerate_case: 用例不存在 case_id=%s", case_id)
             return {"error": "case_not_found"}
+        model_bundle = await load_active_model_bundle(session)
 
         test_point = None
         if case.test_point_id:
@@ -78,15 +81,17 @@ async def _regenerate_case(case_id: str, comment: str) -> dict:
     }
 
     try:
-        llm_output = await get_llm_client().generate_structured(
-            system_prompt=feedback_system_prompt,
-            user_content=json.dumps(user_payload, ensure_ascii=False, indent=2),
-            output_schema=LLMGeneratedCase,
-            temperature=0.3,
-        )
+        with model_runtime_scope(model_bundle):
+            llm_output = await get_llm_client().generate_structured(
+                system_prompt=feedback_system_prompt,
+                user_content=json.dumps(user_payload, ensure_ascii=False, indent=2),
+                output_schema=LLMGeneratedCase,
+                temperature=0.3,
+            )
     except Exception as exc:
-        logger.error("regenerate_case LLM 调用失败: case_id=%s err=%s", case_id, exc)
-        return {"error": str(exc)}
+        error_type = type(exc).__name__
+        logger.error("regenerate_case LLM 调用失败: case_id=%s error_type=%s", case_id, error_type)
+        return {"error": f"{error_type}: 单条用例重写失败"}
 
     # 3. 用重写结果更新该用例
     async with async_session_factory() as session:

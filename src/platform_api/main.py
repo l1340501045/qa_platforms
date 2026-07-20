@@ -3,12 +3,17 @@
 import uuid
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.platform_api.api.v1 import v1_router
-from src.platform_api.core.exceptions import ApiError, api_error_handler, unhandled_error_handler
+from src.platform_api.core.exceptions import (
+    ApiError,
+    api_error_handler,
+    request_validation_error_handler,
+    unhandled_error_handler,
+)
 from src.platform_api.core.settings import settings
-
 
 app = FastAPI(
     title=settings.app_name,
@@ -38,6 +43,7 @@ async def request_id_middleware(request: Request, call_next) -> Response:
 
 # 注册统一异常处理器
 app.add_exception_handler(ApiError, api_error_handler)  # type: ignore[arg-type]
+app.add_exception_handler(RequestValidationError, request_validation_error_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_error_handler)  # type: ignore[arg-type]
 
 

@@ -17,6 +17,7 @@ from typing import List
 
 from pydantic import BaseModel, Field
 
+from src.platform_api.core.model_runtime import ModelRole
 from src.platform_api.core.settings import settings
 from src.testcase_generator.schemas.test_case import (
     Bucket,
@@ -387,7 +388,7 @@ async def verify_cases(
                     user_content=_build_user_content(batch_cases),
                     output_schema=_VerifyLLMOutput,
                     temperature=0.1,
-                    model=runtime.llm_verify_model or None,
+                    model_role=ModelRole.VERIFY,
                 )
 
             try:
@@ -414,7 +415,7 @@ async def verify_cases(
                             user_content=_build_user_content(conflict_cases),
                             output_schema=_VerifyLLMOutput,
                             temperature=0.1,
-                            model=runtime.llm_verify_model or None,
+                            model_role=ModelRole.VERIFY,
                         )
 
                     for _ in range(runtime.revote_n - 1):
