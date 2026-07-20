@@ -62,6 +62,7 @@ class ModelSettingsRepository:
         entries: list[AIModelConfigEntry],
     ) -> None:
         self.session.add(version)
+        await self.session.flush()
         self.session.add_all(entries)
         await self.session.flush()
 
