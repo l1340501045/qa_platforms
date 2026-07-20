@@ -12,6 +12,7 @@ const ExportsPage = lazy(() => import('./pages/Exports'));
 const SearchPage = lazy(() => import('./pages/Search'));
 const CaseLibraryPage = lazy(() => import('./pages/CaseLibrary'));
 const ReviewCenterPage = lazy(() => import('./pages/ReviewCenter'));
+const AIModelSettingsPage = lazy(() => import('./pages/AIModelSettings'));
 
 const PageLoading = () => (
   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '50vh' }}>
@@ -33,6 +34,7 @@ function App() {
           <Route path="exports" element={<ExportsPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="case-library" element={<CaseLibraryPage />} />
+          <Route path="settings/ai-models" element={<AIModelSettingsPage />} />
         </Route>
       </Routes>
     </Suspense>

@@ -7,6 +7,7 @@ import {
   ExportOutlined,
   MenuOutlined,
   SearchOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import NotificationBell from '../components/NotificationBell';
@@ -41,6 +42,11 @@ const menuItems = [
     icon: <ExportOutlined />,
     label: '导出中心',
   },
+  {
+    key: '/settings/ai-models',
+    icon: <SettingOutlined />,
+    label: 'AI 模型设置',
+  },
 ];
 
 function MainLayout() {
@@ -55,6 +61,8 @@ function MainLayout() {
   let selectedKey = '/review';
   if (pathname.startsWith('/exports')) {
     selectedKey = '/exports';
+  } else if (pathname.startsWith('/settings/ai-models')) {
+    selectedKey = '/settings/ai-models';
   } else if (pathname.startsWith('/search')) {
     selectedKey = '/search';
   } else if (pathname.startsWith('/case-library')) {
@@ -69,6 +77,10 @@ function MainLayout() {
   }
 
   const currentItem = menuItems.find((item) => item.key === selectedKey);
+  const currentDescription =
+    selectedKey === '/settings/ai-models'
+      ? '配置全平台统一使用的生成、视觉、校验和向量模型'
+      : '需求资料、生成批次、审查与用例资产的统一工作台';
   const handleMenuClick = ({ key }: { key: string }) => {
     navigate(key);
     setDrawerOpen(false);
@@ -188,7 +200,7 @@ function MainLayout() {
                 whiteSpace: 'nowrap',
               }}
             >
-              需求资料、生成批次、审查与用例资产的统一工作台
+              {currentDescription}
             </div>
           </div>
           <div style={{ flexShrink: 0 }}>
