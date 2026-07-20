@@ -56,6 +56,14 @@ uv run celery -A src.platform_api.core.celery_app worker -Q testcase_generation,
 
 真实跑批依赖 Celery worker。只启动 API 不够。
 
+如需在页面保存四类模型配置，先在 `.env` 中设置 `MODEL_CONFIG_ENCRYPTION_KEY`。API 与 worker 必须使用同一个值：
+
+```bash
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
+```
+
+把输出写入 `.env` 后重启 API 与 worker，再打开“系统设置 → AI 模型设置”。不配置时旧环境变量仍可继续使用，每次处理开始时读取当时的环境配置，但页面会禁用保存。向量模型连接测试要求输出维度固定为 `1024`。
+
 ## 健康检查
 
 ```bash

@@ -58,7 +58,7 @@ macOS / Linux / WSL 可用：
 cp .env.prod.example .env.prod
 ```
 
-3. 编辑 `.env.prod`，必须填入真实 LLM 网关配置：
+3. 编辑 `.env.prod`，首次部署至少填入主模型网关，并配置模型设置加密密钥：
 
 ```text
 LLM_BASE_URL=公司LLM网关地址
@@ -66,7 +66,15 @@ LLM_API_KEY=真实key
 LLM_PRIMARY_MODEL=claude-opus-4-6
 LLM_VISION_MODEL=claude-opus-4-6
 LLM_VERIFY_MODEL=deepseek-v4-pro-office
+OPENAI_EMBEDDING_MODEL=公司向量模型名称
+MODEL_CONFIG_ENCRYPTION_KEY=Fernet密钥
 LLM_CONCURRENCY=8
+```
+
+视觉、校验和向量模型可以先沿用主网关，服务启动后再到“系统设置 → AI 模型设置”逐项拆分。`MODEL_CONFIG_ENCRYPTION_KEY` 用于加密页面保存的 API Key，API 与 worker 必须使用同一个值；可在 macOS、Linux 或 WSL 中生成：
+
+```bash
+uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
 ```
 
 4. 保持 `.env.prod` 中 Docker 内网地址不变：
@@ -193,6 +201,21 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml logs -f web
 - `.env.prod.example`: 生产 Docker 环境变量示例。
 - `.env` / `.env.prod`: 本地真实配置，已被 `.gitignore` 排除，不能提交。
 
+## AI 模型设置
+
+启动平台后，可在“系统设置 → AI 模型设置”统一配置全平台使用的四类 OpenAI 兼容模型：
+
+- 生成模型：负责需求理解和测试用例生成。
+- 视觉模型：只处理图片和视觉内容。
+- 校验模型：负责结构化复核与质量校验。
+- 向量模型：负责知识库向量化，输出维度固定为 `1024`，维度不匹配时不会启用。
+
+每张配置卡都独立填写网关地址、API Key 和模型名称。API Key 不会回显；输入框留空表示继续使用已保存的 Key。保存时后端会再次执行真实连接测试，只有测试通过才会生成一个新的不可变配置版本并启用。
+
+每次模型处理真正开始执行时读取当前有效版本，并在这一次执行结束前固定使用它。因此，保存配置不会让当前正在执行的处理突然换模型；保存后才启动或重新执行的新任务、继续、重试、迭代、重新生成和解析会使用最新版本。页面不提供历史版本或回滚入口，历史仅保留在后端。
+
+如果尚未配置 `MODEL_CONFIG_ENCRYPTION_KEY`，旧环境变量仍可继续运行现有流程，每次处理开始时会读取当时的环境配置，但页面会禁用保存。配置密钥并重启 API 与 worker 后即可从页面保存；同一套部署中的所有 API、worker 实例必须保持该值一致。密钥启用后必须随部署配置安全备份，不要随意更换或丢失，否则历史版本中的 API Key 将无法解密。
+
 ## 安全边界
 
-当前系统没有登录鉴权层，适合在可信公司内网使用。不要直接暴露到公网。
+当前系统没有登录鉴权层，模型设置页也没有单独权限控制，只适合在可信公司内网使用。当前部署使用 HTTP，不要直接暴露到公网；如需公网或非可信网络访问，必须先补充 HTTPS 与登录鉴权。

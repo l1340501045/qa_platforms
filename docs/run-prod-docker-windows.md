@@ -41,7 +41,7 @@ copy .env.prod.example .env.prod
 notepad .env.prod
 ```
 
-必须填写：
+首次部署至少填写：
 
 ```text
 LLM_BASE_URL=公司LLM网关地址
@@ -49,8 +49,24 @@ LLM_API_KEY=真实key
 LLM_PRIMARY_MODEL=claude-opus-4-6
 LLM_VISION_MODEL=claude-opus-4-6
 LLM_VERIFY_MODEL=deepseek-v4-pro-office
+OPENAI_EMBEDDING_MODEL=公司向量模型名称
+MODEL_CONFIG_ENCRYPTION_KEY=Fernet密钥
 LLM_CONCURRENCY=8
 ```
+
+视觉、校验和向量模型可以先沿用主网关，启动后再到“系统设置 → AI 模型设置”逐项拆分。页面保存的 API Key 会使用 `MODEL_CONFIG_ENCRYPTION_KEY` 加密，API 与 worker 必须配置相同值。该密钥必须随 `.env.prod` 一起安全备份，启用后不要随意更换；丢失后历史模型 Key 无法解密。
+
+可在 PowerShell 生成 Fernet 密钥，把输出完整复制到 `.env.prod`：
+
+```powershell
+$bytes = New-Object byte[] 32
+$rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+$rng.GetBytes($bytes)
+$rng.Dispose()
+[Convert]::ToBase64String($bytes).Replace('+','-').Replace('/','_')
+```
+
+如果暂时不配置该密钥，旧环境变量仍能运行，每次处理开始时读取当时的环境配置，但模型设置页会禁用保存。向量模型输出维度固定为 `1024`。
 
 不要把 `.env.prod` 提交到 Git。
 
@@ -113,6 +129,8 @@ docker compose --env-file .env.prod -f docker-compose.prod.yml up -d --build
 ```
 
 API 容器启动时会自动执行 `alembic upgrade head`。
+
+升级后同时重启 API 与 worker，确保两者加载同一个 `MODEL_CONFIG_ENCRYPTION_KEY`。当前正在执行的处理继续使用启动时已经加载的版本；升级或保存后才启动的新任务、继续、重试、迭代和重新生成使用最新配置。
 
 ## 日志
 
