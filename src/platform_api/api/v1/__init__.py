@@ -9,6 +9,7 @@ from src.platform_api.api.v1.cheat_sheets import router as cheat_sheets_router
 from src.platform_api.api.v1.documents import router as documents_router
 from src.platform_api.api.v1.documents import systems_doc_router
 from src.platform_api.api.v1.exports import router as exports_router
+from src.platform_api.api.v1.model_settings import router as model_settings_router
 from src.platform_api.api.v1.notifications import router as notifications_router
 from src.platform_api.api.v1.search import router as search_router
 from src.platform_api.api.v1.systems import router as systems_router
@@ -27,3 +28,4 @@ v1_router.include_router(cheat_sheets_router)
 v1_router.include_router(cheat_sheet_items_router)
 v1_router.include_router(notifications_router)
 v1_router.include_router(search_router)
+v1_router.include_router(model_settings_router)
