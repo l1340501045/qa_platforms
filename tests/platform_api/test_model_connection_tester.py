@@ -7,8 +7,15 @@ from src.platform_api.services.model_connection_tester import ModelConnectionTes
 
 
 class FakeCompletions:
-    def __init__(self, *, content: str = "OK", error: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        content: str = "OK",
+        reasoning_content: str | None = None,
+        error: Exception | None = None,
+    ):
         self.content = content
+        self.reasoning_content = reasoning_content
         self.error = error
         self.requests = []
 
@@ -16,7 +23,17 @@ class FakeCompletions:
         self.requests.append(kwargs)
         if self.error:
             raise self.error
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=self.content))])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    finish_reason="length" if not self.content and self.reasoning_content else "stop",
+                    message=SimpleNamespace(
+                        content=self.content,
+                        reasoning_content=self.reasoning_content,
+                    ),
+                )
+            ]
+        )
 
 
 class FakeEmbeddings:
@@ -30,8 +47,21 @@ class FakeEmbeddings:
 
 
 class FakeClient:
-    def __init__(self, *, content: str = "OK", dimension: int = 1024, error: Exception | None = None):
-        self.chat = SimpleNamespace(completions=FakeCompletions(content=content, error=error))
+    def __init__(
+        self,
+        *,
+        content: str = "OK",
+        reasoning_content: str | None = None,
+        dimension: int = 1024,
+        error: Exception | None = None,
+    ):
+        self.chat = SimpleNamespace(
+            completions=FakeCompletions(
+                content=content,
+                reasoning_content=reasoning_content,
+                error=error,
+            )
+        )
         self.embeddings = FakeEmbeddings(dimension)
 
 
@@ -70,6 +100,25 @@ async def test_chat_roles_execute_their_real_capability_probe(role: ModelRole, c
     assert request["model"] == f"{role.value}-model"
     if role is ModelRole.VISION:
         assert request["messages"][0]["content"][1]["type"] == "image_url"
+
+
+async def test_chat_probe_reserves_enough_output_for_reasoning_model_final_content() -> None:
+    client = FakeClient()
+
+    result = await ModelConnectionTester(client_factory=lambda **_: client).test(_endpoint(ModelRole.PRIMARY))
+
+    assert result.ok is True
+    request = client.chat.completions.requests[0]
+    assert request["max_tokens"] >= 256
+
+
+async def test_reasoning_without_final_content_remains_capability_mismatch() -> None:
+    client = FakeClient(content="", reasoning_content="模型仍在内部推理")
+
+    result = await ModelConnectionTester(client_factory=lambda **_: client).test(_endpoint(ModelRole.PRIMARY))
+
+    assert result.ok is False
+    assert result.category == "capability_mismatch"
 
 
 async def test_embedding_probe_rejects_non_1024_dimension() -> None:
