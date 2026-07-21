@@ -119,6 +119,180 @@ async def test_taxonomy_semantics_migration_preserves_v1_and_adds_v2_columns() -
     assert hasattr(TaxonomyNode, "in_scope_examples")
 
 
+async def test_taxonomy_activation_review_migration_adds_nullable_audit_columns() -> None:
+    async with get_engine().connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                column["name"]: column
+                for column in inspect(sync_connection).get_columns("taxonomy_versions", schema="testcase")
+            }
+        )
+
+    for column_name in (
+        "activation_review_id",
+        "activation_package_hash",
+        "activation_review_hash",
+        "activation_review_artifact",
+        "activation_rollback_plan",
+    ):
+        assert columns[column_name]["nullable"] is True
+        assert hasattr(TaxonomyVersion, column_name)
+
+
+async def test_database_rejects_initial_v2_activation_without_review_artifact(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="reviewed-module")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="valid semantics without review",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="module",
+            display_name="受控模块",
+            definition="具备完整语义定义。",
+            scope_note="用于验证首次 v2 审核门禁。",
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(DBAPIError, match="initial v2 taxonomy activation review required"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_rejects_initial_v2_activation_with_unbound_review_artifact(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="invalid-reviewed-module")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="invalid review binding",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="module",
+            display_name="受控模块",
+            definition="具备完整语义定义。",
+            scope_note="用于验证审核 artifact 绑定。",
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    version.activation_review_id = "review-001"
+    version.activation_package_hash = "2" * 64
+    version.activation_review_hash = "3" * 64
+    version.activation_rollback_plan = "关闭 feature flag。"
+    version.activation_review_artifact = {
+        "package_hash": "2" * 64,
+        "review_hash": "3" * 64,
+        "package": {
+            "system_id": str(system_id),
+            "draft_manifest_hash": version.manifest_hash,
+            "gate_status": "fail",
+            "gold_review_method": "human_independent",
+            "prepared_by": "builder",
+            "evaluation_run_hash": "4" * 64,
+        },
+        "review": {
+            "review_id": "review-001",
+            "package_hash": "2" * 64,
+            "draft_manifest_hash": version.manifest_hash,
+            "evaluation_run_hash": "4" * 64,
+            "decision": "approved",
+            "reviewer": "reviewer",
+        },
+    }
+    with pytest.raises(DBAPIError, match="initial v2 taxonomy activation review invalid"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_rejects_initial_v2_activation_with_missing_review_fields(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="missing-review-fields-module")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="missing review fields",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="module",
+            display_name="受控模块",
+            definition="具备完整语义定义。",
+            scope_note="用于验证缺失审核字段不能利用 SQL NULL 绕过门禁。",
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    version.activation_review_id = "review-001"
+    version.activation_package_hash = "2" * 64
+    version.activation_review_hash = "3" * 64
+    version.activation_rollback_plan = "关闭 feature flag。"
+    version.activation_review_artifact = {
+        "package_hash": "2" * 64,
+        "review_hash": "3" * 64,
+        "package": {
+            "frozen_policy_hash": "4" * 64,
+            "prepared_at": "2026-07-20T10:00:00+00:00",
+        },
+        "review": {"reviewed_at": "2026-07-20T10:05:00+00:00"},
+    }
+    with pytest.raises(DBAPIError, match="initial v2 taxonomy activation review invalid"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
 async def test_database_rejects_v2_activation_without_grounded_capability_semantics(
     db_session: AsyncSession,
     seeded_system,

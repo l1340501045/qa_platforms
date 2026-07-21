@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.database import get_session_factory
@@ -19,7 +20,12 @@ from src.platform_api.models.taxonomy import (
 )
 from src.platform_api.services.taxonomy_admin_service import TaxonomyAdminError, TaxonomyAdminService
 from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
-from src.testcase_generator.services.taxonomy_manifest import taxonomy_node_definition_hash
+from src.testcase_generator.schemas.taxonomy_evaluation import (
+    TaxonomyCalibrationNodeSummary,
+    TaxonomyCalibrationPackage,
+    TaxonomyCalibrationReview,
+)
+from src.testcase_generator.services.taxonomy_manifest import manifest_hash, taxonomy_node_definition_hash
 from tests.platform_api.conftest import requires_db, set_taxonomy_immutability_triggers
 
 pytestmark = requires_db
@@ -152,6 +158,59 @@ def _v2_manifest(
     return TaxonomyManifest.model_validate(payload)
 
 
+def _calibration_artifacts(manifest: TaxonomyManifest):
+    prepared_at = datetime(2026, 7, 20, 10, 0, tzinfo=timezone.utc)
+    root = next(node for node in manifest.nodes if node.parent_stable_key is None)
+    package = TaxonomyCalibrationPackage(
+        schema_version=1,
+        system_id=manifest.system_id,
+        system_key="repository-test-system",
+        draft_manifest_hash=manifest_hash(manifest),
+        evaluation_run_hash="e" * 64,
+        dataset_hash="1" * 64,
+        gold_hash="2" * 64,
+        prediction_hash="3" * 64,
+        policy_hash="4" * 64,
+        frozen_policy_hash="6" * 64,
+        gate_hash="5" * 64,
+        gold_review_method="human_independent",
+        calibration_gold_review_method="human_independent",
+        gate_status="pass",
+        review_scope="top_level_boundary_exception_sample",
+        prepared_by=manifest.created_by,
+        prepared_at=prepared_at,
+        total_node_count=len(manifest.nodes),
+        top_level_nodes=[
+            TaxonomyCalibrationNodeSummary(
+                stable_key=root.stable_key,
+                display_name=root.display_name,
+                node_type=root.node_type,
+                parent_stable_key=None,
+                definition=root.definition or "",
+                scope_note=root.scope_note or "",
+                evidence_count=len(root.in_scope_examples or []) + len(root.out_of_scope_examples or []),
+            )
+        ],
+        critical_boundaries=[],
+        exceptions=[],
+        tree_diff=[],
+        samples=[{"record_id": "sample-1"}],
+    )
+    review = TaxonomyCalibrationReview(
+        schema_version=1,
+        review_id="initial-v2-review",
+        package_hash=package.canonical_hash,
+        draft_manifest_hash=manifest_hash(manifest),
+        evaluation_run_hash=package.evaluation_run_hash,
+        decision="approved",
+        reviewer="taxonomy-reviewer",
+        reviewed_at=prepared_at + timedelta(minutes=5),
+        findings=["pilot 门禁通过，顶层结构和关键边界已复核。"],
+        rollback_plan="关闭通用 taxonomy flag，并恢复上一 active version。",
+    )
+    return package, review
+
+
 async def test_import_dry_run_writes_nothing(db_session: AsyncSession, taxonomy_source) -> None:
     system_id, document_id, content_hash = taxonomy_source
     service = TaxonomyAdminService(db_session)
@@ -214,6 +273,73 @@ async def test_import_v2_persists_schema_and_node_semantics(db_session: AsyncSes
     assert capability.scope_note == "包含筛选与排序，不包含上传。"
     assert capability.in_scope_examples[0]["requirement_unit_id"] == f"ru_{'1' * 64}"
     assert capability.out_of_scope_examples == []
+    await db_session.rollback()
+
+
+async def test_initial_v2_activation_requires_and_persists_controlled_calibration_review(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    manifest = _v2_manifest(system_id=system_id, document_id=document_id, content_hash=content_hash)
+    service = TaxonomyAdminService(db_session)
+    imported = await service.import_manifest(manifest, apply=True)
+
+    with pytest.raises(TaxonomyAdminError, match="initial_v2_calibration_review_required"):
+        await service.activate(
+            system_id=system_id,
+            version=1,
+            actor="taxonomy-reviewer",
+            apply=True,
+        )
+
+    package, review = _calibration_artifacts(manifest)
+    result = await service.activate(
+        system_id=system_id,
+        version=1,
+        actor="taxonomy-reviewer",
+        calibration_package=package,
+        calibration_review=review,
+        apply=True,
+    )
+    stored = await db_session.get(TaxonomyVersion, imported.version_id)
+
+    assert result.applied is True
+    assert stored is not None
+    assert stored.status == "active"
+    assert stored.activation_review_id == review.review_id
+    assert stored.activation_package_hash == package.canonical_hash
+    assert stored.activation_review_hash == review.canonical_hash
+    assert stored.activation_review_artifact["review"]["decision"] == "approved"
+    assert stored.activation_review_artifact["package"]["dataset_hash"] == "1" * 64
+    assert stored.activation_rollback_plan == review.rollback_plan
+    await db_session.rollback()
+
+
+async def test_initial_v2_activation_review_cannot_change_while_retiring(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    manifest = _v2_manifest(system_id=system_id, document_id=document_id, content_hash=content_hash)
+    service = TaxonomyAdminService(db_session)
+    imported = await service.import_manifest(manifest, apply=True)
+    package, review = _calibration_artifacts(manifest)
+    await service.activate(
+        system_id=system_id,
+        version=1,
+        actor="taxonomy-reviewer",
+        calibration_package=package,
+        calibration_review=review,
+        apply=True,
+    )
+    stored = await db_session.get(TaxonomyVersion, imported.version_id)
+    assert stored is not None
+
+    stored.status = "retired"
+    stored.activation_rollback_plan = "篡改后的回滚计划。"
+    with pytest.raises(DBAPIError, match="taxonomy activation review is immutable"):
+        await db_session.commit()
     await db_session.rollback()
 
 

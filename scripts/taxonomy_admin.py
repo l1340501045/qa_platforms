@@ -16,8 +16,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.platform_api.core.database import get_session_factory  # noqa: E402
 from src.platform_api.services.taxonomy_admin_service import (  # noqa: E402
+    TaxonomyActivationResult,
     TaxonomyAdminError,
     TaxonomyAdminService,
+    TaxonomyImportResult,
+)
+from src.testcase_generator.schemas.taxonomy_evaluation import (  # noqa: E402
+    TaxonomyCalibrationPackage,
+    TaxonomyCalibrationReview,
 )
 from src.testcase_generator.services.taxonomy_manifest import (  # noqa: E402
     load_manifest,
@@ -41,6 +47,8 @@ def _parser() -> argparse.ArgumentParser:
     activate.add_argument("--system-id", type=UUID, required=True)
     activate.add_argument("--version", type=int, required=True)
     activate.add_argument("--actor", required=True)
+    activate.add_argument("--calibration-package", type=Path)
+    activate.add_argument("--calibration-review", type=Path)
     activate.add_argument("--apply", action="store_true")
     return parser
 
@@ -67,6 +75,7 @@ async def _run_async(args: argparse.Namespace) -> int:
     factory = get_session_factory()
     async with factory() as session:
         service = TaxonomyAdminService(session)
+        result: TaxonomyImportResult | TaxonomyActivationResult
         if args.command == "import":
             result = await service.import_manifest(
                 load_manifest(args.manifest),
@@ -74,10 +83,22 @@ async def _run_async(args: argparse.Namespace) -> int:
                 apply=args.apply,
             )
         else:
+            calibration_package = (
+                TaxonomyCalibrationPackage.model_validate_json(args.calibration_package.read_text(encoding="utf-8"))
+                if args.calibration_package
+                else None
+            )
+            calibration_review = (
+                TaxonomyCalibrationReview.model_validate_json(args.calibration_review.read_text(encoding="utf-8"))
+                if args.calibration_review
+                else None
+            )
             result = await service.activate(
                 system_id=args.system_id,
                 version=args.version,
                 actor=args.actor,
+                calibration_package=calibration_package,
+                calibration_review=calibration_review,
                 apply=args.apply,
             )
     _print_json(asdict(result))

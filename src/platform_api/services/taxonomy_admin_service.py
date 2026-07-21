@@ -24,6 +24,11 @@ from src.testcase_generator.schemas.taxonomy import (
     TaxonomyMappingManifest,
     TaxonomyNodeManifest,
 )
+from src.testcase_generator.schemas.taxonomy_evaluation import (
+    TaxonomyCalibrationPackage,
+    TaxonomyCalibrationReview,
+)
+from src.testcase_generator.services.taxonomy_evaluation import validate_calibration_review_binding
 from src.testcase_generator.services.taxonomy_manifest import (
     manifest_hash,
     taxonomy_definition_hash,
@@ -55,6 +60,7 @@ class TaxonomyActivationResult:
     version_id: UUID
     version: int
     retiring_version_id: UUID | None
+    activation_review_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,8 @@ class TaxonomyAdminService:
         system_id: UUID,
         version: int,
         actor: str,
+        calibration_package: TaxonomyCalibrationPackage | None = None,
+        calibration_review: TaxonomyCalibrationReview | None = None,
         apply: bool = False,
     ) -> TaxonomyActivationResult:
         actor = self._validated_actor(actor)
@@ -100,13 +108,31 @@ class TaxonomyAdminService:
             target = next((item for item in versions if item.version == version), None)
             if target is None:
                 raise TaxonomyAdminError("taxonomy_version_not_found", f"version={version}")
+            initial_v2_activation = target.schema_version == 2 and not any(
+                item.id != target.id and item.schema_version == 2 and item.status in {"active", "retired"}
+                for item in versions
+            )
             if target.status == "active":
+                if initial_v2_activation and not all(
+                    (
+                        target.activation_review_id,
+                        target.activation_package_hash,
+                        target.activation_review_hash,
+                        target.activation_review_artifact,
+                        target.activation_rollback_plan,
+                    )
+                ):
+                    raise TaxonomyAdminError(
+                        "active_v2_calibration_review_missing",
+                        "首次 active v2 taxonomy 缺少校准审核审计，不能视为合法幂等激活",
+                    )
                 return TaxonomyActivationResult(
                     applied=False,
                     idempotent=True,
                     version_id=target.id,
                     version=target.version,
                     retiring_version_id=None,
+                    activation_review_hash=target.activation_review_hash,
                 )
             if target.status != "draft":
                 raise TaxonomyAdminError("retired_version_cannot_activate", f"version={version}")
@@ -128,12 +154,39 @@ class TaxonomyAdminService:
                 )
             await self._validate_stored_definition(target, for_update=apply)
 
+            activation_time = datetime.now(timezone.utc)
+            authorization = None
+            if initial_v2_activation:
+                if calibration_package is None or calibration_review is None:
+                    raise TaxonomyAdminError(
+                        "initial_v2_calibration_review_required",
+                        "首次激活 v2 taxonomy 必须提供通过门禁的校准包与独立审核记录",
+                    )
+                try:
+                    authorization = validate_calibration_review_binding(
+                        draft_system_id=target.system_id,
+                        draft_manifest_hash=target.manifest_hash,
+                        draft_created_by=target.created_by,
+                        package=calibration_package,
+                        review=calibration_review,
+                        activation_actor=actor,
+                        activation_at=activation_time,
+                    )
+                except ValueError as exc:
+                    raise TaxonomyAdminError("initial_v2_calibration_review_invalid", str(exc)) from exc
+            elif calibration_package is not None or calibration_review is not None:
+                raise TaxonomyAdminError(
+                    "calibration_review_not_required",
+                    "校准包只用于每个系统首次 v2 激活，后续版本沿用常规独立 review",
+                )
+
             result = TaxonomyActivationResult(
                 applied=apply,
                 idempotent=False,
                 version_id=target.id,
                 version=target.version,
                 retiring_version_id=current.id if current else None,
+                activation_review_hash=authorization.review_hash if authorization else None,
             )
             if not apply:
                 return result
@@ -143,7 +196,18 @@ class TaxonomyAdminService:
                 await self.session.flush()
             target.status = "active"
             target.activated_by = actor
-            target.activated_at = datetime.now(timezone.utc)
+            target.activated_at = activation_time
+            if authorization is not None and calibration_review is not None:
+                target.activation_review_id = authorization.review_id
+                target.activation_package_hash = authorization.package_hash
+                target.activation_review_hash = authorization.review_hash
+                target.activation_review_artifact = {
+                    "package_hash": authorization.package_hash,
+                    "review_hash": authorization.review_hash,
+                    "package": calibration_package.model_dump(mode="json") if calibration_package else None,
+                    "review": calibration_review.model_dump(mode="json"),
+                }
+                target.activation_rollback_plan = authorization.rollback_plan
             await self.session.flush()
             return result
 

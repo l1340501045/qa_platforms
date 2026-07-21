@@ -55,6 +55,27 @@ class TaxonomyVersion(Base):
             "(status IN ('active', 'retired') AND activated_by IS NOT NULL AND activated_at IS NOT NULL)",
             name="ck_taxonomy_versions_activation_metadata",
         ),
+        CheckConstraint(
+            "(activation_review_id IS NULL AND activation_package_hash IS NULL "
+            "AND activation_review_hash IS NULL AND activation_review_artifact IS NULL "
+            "AND activation_rollback_plan IS NULL) OR "
+            "(activation_review_id IS NOT NULL AND activation_package_hash IS NOT NULL "
+            "AND activation_review_hash IS NOT NULL AND activation_review_artifact IS NOT NULL "
+            "AND NULLIF(btrim(activation_rollback_plan), '') IS NOT NULL)",
+            name="ck_taxonomy_versions_activation_review_complete",
+        ),
+        CheckConstraint(
+            "activation_package_hash IS NULL OR activation_package_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_taxonomy_versions_activation_package_hash",
+        ),
+        CheckConstraint(
+            "activation_review_hash IS NULL OR activation_review_hash ~ '^[0-9a-f]{64}$'",
+            name="ck_taxonomy_versions_activation_review_hash",
+        ),
+        CheckConstraint(
+            "activation_review_artifact IS NULL OR jsonb_typeof(activation_review_artifact) = 'object'",
+            name="ck_taxonomy_versions_activation_review_artifact_object",
+        ),
         Index(
             "uq_taxonomy_versions_one_active",
             "system_id",
@@ -78,6 +99,14 @@ class TaxonomyVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     activated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activation_review_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    activation_package_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    activation_review_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    activation_review_artifact: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True),
+        nullable=True,
+    )
+    activation_rollback_plan: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class TaxonomyNode(Base):
