@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.platform_api.core.database import get_session
 from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.response import PaginationParams, paginated_response, success
-from src.platform_api.core.stage_names import PIPELINE_STAGES
+from src.platform_api.core.stage_names import PIPELINE_STAGES, to_progress_canonical
 from src.platform_api.schemas.batch import (
     ClarificationRequest,
     GenerateRequest,
@@ -133,7 +133,7 @@ async def get_batch_detail(
     # 查询所有 stage_artifacts 用于可观测性透传
     artifacts_stmt = select(StageArtifact).where(StageArtifact.batch_id == batch_id).order_by(StageArtifact.created_at)
     artifacts_result = await session.execute(artifacts_stmt)
-    artifacts_map = {a.stage: a for a in artifacts_result.scalars().all()}
+    artifacts_map = {to_progress_canonical(a.stage): a for a in artifacts_result.scalars().all()}
 
     # 构建 stage_progress（含增强字段）
     current_stage = batch_resp.current_stage
@@ -340,6 +340,8 @@ def _build_stage_progress(current_stage: str | None, batch_status: str) -> list[
     """根据当前阶段和批次状态构建阶段进度列表"""
     stages = []
     current_found = False
+    if current_stage is not None and current_stage not in PIPELINE_STAGES:
+        current_stage = None
 
     for stage_name in PIPELINE_STAGES:
         if batch_status in ("completed", "pending_review", "reviewing", "archived"):

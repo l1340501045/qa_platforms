@@ -71,6 +71,7 @@ async def _execute_pipeline(
             .where(TestBatch.id == batch_id)
             .values(
                 status=BatchStatus.RUNNING,
+                current_stage="parse",
                 celery_task_id=celery_task_id,
                 started_at=datetime.now(timezone.utc),
                 generation_config=config,
@@ -91,6 +92,7 @@ async def _execute_pipeline_graph(
 ) -> dict:
     """在已绑定模型配置版本的上下文中运行完整流水线。"""
 
+    from src.platform_api.core.stage_names import next_progress_stage_after_node
     from src.testcase_generator.pipeline.persistence import open_async_checkpointer
     from src.testcase_generator.pipeline.runner import compile_pipeline
     from src.testcase_generator.tasks.callbacks import (
@@ -98,6 +100,7 @@ async def _execute_pipeline_graph(
         on_pipeline_failed,
         on_pipeline_suspended,
         on_stage_complete,
+        on_stage_progress,
     )
 
     try:
@@ -114,11 +117,25 @@ async def _execute_pipeline_graph(
 
             # 异步流式执行
             final_state: dict = {}
+            completed_artifact_stages: set[str] = set()
+            await on_stage_progress(batch_id=batch_id, stage="parse")
             async for event in app.astream(initial_state, config=run_config):
                 # LangGraph astream 输出格式: {"node_name": {state_updates}}
-                for _node_name, node_output in event.items():
+                for node_name, node_output in event.items():
                     if isinstance(node_output, dict):
                         final_state.update(node_output)
+                        artifact_key = f"{node_name}_artifact"
+                        next_stage = next_progress_stage_after_node(node_name)
+                        if artifact_key in node_output:
+                            await on_stage_complete(
+                                batch_id=batch_id,
+                                stage=node_name,
+                                artifact=node_output[artifact_key],
+                                current_stage=next_stage,
+                            )
+                            completed_artifact_stages.add(node_name)
+                        else:
+                            await on_stage_progress(batch_id=batch_id, stage=next_stage)
 
             # 5. 检查是否被 interrupt 挂起
             # LangGraph 的 interrupt() 不抛异常，stream 正常结束后需检查 state
@@ -158,8 +175,13 @@ async def _execute_pipeline_graph(
         # 阶段产物回调
         for stage_name in ("parse", "comprehend", "rule_extract", "test_points", "write_cases", "review", "export"):
             artifact_key = f"{stage_name}_artifact"
-            if artifact_key in final_state:
-                await on_stage_complete(batch_id=batch_id, stage=stage_name, artifact=final_state[artifact_key])
+            if stage_name not in completed_artifact_stages and artifact_key in final_state:
+                await on_stage_complete(
+                    batch_id=batch_id,
+                    stage=stage_name,
+                    artifact=final_state[artifact_key],
+                    current_stage="export",
+                )
 
         return {"status": "completed", "batch_id": batch_id}
 
@@ -195,7 +217,11 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
     # 1. 更新 status → running
     async with async_session_factory() as session:
         model_bundle = await load_active_model_bundle(session)
-        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(status=BatchStatus.RUNNING)
+        stmt = (
+            update(TestBatch)
+            .where(TestBatch.id == batch_id)
+            .values(status=BatchStatus.RUNNING, current_stage="comprehend")
+        )
         await session.execute(stmt)
         await session.commit()
 
@@ -207,12 +233,14 @@ async def _resume_pipeline_graph(batch_id: str, clarification_answers: list[dict
     """在本次恢复开始时读取的最新模型配置上下文中执行流水线。"""
     from langgraph.types import Command
 
+    from src.platform_api.core.stage_names import next_progress_stage_after_node
     from src.testcase_generator.pipeline.persistence import open_async_checkpointer
     from src.testcase_generator.pipeline.runner import compile_pipeline
     from src.testcase_generator.tasks.callbacks import (
         on_pipeline_complete,
         on_pipeline_failed,
         on_pipeline_suspended,
+        on_stage_progress,
     )
 
     try:
@@ -225,10 +253,15 @@ async def _resume_pipeline_graph(batch_id: str, clarification_answers: list[dict
             resume_input = Command(resume={"clarification_answers": clarification_answers})
 
             final_state: dict = {}
+            await on_stage_progress(batch_id=batch_id, stage="comprehend")
             async for event in app.astream(resume_input, config=run_config):
-                for _node_name, node_output in event.items():
+                for node_name, node_output in event.items():
                     if isinstance(node_output, dict):
                         final_state.update(node_output)
+                        await on_stage_progress(
+                            batch_id=batch_id,
+                            stage=next_progress_stage_after_node(node_name),
+                        )
 
             # 检查是否再次 interrupt
             snapshot = await app.aget_state(run_config)

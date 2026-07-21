@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.celery_app import celery_app
 from src.platform_api.core.exceptions import ApiError
-from src.platform_api.core.stage_names import to_canonical
+from src.platform_api.core.stage_names import to_progress_canonical
 from src.platform_api.models.enums import BatchStatus
 from src.platform_api.models.knowledge import Document
 from src.platform_api.models.testcase import StageArtifact, TestBatch
@@ -62,7 +62,7 @@ class GenerationService:
             document_id=batch.document_id,
             system_id=batch.system_id,
             status=batch.status,
-            current_stage=to_canonical(batch.current_stage) if batch.current_stage else None,
+            current_stage=to_progress_canonical(batch.current_stage) if batch.current_stage else None,
             total_cases=batch.total_cases,
             created_at=batch.created_at,
             updated_at=batch.updated_at,
@@ -94,7 +94,7 @@ class GenerationService:
         return BatchStatusResponse(
             id=batch.id,
             status=batch.status,
-            current_stage=to_canonical(batch.current_stage) if batch.current_stage else None,
+            current_stage=to_progress_canonical(batch.current_stage) if batch.current_stage else None,
             total_cases=batch.total_cases,
             open_questions=open_questions,
         )
@@ -117,7 +117,7 @@ class GenerationService:
             document_id=batch.document_id,
             system_id=batch.system_id,
             status=batch.status,
-            current_stage=to_canonical(batch.current_stage) if batch.current_stage else None,
+            current_stage=to_progress_canonical(batch.current_stage) if batch.current_stage else None,
             total_cases=batch.total_cases,
             document_title=document_title,
             started_at=batch.started_at,

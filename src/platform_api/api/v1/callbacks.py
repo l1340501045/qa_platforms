@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.database import get_session
+from src.platform_api.core.stage_names import to_progress_internal
 from src.platform_api.models.enums import BatchStatus
 from src.platform_api.models.testcase import StageArtifact, TestBatch
 from src.platform_api.repositories.base import BaseRepository
@@ -59,14 +60,15 @@ async def stage_complete_callback(
     """单阶段完成回调"""
     batch_repo = BaseRepository(session, TestBatch)
     batch = await batch_repo.get_by_id(UUID(data.batch_id))
+    stage = to_progress_internal(data.stage)
     if batch:
-        batch.current_stage = data.stage
+        batch.current_stage = stage
         await session.flush()
 
     # 写入 stage artifact
     artifact = StageArtifact(
         batch_id=UUID(data.batch_id),
-        stage=data.stage,
+        stage=stage,
         status="completed",
         artifact=data.artifact,
     )
@@ -94,7 +96,7 @@ async def pipeline_complete_callback(
         notification_service = NotificationService(session)
         await notification_service.create_notification(
             type="batch_completed",
-            title=f"用例生成完成",
+            title="用例生成完成",
             body=f"共生成 {data.total_cases} 条用例，请前往 Review",
             target_type="batch",
             target_id=batch.id,
@@ -120,7 +122,7 @@ async def pipeline_failed_callback(
         notification_service = NotificationService(session)
         await notification_service.create_notification(
             type="batch_failed",
-            title=f"用例生成失败",
+            title="用例生成失败",
             body=f"在 {data.stage} 阶段发生错误，可尝试重试",
             target_type="batch",
             target_id=batch.id,
@@ -149,14 +151,14 @@ async def pipeline_suspended_callback(
     batch = await batch_repo.get_by_id(UUID(data.batch_id))
     if batch:
         batch.status = BatchStatus.SUSPENDED
-        batch.current_stage = "comprehend"
+        batch.current_stage = "gate"
         await session.flush()
 
         # 创建通知
         notification_service = NotificationService(session)
         await notification_service.create_notification(
             type="batch_suspended",
-            title=f"用例生成需要人工确认",
+            title="用例生成需要人工确认",
             body=f"有 {len(data.open_questions)} 个问题需要确认",
             target_type="batch",
             target_id=batch.id,
