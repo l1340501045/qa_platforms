@@ -3,8 +3,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import String, Text, DateTime, Integer, Float, Boolean, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.platform_api.models.public import Base
@@ -28,6 +28,11 @@ class TestBatch(Base):
     total_cases: Mapped[int | None] = mapped_column(Integer, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     generation_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("testcase.taxonomy_versions.id", ondelete="RESTRICT", onupdate="CASCADE"),
+        nullable=True,
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -53,6 +58,13 @@ class TestPoint(Base):
     derived_from: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # 规则台账软关联：指向 testcase.rules.id（落库时由规则码解析；历史批次为 NULL）
     rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_concept_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("testcase.taxonomy_concepts.id", ondelete="RESTRICT", onupdate="CASCADE"),
+        nullable=True,
+    )
+    related_taxonomy_concept_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_resolution: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -100,6 +112,13 @@ class TestCase(Base):
     provenance: Mapped[dict] = mapped_column(JSONB, nullable=False)
     trust_level: Mapped[int] = mapped_column(Integer, nullable=False)
     confidence_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    taxonomy_concept_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("testcase.taxonomy_concepts.id", ondelete="RESTRICT", onupdate="CASCADE"),
+        nullable=True,
+    )
+    related_taxonomy_concept_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_resolution: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     review_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="'pending'")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

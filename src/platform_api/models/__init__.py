@@ -10,6 +10,13 @@ from src.platform_api.models.knowledge import (
 )
 from src.platform_api.models.model_settings import AIModelConfigEntry, AIModelConfigState, AIModelConfigVersion
 from src.platform_api.models.public import Base, System, SystemAssociation
+from src.platform_api.models.taxonomy import (
+    RequirementTaxonomyMapping,
+    TaxonomyBackfillRun,
+    TaxonomyConcept,
+    TaxonomyNode,
+    TaxonomyVersion,
+)
 from src.platform_api.models.testcase import (
     ExportTask,
     GoldenSetResult,
@@ -24,6 +31,11 @@ __all__ = [
     "Base",
     "System",
     "SystemAssociation",
+    "TaxonomyConcept",
+    "TaxonomyVersion",
+    "TaxonomyNode",
+    "RequirementTaxonomyMapping",
+    "TaxonomyBackfillRun",
     "AIModelConfigVersion",
     "AIModelConfigEntry",
     "AIModelConfigState",
