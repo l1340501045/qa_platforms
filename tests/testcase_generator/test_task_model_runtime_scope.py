@@ -96,6 +96,7 @@ async def test_resume_pipeline_uses_latest_model_when_execution_restarts(monkeyp
             on_pipeline_complete=AsyncMock(),
             on_pipeline_failed=AsyncMock(),
             on_pipeline_suspended=AsyncMock(),
+            on_stage_progress=AsyncMock(),
         ),
     )
 
@@ -283,6 +284,7 @@ async def test_pipeline_failure_never_exposes_provider_error_text(monkeypatch, c
             on_pipeline_failed=failed_callback,
             on_pipeline_suspended=AsyncMock(),
             on_stage_complete=AsyncMock(),
+            on_stage_progress=AsyncMock(),
         ),
     )
 

@@ -8,25 +8,44 @@ from datetime import datetime, timezone
 
 from sqlalchemy import update
 
-from src.testcase_generator.db import async_session_factory
-from src.platform_api.models.testcase import Rule, TestBatch, TestCase, TestPoint, StageArtifact
+from src.platform_api.core.stage_names import to_progress_internal
 from src.platform_api.models.enums import BatchStatus, ReviewStatus
+from src.platform_api.models.testcase import Rule, StageArtifact, TestBatch, TestCase, TestPoint
+from src.testcase_generator.db import async_session_factory
 
 logger = logging.getLogger(__name__)
 
 
-async def on_stage_complete(batch_id: str, stage: str, artifact: dict) -> None:
+async def on_stage_progress(batch_id: str, stage: str) -> None:
+    """阶段运行中回调：仅推进 batch.current_stage，供前端实时展示。"""
+    progress_stage = to_progress_internal(stage)
+    async with async_session_factory() as session:
+        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(current_stage=progress_stage)
+        await session.execute(stmt)
+        await session.commit()
+
+    logger.info("Stage progress for batch %s → %s", batch_id, progress_stage)
+
+
+async def on_stage_complete(
+    batch_id: str,
+    stage: str,
+    artifact: dict,
+    current_stage: str | None = None,
+) -> None:
     """单阶段完成回调：更新 batch.current_stage + 写入 stage_artifacts"""
+    artifact_stage = to_progress_internal(stage)
+    progress_stage = to_progress_internal(current_stage or stage)
     async with async_session_factory() as session:
         # 更新 batch current_stage
-        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(current_stage=stage)
+        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(current_stage=progress_stage)
         await session.execute(stmt)
 
         # 写入 stage_artifacts
         stage_artifact = StageArtifact(
             id=uuid.uuid4(),
             batch_id=uuid.UUID(batch_id),
-            stage=stage,
+            stage=artifact_stage,
             status="completed",
             artifact=artifact,
             completed_at=datetime.now(timezone.utc),
@@ -34,7 +53,7 @@ async def on_stage_complete(batch_id: str, stage: str, artifact: dict) -> None:
         session.add(stage_artifact)
         await session.commit()
 
-    logger.info("Stage '%s' completed for batch %s", stage, batch_id)
+    logger.info("Stage '%s' completed for batch %s; progress → %s", artifact_stage, batch_id, progress_stage)
 
 
 async def on_pipeline_complete(
@@ -66,15 +85,17 @@ async def on_pipeline_complete(
                 if not code:
                     continue
                 rule_pk = uuid.uuid4()
-                session.add(Rule(
-                    id=rule_pk,
-                    batch_id=batch_uuid,
-                    rule_code=code,
-                    module=r.get("module", ""),
-                    rule=r.get("rule", ""),
-                    source_quote=r.get("source_quote", ""),
-                    category=r.get("category", ""),
-                ))
+                session.add(
+                    Rule(
+                        id=rule_pk,
+                        batch_id=batch_uuid,
+                        rule_code=code,
+                        module=r.get("module", ""),
+                        rule=r.get("rule", ""),
+                        source_quote=r.get("source_quote", ""),
+                        category=r.get("category", ""),
+                    )
+                )
                 rule_code_map[code] = rule_pk
 
         # ── 1. 写入 test_points ──────────────────────────────────────
@@ -227,7 +248,7 @@ async def on_pipeline_suspended(batch_id: str, open_questions: list) -> None:
             .where(TestBatch.id == batch_id)
             .values(
                 status=BatchStatus.SUSPENDED,
-                current_stage="comprehend",
+                current_stage="gate",
             )
         )
         await session.execute(stmt)
