@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.repositories.batch_repo import BatchRepository
 from src.platform_api.repositories.testcase_repo import TestCaseRepository
-from src.testcase_generator.services.module_tree_classifier import classify_case_for_audit
+from src.testcase_generator.services.module_tree_classifier import classify_case_tree_coordinates
 
 CASE_TREE_VIEWS = {"all", "stable", "review_required"}
 
@@ -195,36 +195,4 @@ class CaseTreeService:
 
     def _classify_tree_coordinates(self, case: dict) -> tuple[str, list[str], dict]:
         """派生平台用例树坐标；旧批次无法识别时保留 source_section 兼容行为。"""
-        provenance = case.get("provenance") or {}
-        classification = classify_case_for_audit(
-            {
-                "title": case.get("title") or "",
-                "provenance": provenance,
-            }
-        )
-        module_name = classification.get("business_module") or "_review_required"
-        branch_path = classification.get("branch_path") or ["通用规则"]
-
-        source_section = str(provenance.get("source_section") or "").strip()
-        if module_name == "_review_required":
-            if source_section and source_section != "unresolved":
-                return (
-                    source_section,
-                    [source_section],
-                    {
-                        **classification,
-                        "classification_confidence": "legacy_source_section_fallback",
-                    },
-                )
-            if not source_section:
-                return (
-                    "未分类",
-                    ["未分类"],
-                    {
-                        **classification,
-                        "classification_confidence": "legacy_uncategorized_fallback",
-                    },
-                )
-            return "待分类", ["未匹配模块"], classification
-
-        return str(module_name), [str(part) for part in branch_path], classification
+        return classify_case_tree_coordinates(case)

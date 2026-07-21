@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
+from src.testcase_generator.schemas.taxonomy import TaxonomyManifest, TaxonomySelectorFacts
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 
 SYSTEM_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -51,7 +51,7 @@ def _manifest_data() -> dict:
                 "confidence": 1.0,
                 "reason": "PRD 明确描述筛选与排序能力",
                 "review_status": "approved",
-                "reviewed_by": "echo_lacey",
+                "reviewed_by": "taxonomy_reviewer",
                 "reviewed_at": datetime(2026, 7, 21, tzinfo=timezone.utc).isoformat(),
             }
         ],
@@ -113,12 +113,42 @@ def test_manifest_rejects_unknown_selector_field() -> None:
         TaxonomyManifest.model_validate(data)
 
 
+def test_manifest_rejects_selector_with_multiple_fact_types() -> None:
+    data = _manifest_data()
+    data["mappings"][0]["selector"] = {
+        "structural_key": "filter.sort",
+        "requirement_anchor": "REQ-001",
+    }
+
+    with pytest.raises(ValidationError, match="selector_requires_exactly_one_value"):
+        TaxonomyManifest.model_validate(data)
+
+
+def test_selector_facts_reject_duplicate_requirement_anchors() -> None:
+    with pytest.raises(ValidationError, match="duplicate_requirement_anchor"):
+        TaxonomySelectorFacts.model_validate(
+            {
+                "schema_version": 1,
+                "feature_fingerprint": FEATURE_FINGERPRINT,
+                "requirement_anchors": ["REQ-001", "REQ-001"],
+            }
+        )
+
+
 def test_manifest_requires_review_metadata_for_approved_mapping() -> None:
     data = _manifest_data()
     data["mappings"][0]["reviewed_by"] = None
     data["mappings"][0]["reviewed_at"] = None
 
-    with pytest.raises(ValidationError, match="approved_review_metadata_required"):
+    with pytest.raises(ValidationError, match="reviewed_mapping_metadata_required"):
+        TaxonomyManifest.model_validate(data)
+
+
+def test_manifest_rejects_mapping_self_approval() -> None:
+    data = _manifest_data()
+    data["mappings"][0]["reviewed_by"] = data["created_by"]
+
+    with pytest.raises(ValidationError, match="mapping_self_approval_forbidden"):
         TaxonomyManifest.model_validate(data)
 
 
@@ -160,3 +190,14 @@ def test_manifest_rejects_duplicate_mapping_identity() -> None:
 
     with pytest.raises(ValidationError, match="duplicate_mapping_identity"):
         TaxonomyManifest.model_validate(data)
+
+
+def test_manifest_mapping_identity_is_scoped_by_document() -> None:
+    data = _manifest_data()
+    second_document_mapping = deepcopy(data["mappings"][0])
+    second_document_mapping["document_id"] = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    data["mappings"].append(second_document_mapping)
+
+    manifest = TaxonomyManifest.model_validate(data)
+
+    assert len(manifest.mappings) == 2

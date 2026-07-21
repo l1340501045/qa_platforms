@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 MODULE_RULES: list[dict] = [
     {
@@ -387,7 +388,7 @@ def _branch_path_for_module(
     return ["通用规则"]
 
 
-def classify_case_for_audit(record: dict) -> dict:
+def classify_case_for_audit(record: dict[str, Any]) -> dict[str, Any]:
     """为审查/用例树派生业务模块树坐标，不写回原 case/provenance。"""
     refs = source_refs_of(record)
     text = _classification_text(record)
@@ -413,3 +414,40 @@ def classify_case_for_audit(record: dict) -> dict:
         "classification_reason": reason,
         "cross_cutting_tags": cross_cutting_tags,
     }
+
+
+def classify_case_tree_coordinates(record: dict[str, Any]) -> tuple[str, list[str], dict[str, Any]]:
+    """返回旧平台实际展示的树坐标，并保留分类器原始证据。"""
+    provenance = record.get("provenance") or {}
+    classification = classify_case_for_audit(
+        {
+            "title": record.get("title") or "",
+            "provenance": provenance,
+        }
+    )
+    module_name = classification.get("business_module") or "_review_required"
+    branch_path = classification.get("branch_path") or ["通用规则"]
+
+    source_section = str(provenance.get("source_section") or "").strip()
+    if module_name == "_review_required":
+        if source_section and source_section != "unresolved":
+            return (
+                source_section,
+                [source_section],
+                {
+                    **classification,
+                    "classification_confidence": "legacy_source_section_fallback",
+                },
+            )
+        if not source_section:
+            return (
+                "未分类",
+                ["未分类"],
+                {
+                    **classification,
+                    "classification_confidence": "legacy_uncategorized_fallback",
+                },
+            )
+        return "待分类", ["未匹配模块"], classification
+
+    return str(module_name), [str(part) for part in branch_path], classification

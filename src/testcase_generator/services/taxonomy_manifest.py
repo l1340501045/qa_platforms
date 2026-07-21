@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
-from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
+from src.testcase_generator.schemas.taxonomy import TaxonomyAssignmentSet, TaxonomyManifest
 
 
 def load_manifest(path: str | Path) -> TaxonomyManifest:
@@ -14,7 +15,12 @@ def load_manifest(path: str | Path) -> TaxonomyManifest:
     return TaxonomyManifest.model_validate(payload)
 
 
-def canonical_manifest_dict(manifest: TaxonomyManifest) -> dict:
+def load_assignment_set(path: str | Path) -> TaxonomyAssignmentSet:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    return TaxonomyAssignmentSet.model_validate(payload)
+
+
+def canonical_manifest_dict(manifest: TaxonomyManifest) -> dict[str, Any]:
     payload = manifest.model_dump(mode="json", exclude_none=True)
     for node in payload["nodes"]:
         node["aliases"] = sorted(node.get("aliases", []))
@@ -42,3 +48,31 @@ def manifest_hash(manifest: TaxonomyManifest) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def taxonomy_definition_hash(manifest: TaxonomyManifest) -> str:
+    return taxonomy_node_definition_hash([node.model_dump(mode="json", exclude_none=True) for node in manifest.nodes])
+
+
+def taxonomy_node_definition_hash(nodes: list[dict[str, Any]]) -> str:
+    canonical_nodes: list[dict[str, Any]] = []
+    for node in nodes:
+        normalized = dict(node)
+        normalized["aliases"] = sorted(normalized.get("aliases", []))
+        canonical_nodes.append(normalized)
+    payload = json.dumps(
+        sorted(canonical_nodes, key=lambda node: node["stable_key"]),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def assignment_hash(assignments: TaxonomyAssignmentSet) -> str:
+    payload = assignments.model_dump(mode="json", exclude_none=True)
+    for assignment in payload["assignments"]:
+        assignment["related_stable_keys"] = sorted(assignment.get("related_stable_keys", []))
+    payload["assignments"] = sorted(payload["assignments"], key=lambda item: item["case_id"])
+    canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

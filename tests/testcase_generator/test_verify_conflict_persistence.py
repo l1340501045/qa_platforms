@@ -1,4 +1,5 @@
 """verify 矛盾结果落库 — 复现/定位/回归。"""
+
 from __future__ import annotations
 
 import pytest
@@ -8,6 +9,8 @@ from src.testcase_generator.schemas.test_case import (
     CrossSectionConflictRef,
     GeneratedTestCase,
     Provenance,
+)
+from src.testcase_generator.schemas.test_case import (
     TestStep as _TestStep,
 )
 
@@ -19,9 +22,7 @@ def _case_with_conflict() -> GeneratedTestCase:
         title="t",
         priority="P0",
         trust_level=3,
-        provenance=Provenance(
-            source_section="§x", verbatim_excerpt="e", trust_level=1
-        ),
+        provenance=Provenance(source_section="§x", verbatim_excerpt="e", trust_level=1),
         steps=[
             _TestStep(
                 step_number=1,
@@ -107,8 +108,7 @@ def test_langgraph_serde_full_field_roundtrip():
     rc = restored["final_test_cases"][0]
     restored_dump = rc.model_dump()
     assert restored_dump == original_dump, (
-        f"round-trip 前后不一致:\n"
-        f"  丢失/变化的 keys: {set(original_dump) - set(restored_dump)}"
+        f"round-trip 前后不一致:\n  丢失/变化的 keys: {set(original_dump) - set(restored_dump)}"
     )
 
 
@@ -126,9 +126,7 @@ def test_serde_unregistered_type_degrades_to_dict():
     type_, blob = _PIPELINE_SERDE.dumps_typed(payload)
     restored = _PIPELINE_SERDE.loads_typed((type_, blob))
     # 白名单外类型 → 降级成 dict（不是 _NotRegisteredForTest）
-    assert isinstance(restored["top"], dict), (
-        f"期望 dict（降级），实际得到 {type(restored['top']).__name__}"
-    )
+    assert isinstance(restored["top"], dict), f"期望 dict（降级），实际得到 {type(restored['top']).__name__}"
     assert restored["top"]["value"] == 99
 
 
@@ -141,6 +139,16 @@ async def test_on_pipeline_complete_persists_cross_section_conflict(monkeypatch)
     from src.testcase_generator.tasks import callbacks as cb
 
     added = []
+    batch = cb.TestBatch(
+        id="00000000-0000-0000-0000-000000000001",
+        document_id="00000000-0000-0000-0000-000000000002",
+        system_id="00000000-0000-0000-0000-000000000003",
+        status=cb.BatchStatus.RUNNING,
+    )
+
+    class _ScalarResult:
+        def scalar_one_or_none(self):
+            return batch
 
     class _FakeSession:
         def add(self, obj):
@@ -148,7 +156,8 @@ async def test_on_pipeline_complete_persists_cross_section_conflict(monkeypatch)
 
         async def flush(self): ...
         async def commit(self): ...
-        async def execute(self, *a, **k): ...  # on_pipeline_complete 仅 INSERT + UPDATE，无 SELECT
+        async def execute(self, *a, **k):
+            return _ScalarResult()
 
         async def __aenter__(self):
             return self

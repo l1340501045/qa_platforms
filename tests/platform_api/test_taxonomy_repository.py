@@ -19,7 +19,7 @@ from src.platform_api.models.taxonomy import (
 )
 from src.platform_api.services.taxonomy_admin_service import TaxonomyAdminError, TaxonomyAdminService
 from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
-from tests.platform_api.conftest import requires_db
+from tests.platform_api.conftest import requires_db, set_taxonomy_immutability_triggers
 
 pytestmark = requires_db
 
@@ -54,14 +54,18 @@ async def taxonomy_source(db_session: AsyncSession):
     yield system_id, document_id, content_hash
 
     await db_session.rollback()
-    await db_session.execute(
-        delete(RequirementTaxonomyMapping).where(RequirementTaxonomyMapping.system_id == system_id)
-    )
-    await db_session.execute(delete(TaxonomyNode).where(TaxonomyNode.system_id == system_id))
-    await db_session.execute(delete(TaxonomyVersion).where(TaxonomyVersion.system_id == system_id))
-    await db_session.execute(delete(TaxonomyConcept).where(TaxonomyConcept.system_id == system_id))
-    await db_session.execute(delete(Document).where(Document.id == document_id))
-    await db_session.execute(delete(System).where(System.id == system_id))
+    await set_taxonomy_immutability_triggers(db_session, enabled=False)
+    try:
+        await db_session.execute(
+            delete(RequirementTaxonomyMapping).where(RequirementTaxonomyMapping.system_id == system_id)
+        )
+        await db_session.execute(delete(TaxonomyNode).where(TaxonomyNode.system_id == system_id))
+        await db_session.execute(delete(TaxonomyVersion).where(TaxonomyVersion.system_id == system_id))
+        await db_session.execute(delete(TaxonomyConcept).where(TaxonomyConcept.system_id == system_id))
+        await db_session.execute(delete(Document).where(Document.id == document_id))
+        await db_session.execute(delete(System).where(System.id == system_id))
+    finally:
+        await set_taxonomy_immutability_triggers(db_session, enabled=True)
     await db_session.commit()
 
 
@@ -104,7 +108,7 @@ def _manifest(
                     "confidence": 1,
                     "reason": "人工校准",
                     "review_status": "approved",
-                    "reviewed_by": "test",
+                    "reviewed_by": "mapping-reviewer",
                     "reviewed_at": datetime(2026, 7, 21, tzinfo=timezone.utc).isoformat(),
                 }
             ],
@@ -202,6 +206,21 @@ async def test_activate_retires_previous_version_atomically(db_session: AsyncSes
     await db_session.rollback()
 
 
+async def test_activate_rejects_manifest_creator_as_reviewer(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    service = TaxonomyAdminService(db_session)
+    await service.import_manifest(
+        _manifest(system_id=system_id, document_id=document_id, content_hash=content_hash),
+        apply=True,
+    )
+
+    with pytest.raises(TaxonomyAdminError, match="taxonomy_activation_self_approval_forbidden"):
+        await service.activate(system_id=system_id, version=1, actor="TEST", apply=True)
+
+
 async def test_changed_approved_mapping_requires_explicit_supersede(
     db_session: AsyncSession,
     taxonomy_source,
@@ -257,6 +276,90 @@ async def test_changed_approved_mapping_requires_explicit_supersede(
     assert old.review_status == "superseded"
     assert new.review_status == "approved"
     assert new.supersedes_mapping_id == current_id
+    await db_session.rollback()
+
+
+async def test_import_rejects_mapping_supersede_from_older_taxonomy_version(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    service = TaxonomyAdminService(db_session)
+    await service.import_manifest(
+        _manifest(
+            system_id=system_id,
+            document_id=document_id,
+            content_hash=content_hash,
+            version=2,
+            change_note="newer mapping",
+        ),
+        apply=True,
+    )
+    current_id = await db_session.scalar(
+        select(RequirementTaxonomyMapping.id).where(
+            RequirementTaxonomyMapping.system_id == system_id,
+            RequirementTaxonomyMapping.review_status == "approved",
+        )
+    )
+    assert current_id is not None
+    await db_session.rollback()
+
+    older_data = _manifest(
+        system_id=system_id,
+        document_id=document_id,
+        content_hash=content_hash,
+        version=1,
+        change_note="older mapping must not supersede",
+    ).model_dump(mode="json")
+    older_data["mappings"][0]["target_stable_key"] = "asset-center"
+    older_data["mappings"][0]["supersedes_mapping_id"] = str(current_id)
+
+    with pytest.raises(TaxonomyAdminError, match="approved_mapping_version_not_newer"):
+        await service.import_manifest(TaxonomyManifest.model_validate(older_data), apply=True)
+
+    await db_session.rollback()
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TaxonomyVersion)
+            .where(
+                TaxonomyVersion.system_id == system_id,
+                TaxonomyVersion.version == 1,
+            )
+        )
+        == 0
+    )
+
+
+async def test_unchanged_approved_mapping_is_reused_across_taxonomy_versions(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    service = TaxonomyAdminService(db_session)
+    await service.import_manifest(
+        _manifest(system_id=system_id, document_id=document_id, content_hash=content_hash),
+        apply=True,
+    )
+
+    result = await service.import_manifest(
+        _manifest(
+            system_id=system_id,
+            document_id=document_id,
+            content_hash=content_hash,
+            version=2,
+            change_note="v2 same mapping",
+        ),
+        apply=True,
+    )
+    mapping_count = await db_session.scalar(
+        select(func.count())
+        .select_from(RequirementTaxonomyMapping)
+        .where(RequirementTaxonomyMapping.system_id == system_id)
+    )
+
+    assert result.mappings_to_create == 0
+    assert mapping_count == 1
     await db_session.rollback()
 
 

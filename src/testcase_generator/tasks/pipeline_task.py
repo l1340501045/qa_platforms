@@ -207,7 +207,7 @@ def resume_pipeline_task(batch_id: str, clarification_answers: list[dict]) -> di
 
 async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> dict:
     """内部异步恢复逻辑"""
-    from sqlalchemy import update
+    from sqlalchemy import select
 
     from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestBatch
@@ -216,13 +216,16 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
 
     # 1. 更新 status → running
     async with async_session_factory() as session:
+        batch = (
+            await session.execute(select(TestBatch).where(TestBatch.id == batch_id).with_for_update())
+        ).scalar_one_or_none()
+        if batch is None:
+            raise ValueError(f"Batch {batch_id} not found")
+        if batch.status != BatchStatus.SUSPENDED or batch.taxonomy_version_id is not None:
+            raise ValueError(f"Batch {batch_id} changed or taxonomy is frozen before resume")
         model_bundle = await load_active_model_bundle(session)
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(status=BatchStatus.RUNNING, current_stage="comprehend")
-        )
-        await session.execute(stmt)
+        batch.status = BatchStatus.RUNNING
+        batch.current_stage = "comprehend"
         await session.commit()
 
     with model_runtime_scope(model_bundle):

@@ -12,10 +12,13 @@ from src.platform_api.models.model_settings import AIModelConfigEntry, AIModelCo
 from src.platform_api.models.public import Base, System, SystemAssociation
 from src.platform_api.models.taxonomy import (
     RequirementTaxonomyMapping,
+    RequirementTaxonomyMappingRelatedConcept,
     TaxonomyBackfillRun,
     TaxonomyConcept,
     TaxonomyNode,
     TaxonomyVersion,
+    TestCaseRelatedTaxonomyConcept,
+    TestPointRelatedTaxonomyConcept,
 )
 from src.platform_api.models.testcase import (
     ExportTask,
@@ -35,6 +38,9 @@ __all__ = [
     "TaxonomyVersion",
     "TaxonomyNode",
     "RequirementTaxonomyMapping",
+    "RequirementTaxonomyMappingRelatedConcept",
+    "TestCaseRelatedTaxonomyConcept",
+    "TestPointRelatedTaxonomyConcept",
     "TaxonomyBackfillRun",
     "AIModelConfigVersion",
     "AIModelConfigEntry",

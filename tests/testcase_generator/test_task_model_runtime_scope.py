@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from src.platform_api.core.exceptions import ApiError
 from src.platform_api.core.model_runtime import (
     ModelConfigBundle,
     ModelEndpointConfig,
@@ -36,7 +37,7 @@ def _bundle() -> ModelConfigBundle:
 class _Session:
     def __init__(self, case=None):
         self.case = case
-        self.execute = AsyncMock()
+        self.execute = AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: self.case))
         self.commit = AsyncMock()
         self.rollback = AsyncMock()
 
@@ -52,7 +53,7 @@ class _Session:
 
 async def test_resume_pipeline_uses_latest_model_when_execution_restarts(monkeypatch) -> None:
     bundle = _bundle()
-    session = _Session()
+    session = _Session(SimpleNamespace(status="suspended", taxonomy_version_id=None, current_stage=None))
     load_bundle = AsyncMock(return_value=bundle)
 
     monkeypatch.setattr("src.testcase_generator.db.async_session_factory", lambda: session)
@@ -189,6 +190,10 @@ async def test_regenerate_case_uses_latest_model_when_execution_starts(monkeypat
         "src.platform_api.services.task_model_runtime.load_active_model_bundle",
         load_bundle,
     )
+    monkeypatch.setattr(
+        "src.platform_api.services.review_service.lock_case_for_content_mutation",
+        AsyncMock(side_effect=[case, case]),
+    )
 
     class _LLMClient:
         async def generate_structured(self, **_kwargs):
@@ -237,6 +242,10 @@ async def test_regenerate_case_never_exposes_provider_error_text(monkeypatch, ca
         "src.platform_api.services.task_model_runtime.load_active_model_bundle",
         AsyncMock(return_value=bundle),
     )
+    monkeypatch.setattr(
+        "src.platform_api.services.review_service.lock_case_for_content_mutation",
+        AsyncMock(return_value=case),
+    )
 
     class _LLMClient:
         async def generate_structured(self, **_kwargs):
@@ -252,6 +261,58 @@ async def test_regenerate_case_never_exposes_provider_error_text(monkeypatch, ca
     assert "RuntimeError" in result["error"]
     assert secret not in str(result)
     assert secret not in caplog.text
+
+
+async def test_regenerate_case_rechecks_taxonomy_freeze_after_llm(monkeypatch) -> None:
+    bundle = _bundle()
+    case_id = uuid.uuid4()
+    case = SimpleNamespace(
+        id=case_id,
+        batch_id=uuid.uuid4(),
+        test_point_id=None,
+        title="旧标题",
+        preconditions={},
+        steps=[],
+        expected_results={},
+        priority="P1",
+        iteration=1,
+        review_status="approved",
+        review_comment=None,
+    )
+    sessions = [_Session(case), _Session(case)]
+    mutation_guard = AsyncMock(
+        side_effect=[case, ApiError("E4092", "该批次的业务分类已固化")],
+    )
+    monkeypatch.setattr("src.testcase_generator.db.async_session_factory", lambda: sessions.pop(0))
+    monkeypatch.setattr(
+        "src.platform_api.services.task_model_runtime.load_active_model_bundle",
+        AsyncMock(return_value=bundle),
+    )
+    monkeypatch.setattr(
+        "src.platform_api.services.review_service.lock_case_for_content_mutation",
+        mutation_guard,
+    )
+
+    class _LLMClient:
+        async def generate_structured(self, **_kwargs):
+            return SimpleNamespace(
+                title="不应落库的新标题",
+                preconditions={},
+                steps=[],
+                expected_results={},
+                priority="P1",
+            )
+
+    monkeypatch.setattr(
+        "src.testcase_generator.services.llm_client.get_llm_client",
+        lambda: _LLMClient(),
+    )
+
+    result = await regenerate_task._regenerate_case(str(case_id), "请修改")
+
+    assert result == {"error": "case_not_mutable_after_llm"}
+    assert case.title == "旧标题"
+    assert mutation_guard.await_count == 2
 
 
 async def test_pipeline_failure_never_exposes_provider_error_text(monkeypatch, caplog) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
@@ -48,6 +49,11 @@ class TaxonomyVersion(Base):
         UniqueConstraint("system_id", "id", name="uq_taxonomy_versions_system_id"),
         CheckConstraint("version > 0", name="ck_taxonomy_versions_positive"),
         CheckConstraint("status IN ('draft', 'active', 'retired')", name="ck_taxonomy_versions_status"),
+        CheckConstraint(
+            "(status = 'draft' AND activated_by IS NULL AND activated_at IS NULL) OR "
+            "(status IN ('active', 'retired') AND activated_by IS NOT NULL AND activated_at IS NOT NULL)",
+            name="ck_taxonomy_versions_activation_metadata",
+        ),
         Index(
             "uq_taxonomy_versions_one_active",
             "system_id",
@@ -64,6 +70,7 @@ class TaxonomyVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'draft'")
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     change_note: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -146,16 +153,16 @@ class RequirementTaxonomyMapping(Base):
     __tablename__ = "requirement_taxonomy_mappings"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["system_id", "concept_id"],
-            ["testcase.taxonomy_concepts.system_id", "testcase.taxonomy_concepts.id"],
-            name="fk_req_tax_mapping_concept_system",
+            ["system_id", "reviewed_taxonomy_version_id"],
+            ["testcase.taxonomy_versions.system_id", "testcase.taxonomy_versions.id"],
+            name="fk_req_tax_mapping_version_system",
             ondelete="RESTRICT",
             onupdate="CASCADE",
         ),
         ForeignKeyConstraint(
-            ["system_id", "reviewed_taxonomy_version_id"],
-            ["testcase.taxonomy_versions.system_id", "testcase.taxonomy_versions.id"],
-            name="fk_req_tax_mapping_version_system",
+            ["reviewed_taxonomy_version_id", "concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_req_tax_mapping_target_node",
             ondelete="RESTRICT",
             onupdate="CASCADE",
         ),
@@ -175,9 +182,20 @@ class RequirementTaxonomyMapping(Base):
         ),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="ck_req_tax_mapping_confidence"),
         CheckConstraint(
-            "review_status != 'approved' OR (reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)",
-            name="ck_req_tax_mapping_approved_review",
+            "(review_status = 'pending' AND reviewed_by IS NULL AND reviewed_at IS NULL "
+            "AND supersedes_mapping_id IS NULL) OR "
+            "(review_status = 'rejected' AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL "
+            "AND supersedes_mapping_id IS NULL) OR "
+            "(review_status IN ('approved', 'superseded') "
+            "AND reviewed_by IS NOT NULL AND reviewed_at IS NOT NULL)",
+            name="ck_req_tax_mapping_review_metadata",
         ),
+        CheckConstraint(
+            "supersedes_mapping_id IS NULL OR supersedes_mapping_id != id",
+            name="ck_req_tax_mapping_not_self_supersede",
+        ),
+        UniqueConstraint("id", "reviewed_taxonomy_version_id", name="uq_req_tax_mapping_id_version"),
+        UniqueConstraint("supersedes_mapping_id", name="uq_req_tax_mapping_direct_successor"),
         Index(
             "uq_req_tax_mapping_current_approved",
             "system_id",
@@ -202,12 +220,9 @@ class RequirementTaxonomyMapping(Base):
     document_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     feature_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     scope: Mapped[str] = mapped_column(String(30), nullable=False)
-    selector: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    selector: Mapped[dict[str, Any] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     selector_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     concept_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
-    related_concept_ids: Mapped[list[str]] = mapped_column(
-        JSONB, nullable=False, default=list, server_default="'[]'::jsonb"
-    )
     mapping_method: Mapped[str] = mapped_column(String(30), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
@@ -223,6 +238,90 @@ class RequirementTaxonomyMapping(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class RequirementTaxonomyMappingRelatedConcept(Base):
+    __tablename__ = "requirement_taxonomy_mapping_related_concepts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["mapping_id", "taxonomy_version_id"],
+            [
+                "testcase.requirement_taxonomy_mappings.id",
+                "testcase.requirement_taxonomy_mappings.reviewed_taxonomy_version_id",
+            ],
+            name="fk_req_tax_mapping_related_owner_version",
+            ondelete="CASCADE",
+            onupdate="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["taxonomy_version_id", "concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_req_tax_mapping_related_node",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+        ),
+        {"schema": "testcase"},
+    )
+
+    mapping_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    taxonomy_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    concept_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+
+
+class TestCaseRelatedTaxonomyConcept(Base):
+    __tablename__ = "test_case_related_taxonomy_concepts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["case_id", "taxonomy_version_id"],
+            ["testcase.test_cases.id", "testcase.test_cases.taxonomy_version_id"],
+            name="fk_case_related_taxonomy_owner_version",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["taxonomy_version_id", "concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_case_related_taxonomy_node",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        {"schema": "testcase"},
+    )
+
+    case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    taxonomy_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    concept_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+
+
+class TestPointRelatedTaxonomyConcept(Base):
+    __tablename__ = "test_point_related_taxonomy_concepts"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["test_point_id", "taxonomy_version_id"],
+            ["testcase.test_points.id", "testcase.test_points.taxonomy_version_id"],
+            name="fk_test_point_related_taxonomy_owner_version",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["taxonomy_version_id", "concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_test_point_related_taxonomy_node",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        {"schema": "testcase"},
+    )
+
+    test_point_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    taxonomy_version_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    concept_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+
+
 class TaxonomyBackfillRun(Base):
     __tablename__ = "taxonomy_backfill_runs"
     __table_args__ = (
@@ -230,6 +329,11 @@ class TaxonomyBackfillRun(Base):
         CheckConstraint(
             "changed_count >= 0 AND unchanged_count >= 0 AND unresolved_count >= 0",
             name="ck_taxonomy_backfill_runs_counts",
+        ),
+        CheckConstraint(
+            "(status = 'applied' AND rolled_back_by IS NULL AND rolled_back_at IS NULL) OR "
+            "(status = 'rolled_back' AND rolled_back_by IS NOT NULL AND rolled_back_at IS NOT NULL)",
+            name="ck_taxonomy_backfill_runs_rollback_metadata",
         ),
         {"schema": "testcase"},
     )
@@ -248,12 +352,14 @@ class TaxonomyBackfillRun(Base):
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     assignment_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     baseline_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    plan_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     applied_state_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     actor: Mapped[str] = mapped_column(String(100), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'applied'")
-    before_image: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    before_image: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     changed_count: Mapped[int] = mapped_column(Integer, nullable=False)
     unchanged_count: Mapped[int] = mapped_column(Integer, nullable=False)
     unresolved_count: Mapped[int] = mapped_column(Integer, nullable=False)
     applied_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    rolled_back_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     rolled_back_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
