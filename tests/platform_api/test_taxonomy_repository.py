@@ -206,6 +206,52 @@ async def test_activate_retires_previous_version_atomically(db_session: AsyncSes
     await db_session.rollback()
 
 
+async def test_activate_rejects_draft_older_than_activation_history(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    service = TaxonomyAdminService(db_session)
+    await service.import_manifest(
+        _manifest(system_id=system_id, document_id=document_id, content_hash=content_hash),
+        apply=True,
+    )
+    await service.import_manifest(
+        _manifest(
+            system_id=system_id,
+            document_id=document_id,
+            content_hash=content_hash,
+            version=2,
+            change_note="v2",
+        ),
+        apply=True,
+    )
+    await service.activate(system_id=system_id, version=2, actor="newer-reviewer", apply=True)
+    newer = await db_session.scalar(
+        select(TaxonomyVersion).where(
+            TaxonomyVersion.system_id == system_id,
+            TaxonomyVersion.version == 2,
+        )
+    )
+    assert newer is not None
+    newer.status = "retired"
+    await db_session.commit()
+
+    with pytest.raises(TaxonomyAdminError, match="taxonomy_activation_version_not_newer"):
+        await service.activate(system_id=system_id, version=1, actor="older-reviewer", apply=True)
+
+    rows = list(
+        (
+            await db_session.execute(
+                select(TaxonomyVersion).where(TaxonomyVersion.system_id == system_id).order_by(TaxonomyVersion.version)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert [(row.version, row.status) for row in rows] == [(1, "draft"), (2, "retired")]
+
+
 async def test_activate_rejects_manifest_creator_as_reviewer(
     db_session: AsyncSession,
     taxonomy_source,

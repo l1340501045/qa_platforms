@@ -3,11 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import datetime, timezone
 
 import pytest
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +40,8 @@ from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 from src.testcase_generator.services.taxonomy_replay import TaxonomyReplayError, TaxonomyReplayService
 from src.testcase_generator.services.taxonomy_replay_report import write_replay_artifacts
 from src.testcase_generator.tasks import callbacks as callback_tasks
-from src.testcase_generator.tasks.pipeline_task import _resume_pipeline
+from src.testcase_generator.tasks import pipeline_task as pipeline_task_module
+from src.testcase_generator.tasks.pipeline_task import _execute_pipeline, _resume_pipeline
 from tests.platform_api.conftest import requires_db, set_taxonomy_immutability_triggers
 
 pytestmark = requires_db
@@ -576,6 +578,33 @@ async def test_replay_report_writes_traceable_artifact_set(
     assert {item["legacy_anomaly_category"] for item in anomalies} == {"source_section_fallback"}
 
 
+async def test_replay_report_keeps_samples_for_paths_with_same_safe_stem(
+    db_session: AsyncSession,
+    replay_source,
+    tmp_path,
+) -> None:
+    result = await TaxonomyReplayService(db_session).replay(replay_source["assignments"], apply=False)
+    collision_result = replace(
+        result,
+        cases=(
+            replace(result.cases[0], target_path=("A", "B")),
+            replace(result.cases[1], target_path=("A-B",)),
+        ),
+    )
+
+    write_replay_artifacts(
+        output_dir=tmp_path,
+        result=collision_result,
+        assignments=replay_source["assignments"],
+        manifest=replay_source["manifest"],
+    )
+
+    sample_files = list((tmp_path / "samples").glob("*.md"))
+    assert len(sample_files) == 2
+    headings = {path.read_text(encoding="utf-8").splitlines()[0] for path in sample_files}
+    assert headings == {"# 分层样本：A / B", "# 分层样本：A-B"}
+
+
 async def test_replay_report_draft_does_not_label_assignment_as_reviewed(
     db_session: AsyncSession,
     replay_source,
@@ -1028,6 +1057,47 @@ async def test_database_rejects_in_place_mutation_of_reviewed_mapping(
     await db_session.rollback()
 
 
+async def test_database_rejects_moving_related_concept_away_from_reviewed_mapping(
+    db_session: AsyncSession,
+    replay_source,
+) -> None:
+    reviewed_mapping_id = await _add_approved_mapping(
+        db_session,
+        replay_source,
+        feature_fingerprint="a" * 64,
+    )
+    document = await db_session.get(Document, replay_source["document_id"])
+    assert document is not None
+    pending_mapping = RequirementTaxonomyMapping(
+        id=uuid.uuid4(),
+        system_id=replay_source["system_id"],
+        document_id=replay_source["document_id"],
+        document_content_hash=document.content_hash,
+        feature_fingerprint="b" * 64,
+        scope="feature_default",
+        selector=None,
+        selector_hash=hashlib.sha256(b"{}").hexdigest(),
+        concept_id=replay_source["concept_ids"]["asset-center.filter"],
+        mapping_method="manual",
+        confidence=1,
+        reason="待审映射",
+        review_status="pending",
+        reviewed_by=None,
+        reviewed_at=None,
+        reviewed_taxonomy_version_id=replay_source["version_id"],
+    )
+    db_session.add(pending_mapping)
+    await db_session.commit()
+
+    with pytest.raises(DBAPIError, match="related concepts of reviewed mapping are immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                update(RequirementTaxonomyMappingRelatedConcept)
+                .where(RequirementTaxonomyMappingRelatedConcept.mapping_id == reviewed_mapping_id)
+                .values(mapping_id=pending_mapping.id)
+            )
+
+
 async def test_failed_iteration_releases_batch_for_retry(
     db_session: AsyncSession,
     replay_source,
@@ -1116,6 +1186,106 @@ async def test_all_pipeline_callbacks_and_resume_reject_taxonomy_frozen_batch(
     await db_session.commit()
     with pytest.raises(ValueError, match="taxonomy is frozen"):
         await _resume_pipeline(str(replay_source["batch_id"]), [])
+
+
+async def test_full_pipeline_start_rejects_taxonomy_frozen_batch(
+    db_session: AsyncSession,
+    replay_source,
+    monkeypatch,
+) -> None:
+    from src.platform_api.core import model_runtime as model_runtime_module
+    from src.platform_api.services import task_model_runtime as task_model_runtime_module
+
+    batch = await db_session.get(BatchModel, replay_source["batch_id"])
+    assert batch is not None
+    original_started_at = datetime(2026, 7, 21, 1, 2, 3, tzinfo=timezone.utc)
+    batch.status = "running"
+    batch.current_stage = "comprehend"
+    batch.celery_task_id = "original-task"
+    batch.started_at = original_started_at
+    batch.generation_config = {"original": True}
+    batch.taxonomy_version_id = replay_source["version_id"]
+    await db_session.commit()
+    graph_called = False
+
+    async def fake_load_active_model_bundle(_session):
+        return object()
+
+    async def fake_execute_pipeline_graph(*_args, **_kwargs):
+        nonlocal graph_called
+        graph_called = True
+        return {"status": "completed"}
+
+    monkeypatch.setattr(task_model_runtime_module, "load_active_model_bundle", fake_load_active_model_bundle)
+    monkeypatch.setattr(model_runtime_module, "model_runtime_scope", lambda _bundle: nullcontext())
+    monkeypatch.setattr(pipeline_task_module, "_execute_pipeline_graph", fake_execute_pipeline_graph)
+
+    with pytest.raises(ValueError, match="taxonomy is frozen"):
+        await _execute_pipeline(
+            celery_task_id="duplicate-task",
+            batch_id=str(replay_source["batch_id"]),
+            document_id=str(replay_source["document_id"]),
+            system_id=str(replay_source["system_id"]),
+            config={"new": True},
+        )
+
+    await db_session.refresh(batch)
+    assert graph_called is False
+    assert batch.status == "running"
+    assert batch.current_stage == "comprehend"
+    assert batch.celery_task_id == "original-task"
+    assert batch.started_at == original_started_at
+    assert batch.generation_config == {"original": True}
+
+
+@pytest.mark.parametrize("mismatched_field", ["document_id", "system_id"])
+async def test_full_pipeline_start_rejects_task_identity_mismatch(
+    db_session: AsyncSession,
+    replay_source,
+    monkeypatch,
+    mismatched_field: str,
+) -> None:
+    from src.platform_api.core import model_runtime as model_runtime_module
+    from src.platform_api.services import task_model_runtime as task_model_runtime_module
+
+    batch = await db_session.get(BatchModel, replay_source["batch_id"])
+    assert batch is not None
+    batch.status = "pending"
+    batch.current_stage = None
+    batch.taxonomy_version_id = None
+    await db_session.commit()
+    graph_called = False
+
+    async def fake_load_active_model_bundle(_session):
+        return object()
+
+    async def fake_execute_pipeline_graph(*_args, **_kwargs):
+        nonlocal graph_called
+        graph_called = True
+        return {"status": "completed"}
+
+    monkeypatch.setattr(task_model_runtime_module, "load_active_model_bundle", fake_load_active_model_bundle)
+    monkeypatch.setattr(model_runtime_module, "model_runtime_scope", lambda _bundle: nullcontext())
+    monkeypatch.setattr(pipeline_task_module, "_execute_pipeline_graph", fake_execute_pipeline_graph)
+    identity = {
+        "document_id": str(replay_source["document_id"]),
+        "system_id": str(replay_source["system_id"]),
+    }
+    identity[mismatched_field] = str(uuid.uuid4())
+
+    with pytest.raises(ValueError, match="does not match batch"):
+        await _execute_pipeline(
+            celery_task_id="misrouted-task",
+            batch_id=str(replay_source["batch_id"]),
+            document_id=identity["document_id"],
+            system_id=identity["system_id"],
+            config={"new": True},
+        )
+
+    await db_session.refresh(batch)
+    assert graph_called is False
+    assert batch.status == "pending"
+    assert batch.current_stage is None
 
 
 async def test_iteration_rejects_case_from_another_batch(

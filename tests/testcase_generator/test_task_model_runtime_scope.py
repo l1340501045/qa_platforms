@@ -11,6 +11,7 @@ from src.platform_api.core.model_runtime import (
     ModelRole,
     get_current_model_bundle,
 )
+from src.platform_api.models.enums import BatchStatus
 from src.testcase_generator.tasks import iterate_task, pipeline_task, regenerate_task
 
 
@@ -49,6 +50,66 @@ class _Session:
 
     async def __aexit__(self, _exc_type, _exc, _traceback):
         return False
+
+
+async def test_pipeline_start_waits_for_dispatched_batch_commit(monkeypatch) -> None:
+    bundle = _bundle()
+    batch_id = uuid.uuid4()
+    document_id = uuid.uuid4()
+    system_id = uuid.uuid4()
+    batch = SimpleNamespace(
+        id=batch_id,
+        document_id=document_id,
+        system_id=system_id,
+        taxonomy_version_id=None,
+        status=BatchStatus.PENDING,
+        current_stage=None,
+        celery_task_id=None,
+        started_at=None,
+        generation_config=None,
+    )
+
+    class _DelayedBatchSession(_Session):
+        def __init__(self):
+            super().__init__()
+            self.scalar_calls = 0
+
+        async def scalar(self, _statement):
+            self.scalar_calls += 1
+            return None if self.scalar_calls == 1 else batch
+
+    session = _DelayedBatchSession()
+    load_bundle = AsyncMock(return_value=bundle)
+    execute_graph = AsyncMock(return_value={"status": "completed"})
+    monkeypatch.setattr("src.testcase_generator.db.async_session_factory", lambda: session)
+    monkeypatch.setattr(
+        "src.platform_api.services.task_model_runtime.load_active_model_bundle",
+        load_bundle,
+    )
+    monkeypatch.setattr(pipeline_task, "_execute_pipeline_graph", execute_graph)
+
+    result = await pipeline_task._execute_pipeline(
+        celery_task_id="celery-task",
+        batch_id=str(batch_id),
+        document_id=str(document_id),
+        system_id=str(system_id),
+        config={"profile": "test"},
+    )
+
+    assert result == {"status": "completed"}
+    assert session.scalar_calls == 2
+    assert batch.status == BatchStatus.RUNNING
+    assert batch.current_stage == "parse"
+    assert batch.celery_task_id == "celery-task"
+    assert batch.generation_config == {"profile": "test"}
+    session.commit.assert_awaited_once()
+    load_bundle.assert_awaited_once_with(session)
+    execute_graph.assert_awaited_once_with(
+        str(batch_id),
+        str(document_id),
+        str(system_id),
+        {"profile": "test"},
+    )
 
 
 async def test_resume_pipeline_uses_latest_model_when_execution_restarts(monkeypatch) -> None:

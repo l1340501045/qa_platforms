@@ -102,37 +102,63 @@ async def test_database_enforces_one_active_version_per_system(
     seeded_system,
 ) -> None:
     system_id, _ = seeded_system
-    db_session.add(
-        TaxonomyVersion(
-            id=uuid.uuid4(),
-            system_id=system_id,
-            version=1,
-            status="active",
-            manifest_hash="1" * 64,
-            definition_hash="1" * 64,
-            change_note="v1",
-            created_by="test",
-            activated_by="reviewer",
-            activated_at=datetime.now(timezone.utc),
-        )
+    v1 = TaxonomyVersion(
+        id=uuid.uuid4(),
+        system_id=system_id,
+        version=1,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="v1",
+        created_by="test",
     )
+    v2 = TaxonomyVersion(
+        id=uuid.uuid4(),
+        system_id=system_id,
+        version=2,
+        status="draft",
+        manifest_hash="2" * 64,
+        definition_hash="2" * 64,
+        change_note="v2",
+        created_by="test",
+    )
+    db_session.add_all([v1, v2])
+    await db_session.commit()
+    v1.status = "active"
+    v1.activated_by = "reviewer"
+    v1.activated_at = datetime.now(timezone.utc)
     await db_session.commit()
 
+    v2.status = "active"
+    v2.activated_by = "reviewer"
+    v2.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+@pytest.mark.parametrize("status", ["active", "retired"])
+async def test_database_requires_new_taxonomy_version_to_start_as_draft(
+    db_session: AsyncSession,
+    seeded_system,
+    status: str,
+) -> None:
+    system_id, _ = seeded_system
     db_session.add(
         TaxonomyVersion(
-            id=uuid.uuid4(),
             system_id=system_id,
-            version=2,
-            status="active",
-            manifest_hash="2" * 64,
-            definition_hash="2" * 64,
-            change_note="v2",
-            created_by="test",
+            version=1,
+            status=status,
+            manifest_hash="1" * 64,
+            definition_hash="1" * 64,
+            change_note="invalid initial state",
+            created_by="author",
             activated_by="reviewer",
             activated_at=datetime.now(timezone.utc),
         )
     )
-    with pytest.raises(IntegrityError):
+
+    with pytest.raises(DBAPIError, match="taxonomy version must be inserted as draft"):
         await db_session.commit()
     await db_session.rollback()
 
@@ -420,6 +446,50 @@ async def test_database_rejects_active_taxonomy_content_mutation(
     with pytest.raises(DBAPIError, match="taxonomy version identity/content is immutable"):
         await db_session.commit()
     await db_session.rollback()
+
+
+async def test_database_rejects_activating_version_older_than_activation_history(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    v1 = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="v1",
+        created_by="author",
+    )
+    v2 = TaxonomyVersion(
+        system_id=system_id,
+        version=2,
+        status="draft",
+        manifest_hash="2" * 64,
+        definition_hash="2" * 64,
+        change_note="v2",
+        created_by="author",
+    )
+    db_session.add_all([v1, v2])
+    await db_session.commit()
+    v2.status = "active"
+    v2.activated_by = "newer-reviewer"
+    v2.activated_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    with pytest.raises(DBAPIError, match="taxonomy activation must move forward"):
+        async with db_session.begin_nested():
+            v2.status = "retired"
+            await db_session.flush()
+            v1.status = "active"
+            v1.activated_by = "older-reviewer"
+            v1.activated_at = datetime.now(timezone.utc)
+            await db_session.flush()
+
+    await db_session.refresh(v1)
+    await db_session.refresh(v2)
+    assert (v1.status, v2.status) == ("draft", "active")
 
 
 @pytest.mark.parametrize("final_status", ["active", "retired"])

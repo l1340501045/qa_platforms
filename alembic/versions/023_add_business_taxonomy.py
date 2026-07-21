@@ -421,7 +421,16 @@ def upgrade() -> None:
         """
         CREATE FUNCTION testcase.guard_taxonomy_version_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE
+            latest_activated_version integer;
         BEGIN
+            IF TG_OP = 'INSERT' THEN
+                IF NEW.status != 'draft' THEN
+                    RAISE EXCEPTION 'taxonomy version must be inserted as draft: %', NEW.status
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN NEW;
+            END IF;
             IF TG_OP = 'DELETE' THEN
                 IF OLD.status IN ('active', 'retired') THEN
                     RAISE EXCEPTION 'active/retired taxonomy version cannot be deleted: %', OLD.id
@@ -441,6 +450,16 @@ def upgrade() -> None:
                     USING ERRCODE = '55000';
             END IF;
             IF OLD.status = 'draft' AND NEW.status = 'active' THEN
+                SELECT max(version) INTO latest_activated_version
+                FROM testcase.taxonomy_versions
+                WHERE system_id = NEW.system_id
+                  AND status IN ('active', 'retired');
+                IF latest_activated_version IS NOT NULL
+                   AND NEW.version <= latest_activated_version THEN
+                    RAISE EXCEPTION 'taxonomy activation must move forward: target %, latest %',
+                        NEW.version, latest_activated_version
+                        USING ERRCODE = '23514';
+                END IF;
                 IF NEW.activated_by IS NULL OR NEW.activated_at IS NULL THEN
                     RAISE EXCEPTION 'taxonomy activation metadata required: %', OLD.id
                         USING ERRCODE = '23514';
@@ -462,7 +481,7 @@ def upgrade() -> None:
         """,
         """
         CREATE TRIGGER trg_guard_taxonomy_version_mutation
-        BEFORE UPDATE OR DELETE ON testcase.taxonomy_versions
+        BEFORE INSERT OR UPDATE OR DELETE ON testcase.taxonomy_versions
         FOR EACH ROW EXECUTE FUNCTION testcase.guard_taxonomy_version_mutation()
         """,
         """
@@ -538,17 +557,28 @@ def upgrade() -> None:
         CREATE FUNCTION testcase.guard_reviewed_mapping_related_mutation()
         RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE
-            owner_id uuid := CASE WHEN TG_OP = 'DELETE' THEN OLD.mapping_id ELSE NEW.mapping_id END;
-            owner_status text;
+            old_owner_id uuid;
+            new_owner_id uuid;
+            owner_record record;
         BEGIN
-            SELECT review_status INTO owner_status
-            FROM testcase.requirement_taxonomy_mappings
-            WHERE id = owner_id
-            FOR UPDATE;
-            IF owner_status IN ('approved', 'rejected', 'superseded') THEN
-                RAISE EXCEPTION 'related concepts of reviewed mapping are immutable: %', owner_id
-                    USING ERRCODE = '55000';
+            IF TG_OP IN ('UPDATE', 'DELETE') THEN
+                old_owner_id := OLD.mapping_id;
             END IF;
+            IF TG_OP IN ('INSERT', 'UPDATE') THEN
+                new_owner_id := NEW.mapping_id;
+            END IF;
+            FOR owner_record IN
+                SELECT id, review_status
+                FROM testcase.requirement_taxonomy_mappings
+                WHERE id = old_owner_id OR id = new_owner_id
+                ORDER BY id
+                FOR UPDATE
+            LOOP
+                IF owner_record.review_status IN ('approved', 'rejected', 'superseded') THEN
+                    RAISE EXCEPTION 'related concepts of reviewed mapping are immutable: %', owner_record.id
+                        USING ERRCODE = '55000';
+                END IF;
+            END LOOP;
             IF TG_OP = 'DELETE' THEN
                 RETURN OLD;
             END IF;

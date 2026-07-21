@@ -447,7 +447,9 @@ def _is_dirty_path(path: str) -> bool:
 
 def _safe_name(value: str) -> str:
     normalized = re.sub(r"[^\w\u4e00-\u9fff]+", "_", value).strip("_")
-    return normalized[:80] or "未决"
+    readable_prefix = normalized[:64] or "未决"
+    path_hash = hashlib.sha256(value.encode()).hexdigest()[:12]
+    return f"{readable_prefix}-{path_hash}"
 
 
 def _uuid_set_hash(case_ids: frozenset[UUID]) -> str:

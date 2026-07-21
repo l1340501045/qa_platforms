@@ -105,6 +105,17 @@ class TaxonomyAdminService:
                 )
             if target.status != "draft":
                 raise TaxonomyAdminError("retired_version_cannot_activate", f"version={version}")
+            current = next((item for item in versions if item.status == "active"), None)
+            latest_activated = max(
+                (item for item in versions if item.status in {"active", "retired"}),
+                key=lambda item: item.version,
+                default=None,
+            )
+            if latest_activated is not None and target.version <= latest_activated.version:
+                raise TaxonomyAdminError(
+                    "taxonomy_activation_version_not_newer",
+                    f"target version={target.version} 必须大于 activation history version={latest_activated.version}",
+                )
             if target.created_by.casefold() == actor.casefold():
                 raise TaxonomyAdminError(
                     "taxonomy_activation_self_approval_forbidden",
@@ -112,7 +123,6 @@ class TaxonomyAdminService:
                 )
             await self._validate_stored_definition(target, for_update=apply)
 
-            current = next((item for item in versions if item.status == "active"), None)
             result = TaxonomyActivationResult(
                 applied=apply,
                 idempotent=False,
