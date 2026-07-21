@@ -2,9 +2,22 @@
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import String, Text, DateTime, Integer, Float, Boolean, ForeignKey, func
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    ForeignKeyConstraint,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from src.platform_api.models.public import Base
@@ -12,7 +25,19 @@ from src.platform_api.models.public import Base
 
 class TestBatch(Base):
     __tablename__ = "test_batches"
-    __table_args__ = {"schema": "testcase"}
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["system_id", "taxonomy_version_id"],
+            ["testcase.taxonomy_versions.system_id", "testcase.taxonomy_versions.id"],
+            name="fk_test_batches_taxonomy_version_system",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        UniqueConstraint("id", "taxonomy_version_id", name="uq_test_batches_id_taxonomy_version"),
+        {"schema": "testcase"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -28,6 +53,7 @@ class TestBatch(Base):
     total_cases: Mapped[int | None] = mapped_column(Integer, nullable=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     generation_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -38,7 +64,31 @@ class TestBatch(Base):
 
 class TestPoint(Base):
     __tablename__ = "test_points"
-    __table_args__ = {"schema": "testcase"}
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["batch_id", "taxonomy_version_id"],
+            ["testcase.test_batches.id", "testcase.test_batches.taxonomy_version_id"],
+            name="fk_test_points_batch_taxonomy_version",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["taxonomy_version_id", "taxonomy_concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_test_points_taxonomy_node",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        UniqueConstraint("id", "taxonomy_version_id", name="uq_test_points_id_taxonomy_version"),
+        CheckConstraint(
+            "taxonomy_concept_id IS NULL OR taxonomy_version_id IS NOT NULL",
+            name="ck_test_points_taxonomy_concept_requires_version",
+        ),
+        {"schema": "testcase"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     batch_id: Mapped[uuid.UUID] = mapped_column(
@@ -53,6 +103,10 @@ class TestPoint(Base):
     derived_from: Mapped[dict] = mapped_column(JSONB, nullable=False)
     # 规则台账软关联：指向 testcase.rules.id（落库时由规则码解析；历史批次为 NULL）
     rule_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_selector_facts: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    taxonomy_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_concept_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_resolution: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
@@ -78,7 +132,31 @@ class Rule(Base):
 
 class TestCase(Base):
     __tablename__ = "test_cases"
-    __table_args__ = {"schema": "testcase"}
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["batch_id", "taxonomy_version_id"],
+            ["testcase.test_batches.id", "testcase.test_batches.taxonomy_version_id"],
+            name="fk_test_cases_batch_taxonomy_version",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["taxonomy_version_id", "taxonomy_concept_id"],
+            ["testcase.taxonomy_nodes.taxonomy_version_id", "testcase.taxonomy_nodes.concept_id"],
+            name="fk_test_cases_taxonomy_node",
+            ondelete="RESTRICT",
+            onupdate="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        UniqueConstraint("id", "taxonomy_version_id", name="uq_test_cases_id_taxonomy_version"),
+        CheckConstraint(
+            "taxonomy_concept_id IS NULL OR taxonomy_version_id IS NOT NULL",
+            name="ck_test_cases_taxonomy_concept_requires_version",
+        ),
+        {"schema": "testcase"},
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     batch_id: Mapped[uuid.UUID] = mapped_column(
@@ -100,6 +178,9 @@ class TestCase(Base):
     provenance: Mapped[dict] = mapped_column(JSONB, nullable=False)
     trust_level: Mapped[int] = mapped_column(Integer, nullable=False)
     confidence_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    taxonomy_version_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_concept_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    taxonomy_resolution: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     review_status: Mapped[str] = mapped_column(String(30), nullable=False, server_default="'pending'")
     review_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

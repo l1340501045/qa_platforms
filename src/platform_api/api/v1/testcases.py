@@ -53,8 +53,8 @@ async def regenerate_testcase(
     service: ReviewService = Depends(_get_review_service),
 ):
     """单条 AI 按意见重写（异步 Celery）"""
-    # 先验证用例存在
-    await service.get_case_detail(case_id)
+    # 派发前先验证可编辑；worker 在 LLM 返回后还会再次校验，防止竞态。
+    await service.ensure_case_content_mutable(case_id)
 
     celery_app.send_task(
         "testcase_generator.regenerate_case",

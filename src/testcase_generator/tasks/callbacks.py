@@ -6,7 +6,8 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import update
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.core.stage_names import to_progress_internal
 from src.platform_api.models.enums import BatchStatus, ReviewStatus
@@ -16,12 +17,36 @@ from src.testcase_generator.db import async_session_factory
 logger = logging.getLogger(__name__)
 
 
+async def _lock_unfrozen_batch(
+    session: AsyncSession,
+    batch_id: uuid.UUID,
+    *,
+    allowed_statuses: frozenset[str],
+) -> TestBatch:
+    """串行化流水线回调，并拒绝覆盖已固定 taxonomy 的历史批次。"""
+    batch = (
+        await session.execute(select(TestBatch).where(TestBatch.id == batch_id).with_for_update())
+    ).scalar_one_or_none()
+    if batch is None:
+        raise ValueError(f"Batch {batch_id} not found")
+    if batch.taxonomy_version_id is not None:
+        raise ValueError(f"Batch {batch_id} taxonomy is frozen")
+    if batch.status not in allowed_statuses:
+        raise ValueError(f"Batch {batch_id} changed before pipeline callback: status={batch.status}")
+    return batch
+
+
 async def on_stage_progress(batch_id: str, stage: str) -> None:
     """阶段运行中回调：仅推进 batch.current_stage，供前端实时展示。"""
     progress_stage = to_progress_internal(stage)
+    batch_uuid = uuid.UUID(batch_id)
     async with async_session_factory() as session:
-        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(current_stage=progress_stage)
-        await session.execute(stmt)
+        batch = await _lock_unfrozen_batch(
+            session,
+            batch_uuid,
+            allowed_statuses=frozenset({BatchStatus.RUNNING}),
+        )
+        batch.current_stage = progress_stage
         await session.commit()
 
     logger.info("Stage progress for batch %s → %s", batch_id, progress_stage)
@@ -36,15 +61,19 @@ async def on_stage_complete(
     """单阶段完成回调：更新 batch.current_stage + 写入 stage_artifacts"""
     artifact_stage = to_progress_internal(stage)
     progress_stage = to_progress_internal(current_stage or stage)
+    batch_uuid = uuid.UUID(batch_id)
     async with async_session_factory() as session:
-        # 更新 batch current_stage
-        stmt = update(TestBatch).where(TestBatch.id == batch_id).values(current_stage=progress_stage)
-        await session.execute(stmt)
+        batch = await _lock_unfrozen_batch(
+            session,
+            batch_uuid,
+            allowed_statuses=frozenset({BatchStatus.RUNNING, BatchStatus.PENDING_REVIEW}),
+        )
+        batch.current_stage = progress_stage
 
         # 写入 stage_artifacts
         stage_artifact = StageArtifact(
             id=uuid.uuid4(),
-            batch_id=uuid.UUID(batch_id),
+            batch_id=batch_uuid,
             stage=artifact_stage,
             status="completed",
             artifact=artifact,
@@ -74,6 +103,12 @@ async def on_pipeline_complete(
     batch_uuid = uuid.UUID(batch_id)
 
     async with async_session_factory() as session:
+        batch = await _lock_unfrozen_batch(
+            session,
+            batch_uuid,
+            allowed_statuses=frozenset({BatchStatus.RUNNING}),
+        )
+
         # ── 0. 写入规则台账 ──────────────────────────────────────────
         # rule_code（如 "R-001"）→ rules 表 UUID PK 映射，供 test_points.rule_id 解析
         rule_code_map: dict[str, uuid.UUID] = {}
@@ -177,17 +212,10 @@ async def on_pipeline_complete(
 
         # ── 3. 更新 batch 状态 ───────────────────────────────────────
         total_cases = len(final_cases)
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(
-                status=BatchStatus.PENDING_REVIEW,
-                current_stage="export",
-                total_cases=total_cases,
-                completed_at=datetime.now(timezone.utc),
-            )
-        )
-        await session.execute(stmt)
+        batch.status = BatchStatus.PENDING_REVIEW
+        batch.current_stage = "export"
+        batch.total_cases = total_cases
+        batch.completed_at = datetime.now(timezone.utc)
 
         # 写入审计报告作为 stage artifact
         audit_artifact = StageArtifact(
@@ -213,21 +241,20 @@ async def on_pipeline_complete(
 
 async def on_pipeline_failed(batch_id: str, error: str, stage: str) -> None:
     """失败回调：status→failed, 记录错误"""
+    batch_uuid = uuid.UUID(batch_id)
     async with async_session_factory() as session:
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(
-                status=BatchStatus.FAILED,
-                current_stage=stage,
-                completed_at=datetime.now(timezone.utc),
-            )
+        batch = await _lock_unfrozen_batch(
+            session,
+            batch_uuid,
+            allowed_statuses=frozenset({BatchStatus.RUNNING, BatchStatus.PENDING_REVIEW}),
         )
-        await session.execute(stmt)
+        batch.status = BatchStatus.FAILED
+        batch.current_stage = stage
+        batch.completed_at = datetime.now(timezone.utc)
 
         fail_artifact = StageArtifact(
             id=uuid.uuid4(),
-            batch_id=uuid.UUID(batch_id),
+            batch_id=batch_uuid,
             stage=stage,
             status="failed",
             artifact={"error": error},
@@ -242,20 +269,19 @@ async def on_pipeline_failed(batch_id: str, error: str, stage: str) -> None:
 
 async def on_pipeline_suspended(batch_id: str, open_questions: list) -> None:
     """Gate NO_GO 挂起回调：status→suspended, 写入 open_questions 到 stage_artifacts"""
+    batch_uuid = uuid.UUID(batch_id)
     async with async_session_factory() as session:
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(
-                status=BatchStatus.SUSPENDED,
-                current_stage="gate",
-            )
+        batch = await _lock_unfrozen_batch(
+            session,
+            batch_uuid,
+            allowed_statuses=frozenset({BatchStatus.RUNNING}),
         )
-        await session.execute(stmt)
+        batch.status = BatchStatus.SUSPENDED
+        batch.current_stage = "gate"
 
         suspend_artifact = StageArtifact(
             id=uuid.uuid4(),
-            batch_id=uuid.UUID(batch_id),
+            batch_id=batch_uuid,
             stage="comprehend",
             status="suspended",
             open_questions=open_questions,

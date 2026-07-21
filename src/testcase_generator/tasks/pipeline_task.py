@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from uuid import UUID
 
 from src.platform_api.core.celery_app import celery_app
 from src.platform_api.models.enums import BatchStatus
@@ -56,28 +57,47 @@ async def _execute_pipeline(
     - 需要通过 app.aget_state(config) 检查 snapshot.next 和 snapshot.tasks
       来判断是否处于中断状态
     """
-    from sqlalchemy import update
+    from sqlalchemy import select
 
     from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestBatch
     from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
 
-    # 1. 更新 batch status → running
+    try:
+        requested_batch_id = UUID(str(batch_id))
+        requested_document_id = UUID(str(document_id))
+        requested_system_id = UUID(str(system_id))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("invalid pipeline task identity") from exc
+
+    # 1. 锁定并校验任务归属，再更新 batch status → running
     async with async_session_factory() as session:
+        batch = None
+        for attempt in range(5):
+            batch = await session.scalar(select(TestBatch).where(TestBatch.id == requested_batch_id).with_for_update())
+            if batch is not None:
+                break
+            if attempt < 4:
+                # API 先投递 Celery、后提交新 batch；给这段既有提交窗口一个有界等待。
+                await asyncio.sleep(0.1 * (2**attempt))
+        if batch is None:
+            raise ValueError(f"batch not found: {batch_id}")
+        if batch.taxonomy_version_id is not None:
+            raise ValueError(f"batch {batch_id} taxonomy is frozen")
+        if batch.document_id != requested_document_id:
+            raise ValueError(f"pipeline task document_id does not match batch: {batch_id}")
+        if batch.system_id != requested_system_id:
+            raise ValueError(f"pipeline task system_id does not match batch: {batch_id}")
+        if batch.status not in {BatchStatus.PENDING, BatchStatus.RUNNING}:
+            raise ValueError(f"batch {batch_id} is not startable from status={batch.status}")
+
         model_bundle = await load_active_model_bundle(session)
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(
-                status=BatchStatus.RUNNING,
-                current_stage="parse",
-                celery_task_id=celery_task_id,
-                started_at=datetime.now(timezone.utc),
-                generation_config=config,
-            )
-        )
-        await session.execute(stmt)
+        batch.status = BatchStatus.RUNNING
+        batch.current_stage = "parse"
+        batch.celery_task_id = celery_task_id
+        batch.started_at = datetime.now(timezone.utc)
+        batch.generation_config = config
         await session.commit()
 
     with model_runtime_scope(model_bundle):
@@ -207,7 +227,7 @@ def resume_pipeline_task(batch_id: str, clarification_answers: list[dict]) -> di
 
 async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> dict:
     """内部异步恢复逻辑"""
-    from sqlalchemy import update
+    from sqlalchemy import select
 
     from src.platform_api.core.model_runtime import model_runtime_scope
     from src.platform_api.models.testcase import TestBatch
@@ -216,13 +236,16 @@ async def _resume_pipeline(batch_id: str, clarification_answers: list[dict]) -> 
 
     # 1. 更新 status → running
     async with async_session_factory() as session:
+        batch = (
+            await session.execute(select(TestBatch).where(TestBatch.id == batch_id).with_for_update())
+        ).scalar_one_or_none()
+        if batch is None:
+            raise ValueError(f"Batch {batch_id} not found")
+        if batch.status != BatchStatus.SUSPENDED or batch.taxonomy_version_id is not None:
+            raise ValueError(f"Batch {batch_id} changed or taxonomy is frozen before resume")
         model_bundle = await load_active_model_bundle(session)
-        stmt = (
-            update(TestBatch)
-            .where(TestBatch.id == batch_id)
-            .values(status=BatchStatus.RUNNING, current_stage="comprehend")
-        )
-        await session.execute(stmt)
+        batch.status = BatchStatus.RUNNING
+        batch.current_stage = "comprehend"
         await session.commit()
 
     with model_runtime_scope(model_bundle):

@@ -27,8 +27,10 @@ def regenerate_case_task(self, case_id: str, comment: str) -> dict:
 async def _regenerate_case(case_id: str, comment: str) -> dict:
     from sqlalchemy import select
 
+    from src.platform_api.core.exceptions import ApiError
     from src.platform_api.core.model_runtime import model_runtime_scope
-    from src.platform_api.models.testcase import TestCase, TestPoint
+    from src.platform_api.models.testcase import TestPoint
+    from src.platform_api.services.review_service import lock_case_for_content_mutation
     from src.platform_api.services.task_model_runtime import load_active_model_bundle
     from src.testcase_generator.db import async_session_factory
     from src.testcase_generator.services.llm_client import get_llm_client
@@ -36,10 +38,11 @@ async def _regenerate_case(case_id: str, comment: str) -> dict:
 
     # 1. 读取原用例和关联测试点
     async with async_session_factory() as session:
-        case = await session.get(TestCase, UUID(case_id))
-        if case is None:
-            logger.error("regenerate_case: 用例不存在 case_id=%s", case_id)
-            return {"error": "case_not_found"}
+        try:
+            case = await lock_case_for_content_mutation(session, UUID(case_id))
+        except ApiError as exc:
+            logger.warning("regenerate_case 拒绝读取: case_id=%s error_code=%s", case_id, exc.error_code)
+            return {"error": "case_not_found" if exc.error_code == "E4041" else "case_not_mutable"}
         model_bundle = await load_active_model_bundle(session)
 
         test_point = None
@@ -95,9 +98,12 @@ async def _regenerate_case(case_id: str, comment: str) -> dict:
 
     # 3. 用重写结果更新该用例
     async with async_session_factory() as session:
-        case = await session.get(TestCase, UUID(case_id))
-        if case is None:
-            return {"error": "case_not_found_after_llm"}
+        try:
+            case = await lock_case_for_content_mutation(session, UUID(case_id))
+        except ApiError as exc:
+            logger.warning("regenerate_case 拒绝落库: case_id=%s error_code=%s", case_id, exc.error_code)
+            suffix = "not_found" if exc.error_code == "E4041" else "not_mutable"
+            return {"error": f"case_{suffix}_after_llm"}
 
         case.title = llm_output.title
         case.preconditions = llm_output.preconditions
