@@ -31,6 +31,8 @@ class TaxonomyCandidate(BaseModel):
     score: float = Field(ge=0, le=1)
     rank: int = Field(ge=1)
     evidence: list[str] = Field(min_length=1)
+    scope_conflict: bool = False
+    scope_conflict_evidence: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_evidence(self) -> TaxonomyCandidate:
@@ -38,6 +40,12 @@ class TaxonomyCandidate(BaseModel):
             raise ValueError("duplicate_candidate_evidence")
         if any(not item for item in self.evidence):
             raise ValueError("empty_candidate_evidence")
+        if self.scope_conflict and not self.scope_conflict_evidence:
+            raise ValueError("scope_conflict_evidence_required")
+        if not self.scope_conflict and self.scope_conflict_evidence:
+            raise ValueError("scope_conflict_evidence_forbidden")
+        if len(self.scope_conflict_evidence) != len(set(self.scope_conflict_evidence)):
+            raise ValueError("duplicate_scope_conflict_evidence")
         return self
 
 
@@ -50,6 +58,8 @@ class TaxonomyResolutionPolicy(BaseModel):
     top_k: int = Field(ge=1, le=50)
     minimum_score: float = Field(ge=0, le=1)
     minimum_margin: float = Field(ge=0, le=1)
+    out_of_scope_conflict_score: float = Field(ge=0, le=1)
+    decision_context_max_chars: int = Field(ge=1000, le=200_000)
     require_grounding: Literal[True] = True
     allowed_node_types: tuple[Literal["domain", "module", "capability"], ...] = Field(min_length=1)
     allowed_node_statuses: tuple[Literal["active", "deprecated", "merged"], ...] = Field(min_length=1)
@@ -74,6 +84,18 @@ class TaxonomyResolutionPolicy(BaseModel):
         payload["allowed_node_types"] = sorted(payload["allowed_node_types"])
         payload["allowed_node_statuses"] = sorted(payload["allowed_node_statuses"])
         return _canonical_hash(payload)
+
+    @property
+    def candidate_index_policy_hash(self) -> str:
+        """只绑定会改变索引成员的策略字段，避免决议调参触发无效重建。"""
+
+        return _canonical_hash(
+            {
+                "schema_version": self.schema_version,
+                "allowed_node_types": sorted(self.allowed_node_types),
+                "allowed_node_statuses": sorted(self.allowed_node_statuses),
+            }
+        )
 
 
 class TaxonomyResolution(BaseModel):
@@ -150,6 +172,8 @@ class TaxonomyResolution(BaseModel):
                     raise ValueError("policy_auto_primary_not_in_candidates")
                 if self.primary_concept_id != ranked_candidates[0].concept_id:
                     raise ValueError("policy_auto_primary_must_be_rank_one")
+                if ranked_candidates[0].scope_conflict:
+                    raise ValueError("policy_auto_scope_conflict")
                 if any(concept_id not in candidate_ids for concept_id in self.related_concept_ids):
                     raise ValueError("policy_auto_related_not_in_candidates")
                 if self.margin is None:

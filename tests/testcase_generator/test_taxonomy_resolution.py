@@ -46,6 +46,8 @@ def _policy_data() -> dict:
         "top_k": 5,
         "minimum_score": 0.85,
         "minimum_margin": 0.12,
+        "out_of_scope_conflict_score": 0.9,
+        "decision_context_max_chars": 24_000,
         "require_grounding": True,
         "allowed_node_types": ["capability", "module"],
         "allowed_node_statuses": ["active"],
@@ -90,6 +92,27 @@ def _mapped_resolution_data() -> dict:
 def test_candidate_rejects_out_of_range_score() -> None:
     with pytest.raises(ValidationError):
         TaxonomyCandidate.model_validate(_candidate(score=1.01))
+
+
+def test_candidate_scope_conflict_requires_separate_negative_evidence() -> None:
+    missing_evidence = _candidate()
+    missing_evidence["scope_conflict"] = True
+    false_conflict = _candidate()
+    false_conflict["scope_conflict_evidence"] = ["negative_example:ru_123"]
+
+    with pytest.raises(ValidationError, match="scope_conflict_evidence_required"):
+        TaxonomyCandidate.model_validate(missing_evidence)
+    with pytest.raises(ValidationError, match="scope_conflict_evidence_forbidden"):
+        TaxonomyCandidate.model_validate(false_conflict)
+
+
+def test_policy_auto_cannot_map_a_scope_conflicted_top_candidate() -> None:
+    data = _mapped_resolution_data()
+    data["candidates"][0]["scope_conflict"] = True
+    data["candidates"][0]["scope_conflict_evidence"] = ["negative_example:ru_123"]
+
+    with pytest.raises(ValidationError, match="policy_auto_scope_conflict"):
+        TaxonomyResolution.model_validate(data)
 
 
 def test_resolution_rejects_duplicate_candidate_rank() -> None:
