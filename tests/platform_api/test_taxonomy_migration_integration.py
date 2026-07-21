@@ -97,6 +97,200 @@ async def test_taxonomy_migration_adds_nullable_assignment_columns() -> None:
     assert hasattr(CaseModel, "taxonomy_concept_id")
 
 
+async def test_taxonomy_semantics_migration_preserves_v1_and_adds_v2_columns() -> None:
+    async with get_engine().connect() as connection:
+        columns = await connection.run_sync(
+            lambda sync_connection: {
+                table: {
+                    column["name"]: column for column in inspect(sync_connection).get_columns(table, schema="testcase")
+                }
+                for table in ("taxonomy_versions", "taxonomy_nodes")
+            }
+        )
+
+    assert columns["taxonomy_versions"]["schema_version"]["nullable"] is False
+    assert "1" in str(columns["taxonomy_versions"]["schema_version"]["default"])
+    assert columns["taxonomy_nodes"]["definition"]["nullable"] is True
+    assert columns["taxonomy_nodes"]["scope_note"]["nullable"] is True
+    assert columns["taxonomy_nodes"]["in_scope_examples"]["nullable"] is False
+    assert columns["taxonomy_nodes"]["out_of_scope_examples"]["nullable"] is False
+    assert hasattr(TaxonomyVersion, "schema_version")
+    assert hasattr(TaxonomyNode, "definition")
+    assert hasattr(TaxonomyNode, "in_scope_examples")
+
+
+async def test_database_rejects_v2_activation_without_grounded_capability_semantics(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="missing-evidence")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="invalid v2",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="capability",
+            display_name="缺少语义证据",
+            definition="缺少正向证据的能力定义。",
+            scope_note="用于验证数据库激活门禁。",
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(DBAPIError, match="v2 active capability semantics required"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_rejects_empty_v2_taxonomy_activation(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="empty v2",
+        created_by="author",
+    )
+    db_session.add(version)
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(DBAPIError, match="v2 taxonomy node semantics required"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_rejects_v2_module_without_definition_or_scope(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="undefined-module")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="undefined module",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="module",
+            display_name="缺少定义的模块",
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(DBAPIError, match="v2 taxonomy node semantics required"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_rejects_v2_activation_with_invalid_example_shape(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    concept = TaxonomyConcept(system_id=system_id, stable_key="invalid-example-shape")
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="invalid example shape",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="capability",
+            display_name="示例格式无效",
+            definition="包含格式无效的正向证据。",
+            scope_note="用于验证数据库示例门禁。",
+            in_scope_examples=[
+                {
+                    "text": "格式无效",
+                    "document_content_hash": "invalid",
+                    "requirement_unit_id": "invalid",
+                }
+            ],
+        )
+    )
+    await db_session.commit()
+
+    version.status = "active"
+    version.activated_by = "reviewer"
+    version.activated_at = datetime.now(timezone.utc)
+    with pytest.raises(DBAPIError, match="v2 taxonomy example invalid"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_database_treats_schema_version_as_immutable_version_identity(
+    db_session: AsyncSession,
+    seeded_system,
+) -> None:
+    system_id, _ = seeded_system
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=1,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash="1" * 64,
+        change_note="v1",
+        created_by="author",
+    )
+    db_session.add(version)
+    await db_session.commit()
+
+    version.schema_version = 2
+    with pytest.raises(DBAPIError, match="taxonomy version identity/content is immutable"):
+        await db_session.commit()
+    await db_session.rollback()
+
+
 async def test_database_enforces_one_active_version_per_system(
     db_session: AsyncSession,
     seeded_system,

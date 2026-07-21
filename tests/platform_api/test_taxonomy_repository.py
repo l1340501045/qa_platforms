@@ -19,6 +19,7 @@ from src.platform_api.models.taxonomy import (
 )
 from src.platform_api.services.taxonomy_admin_service import TaxonomyAdminError, TaxonomyAdminService
 from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
+from src.testcase_generator.services.taxonomy_manifest import taxonomy_node_definition_hash
 from tests.platform_api.conftest import requires_db, set_taxonomy_immutability_triggers
 
 pytestmark = requires_db
@@ -116,6 +117,41 @@ def _manifest(
     )
 
 
+def _v2_manifest(
+    *,
+    system_id: uuid.UUID,
+    document_id: uuid.UUID,
+    content_hash: str,
+) -> TaxonomyManifest:
+    payload = _manifest(
+        system_id=system_id,
+        document_id=document_id,
+        content_hash=content_hash,
+    ).model_dump(mode="json")
+    payload["schema_version"] = 2
+    payload["nodes"][0].update(
+        {
+            "definition": "管理系统内可复用的素材资产。",
+            "scope_note": "包含素材管理，不包含广告任务执行。",
+        }
+    )
+    payload["nodes"][1].update(
+        {
+            "definition": "按条件筛选素材并调整结果顺序。",
+            "scope_note": "包含筛选与排序，不包含上传。",
+            "in_scope_examples": [
+                {
+                    "text": "素材列表支持按创建时间排序。",
+                    "document_content_hash": content_hash,
+                    "requirement_unit_id": f"ru_{'1' * 64}",
+                }
+            ],
+            "out_of_scope_examples": [],
+        }
+    )
+    return TaxonomyManifest.model_validate(payload)
+
+
 async def test_import_dry_run_writes_nothing(db_session: AsyncSession, taxonomy_source) -> None:
     system_id, document_id, content_hash = taxonomy_source
     service = TaxonomyAdminService(db_session)
@@ -150,6 +186,142 @@ async def test_import_is_idempotent_for_same_manifest(db_session: AsyncSession, 
         select(func.count()).select_from(TaxonomyConcept).where(TaxonomyConcept.system_id == system_id)
     ) == len(manifest.nodes)
     await db_session.rollback()
+
+
+async def test_import_v2_persists_schema_and_node_semantics(db_session: AsyncSession, taxonomy_source) -> None:
+    system_id, document_id, content_hash = taxonomy_source
+    manifest = _v2_manifest(system_id=system_id, document_id=document_id, content_hash=content_hash)
+    service = TaxonomyAdminService(db_session)
+
+    result = await service.import_manifest(manifest, apply=True)
+    version = await db_session.get(TaxonomyVersion, result.version_id)
+    nodes = list(
+        (
+            await db_session.execute(
+                select(TaxonomyNode)
+                .where(TaxonomyNode.taxonomy_version_id == result.version_id)
+                .order_by(TaxonomyNode.display_name)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    assert version is not None
+    assert version.schema_version == 2
+    capability = next(node for node in nodes if node.node_type == "capability")
+    assert capability.definition == "按条件筛选素材并调整结果顺序。"
+    assert capability.scope_note == "包含筛选与排序，不包含上传。"
+    assert capability.in_scope_examples[0]["requirement_unit_id"] == f"ru_{'1' * 64}"
+    assert capability.out_of_scope_examples == []
+    await db_session.rollback()
+
+
+async def test_activate_revalidates_v2_semantics_before_database_transition(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, _, _ = taxonomy_source
+    concept = TaxonomyConcept(system_id=system_id, stable_key="missing-evidence")
+    payload = {
+        "stable_key": "missing-evidence",
+        "node_type": "capability",
+        "display_name": "缺少证据",
+        "aliases": [],
+        "sort_order": 0,
+        "node_status": "active",
+        "definition": "缺少正向证据的能力定义。",
+        "scope_note": "用于验证激活门禁。",
+    }
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash=taxonomy_node_definition_hash([payload]),
+        change_note="malformed v2 draft",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="capability",
+            display_name="缺少证据",
+            definition="缺少正向证据的能力定义。",
+            scope_note="用于验证激活门禁。",
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(TaxonomyAdminError, match="v2_active_capability_in_scope_evidence_required"):
+        await TaxonomyAdminService(db_session).activate(
+            system_id=system_id,
+            version=1,
+            actor="reviewer",
+            apply=False,
+        )
+
+
+async def test_activate_revalidates_v2_example_shape_before_database_transition(
+    db_session: AsyncSession,
+    taxonomy_source,
+) -> None:
+    system_id, _, _ = taxonomy_source
+    concept = TaxonomyConcept(system_id=system_id, stable_key="invalid-example")
+    malformed_example = {
+        "text": "来源标识格式无效",
+        "document_content_hash": "invalid",
+        "requirement_unit_id": "invalid",
+    }
+    payload = {
+        "stable_key": "invalid-example",
+        "node_type": "capability",
+        "display_name": "示例结构无效",
+        "aliases": [],
+        "sort_order": 0,
+        "node_status": "active",
+        "definition": "包含无效证据结构的能力。",
+        "scope_note": "用于验证强类型重放。",
+        "in_scope_examples": [malformed_example],
+    }
+    version = TaxonomyVersion(
+        system_id=system_id,
+        version=1,
+        schema_version=2,
+        status="draft",
+        manifest_hash="1" * 64,
+        definition_hash=taxonomy_node_definition_hash([payload]),
+        change_note="malformed example",
+        created_by="author",
+    )
+    db_session.add_all([concept, version])
+    await db_session.flush()
+    db_session.add(
+        TaxonomyNode(
+            system_id=system_id,
+            taxonomy_version_id=version.id,
+            concept_id=concept.id,
+            node_type="capability",
+            display_name="示例结构无效",
+            definition="包含无效证据结构的能力。",
+            scope_note="用于验证强类型重放。",
+            in_scope_examples=[malformed_example],
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(TaxonomyAdminError, match="v2_node_semantics_invalid"):
+        await TaxonomyAdminService(db_session).activate(
+            system_id=system_id,
+            version=1,
+            actor="reviewer",
+            apply=False,
+        )
 
 
 async def test_import_rejects_same_version_with_different_hash(db_session: AsyncSession, taxonomy_source) -> None:

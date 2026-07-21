@@ -24,6 +24,7 @@ def canonical_manifest_dict(manifest: TaxonomyManifest) -> dict[str, Any]:
     payload = manifest.model_dump(mode="json", exclude_none=True)
     for node in payload["nodes"]:
         node["aliases"] = sorted(node.get("aliases", []))
+        _sort_scope_examples(node)
     for mapping in payload["mappings"]:
         mapping["related_stable_keys"] = sorted(mapping.get("related_stable_keys", []))
     payload["nodes"] = sorted(payload["nodes"], key=lambda node: node["stable_key"])
@@ -59,6 +60,7 @@ def taxonomy_node_definition_hash(nodes: list[dict[str, Any]]) -> str:
     for node in nodes:
         normalized = dict(node)
         normalized["aliases"] = sorted(normalized.get("aliases", []))
+        _sort_scope_examples(normalized)
         canonical_nodes.append(normalized)
     payload = json.dumps(
         sorted(canonical_nodes, key=lambda node: node["stable_key"]),
@@ -67,6 +69,21 @@ def taxonomy_node_definition_hash(nodes: list[dict[str, Any]]) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _sort_scope_examples(node: dict[str, Any]) -> None:
+    for field_name in ("in_scope_examples", "out_of_scope_examples"):
+        if not node.get(field_name):
+            node.pop(field_name, None)
+            continue
+        node[field_name] = sorted(
+            node[field_name],
+            key=lambda example: (
+                example["document_content_hash"],
+                example["requirement_unit_id"],
+                example["text"],
+            ),
+        )
 
 
 def assignment_hash(assignments: TaxonomyAssignmentSet) -> str:

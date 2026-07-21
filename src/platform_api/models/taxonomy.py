@@ -48,6 +48,7 @@ class TaxonomyVersion(Base):
         UniqueConstraint("system_id", "version", name="uq_taxonomy_versions_system_version"),
         UniqueConstraint("system_id", "id", name="uq_taxonomy_versions_system_id"),
         CheckConstraint("version > 0", name="ck_taxonomy_versions_positive"),
+        CheckConstraint("schema_version IN (1, 2)", name="ck_taxonomy_versions_schema_version"),
         CheckConstraint("status IN ('draft', 'active', 'retired')", name="ck_taxonomy_versions_status"),
         CheckConstraint(
             "(status = 'draft' AND activated_by IS NULL AND activated_at IS NULL) OR "
@@ -68,6 +69,7 @@ class TaxonomyVersion(Base):
         UUID(as_uuid=True), ForeignKey("public.systems.id", ondelete="RESTRICT", onupdate="CASCADE"), nullable=False
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'draft'")
     manifest_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     definition_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -146,6 +148,20 @@ class TaxonomyNode(Base):
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     node_status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="'active'")
     replacement_concept_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    definition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scope_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    in_scope_examples: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+    )
+    out_of_scope_examples: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default="'[]'::jsonb",
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 

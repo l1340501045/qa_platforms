@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.platform_api.models.taxonomy import (
@@ -18,7 +19,11 @@ from src.platform_api.models.taxonomy import (
     TaxonomyVersion,
 )
 from src.platform_api.repositories.taxonomy_repo import TaxonomyRepository
-from src.testcase_generator.schemas.taxonomy import TaxonomyManifest, TaxonomyMappingManifest
+from src.testcase_generator.schemas.taxonomy import (
+    TaxonomyManifest,
+    TaxonomyMappingManifest,
+    TaxonomyNodeManifest,
+)
 from src.testcase_generator.services.taxonomy_manifest import (
     manifest_hash,
     taxonomy_definition_hash,
@@ -198,6 +203,7 @@ class TaxonomyAdminService:
         version = TaxonomyVersion(
             system_id=manifest.system_id,
             version=manifest.version,
+            schema_version=manifest.schema_version,
             status="draft",
             manifest_hash=digest,
             definition_hash=taxonomy_definition_hash(manifest),
@@ -219,6 +225,12 @@ class TaxonomyAdminService:
                 replacement_concept_id=(
                     concepts[node.replacement_stable_key].id if node.replacement_stable_key else None
                 ),
+                definition=node.definition,
+                scope_note=node.scope_note,
+                in_scope_examples=[example.model_dump(mode="json") for example in (node.in_scope_examples or [])],
+                out_of_scope_examples=[
+                    example.model_dump(mode="json") for example in (node.out_of_scope_examples or [])
+                ],
             )
             for node in manifest.nodes
         )
@@ -305,12 +317,53 @@ class TaxonomyAdminService:
                 payload["parent_stable_key"] = parent_key
             if replacement_key is not None:
                 payload["replacement_stable_key"] = replacement_key
+            if version.schema_version == 2:
+                if node.definition is not None:
+                    payload["definition"] = node.definition
+                if node.scope_note is not None:
+                    payload["scope_note"] = node.scope_note
+                if node.in_scope_examples:
+                    payload["in_scope_examples"] = node.in_scope_examples
+                if node.out_of_scope_examples:
+                    payload["out_of_scope_examples"] = node.out_of_scope_examples
             payloads.append(payload)
+        manifest_nodes: list[TaxonomyNodeManifest] | None = None
+        if version.schema_version == 2:
+            try:
+                manifest_nodes = [TaxonomyNodeManifest.model_validate(payload) for payload in payloads]
+            except ValidationError as exc:
+                raise TaxonomyAdminError(
+                    "v2_node_semantics_invalid",
+                    f"version={version.version} 的节点语义不符合 v2 契约",
+                ) from exc
+            self._validate_v2_semantics(manifest_nodes)
         if taxonomy_node_definition_hash(payloads) != version.definition_hash:
             raise TaxonomyAdminError(
                 "taxonomy_definition_hash_mismatch",
                 f"version={version.version} 的数据库节点已偏离导入 manifest",
             )
+
+    @staticmethod
+    def _validate_v2_semantics(nodes: list[TaxonomyNodeManifest]) -> None:
+        if not nodes:
+            raise TaxonomyAdminError("v2_taxonomy_node_required", "v2 taxonomy 至少需要一个节点")
+        for node in nodes:
+            stable_key = node.stable_key
+            if not node.definition:
+                raise TaxonomyAdminError(
+                    "v2_node_definition_required",
+                    f"stable_key={stable_key}",
+                )
+            if not node.scope_note:
+                raise TaxonomyAdminError(
+                    "v2_node_scope_note_required",
+                    f"stable_key={stable_key}",
+                )
+            if node.node_type == "capability" and node.node_status == "active" and not node.in_scope_examples:
+                raise TaxonomyAdminError(
+                    "v2_active_capability_in_scope_evidence_required",
+                    f"stable_key={stable_key}",
+                )
 
     async def _validate_sources(self, manifest: TaxonomyManifest) -> None:
         if await self.repository.get_system(manifest.system_id) is None:
