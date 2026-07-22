@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -46,6 +47,7 @@ from src.testcase_generator.services.taxonomy_evaluation import (
     build_calibration_package,
     calibrate_resolution_policy,
     evaluate_taxonomy_generalization,
+    load_evaluation_inputs,
     load_requirement_unit_index,
     render_taxonomy_evaluation_report,
     resolve_evaluation_artifact_path,
@@ -121,6 +123,31 @@ def _dataset(*, duplicate_test_hash: bool = False) -> TaxonomyDatasetManifest:
     )
 
 
+def _locked_v3_dataset() -> TaxonomyDatasetManifest:
+    return TaxonomyDatasetManifest(
+        schema_version=3,
+        corpus_id="cross-prd-pilot-v3",
+        pilot_corpus=True,
+        split_strategy="document_level",
+        test_locked=True,
+        evaluation_split="test",
+        source_commitment_hash="a" * 64,
+        upstream_artifact_hashes={"frozen_policy": "b" * 64},
+        created_at=NOW,
+        documents=[
+            _document("drama-v2", system_key="drama", system_id=SYSTEM_A, split="test", hash_char="2"),
+            _document("dist-v2", system_key="distribution", system_id=SYSTEM_B, split="test", hash_char="4"),
+        ],
+        gold_artifact=_artifact("test-gold.json", "5"),
+        prediction_artifact=_artifact("test-predictions.json", "6"),
+        source_transformation_commitment_artifact=_artifact("source-transformations.json", "7"),
+        transformation_projection_artifact=_artifact("transformation-projection.json", "0"),
+        transformation_projection_revision="source-fact-unit-projection-v1",
+        prompt_revisions={"resolver": "resolver@1"},
+        model_revisions={"taxonomy_resolver": "verify@1"},
+    )
+
+
 def test_dataset_v2_allows_calibration_stage_without_locked_test_artifacts() -> None:
     dataset = TaxonomyDatasetManifest(
         schema_version=2,
@@ -145,6 +172,93 @@ def test_dataset_v2_allows_calibration_stage_without_locked_test_artifacts() -> 
 
     assert dataset.evaluation_split == "dev"
     assert {item.split for item in dataset.documents} == {"dev"}
+
+
+def test_dataset_v3_binds_source_transformation_commitment_without_projection_hash_drift() -> None:
+    dataset = _locked_v3_dataset()
+
+    projected = dataset.model_copy(
+        update={
+            "transformation_projection_artifact": _artifact("transformation-projection.json", "9"),
+        }
+    )
+    changed_commitment = dataset.model_copy(
+        update={
+            "source_transformation_commitment_artifact": _artifact("source-transformations.json", "8"),
+        }
+    )
+    changed_revision = dataset.model_copy(update={"transformation_projection_revision": "projection-v2"})
+    changed_upstream = dataset.model_copy(update={"upstream_artifact_hashes": {"frozen_policy": "c" * 64}})
+    changed_source_commitment = dataset.model_copy(update={"source_commitment_hash": "d" * 64})
+
+    assert projected.dataset_hash == dataset.dataset_hash
+    assert changed_commitment.dataset_hash != dataset.dataset_hash
+    assert changed_revision.dataset_hash != dataset.dataset_hash
+    assert changed_upstream.dataset_hash != dataset.dataset_hash
+    assert changed_source_commitment.dataset_hash != dataset.dataset_hash
+
+
+def test_generic_loader_rejects_v3_without_locked_test_receipt_replay(tmp_path: Path) -> None:
+    dataset_path = tmp_path / "locked-test-dataset.json"
+    dataset_path.write_text(_locked_v3_dataset().model_dump_json(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="dataset_v3_requires_locked_test_receipt_replay"):
+        load_evaluation_inputs(
+            dataset_path=dataset_path,
+            policy_path=tmp_path / "policy.json",
+        )
+
+
+def test_dataset_v3_rejects_legacy_transformation_artifact() -> None:
+    payload = {
+        "schema_version": 3,
+        "corpus_id": "cross-prd-pilot-v3",
+        "pilot_corpus": True,
+        "split_strategy": "document_level",
+        "test_locked": True,
+        "evaluation_split": "test",
+        "source_commitment_hash": "a" * 64,
+        "upstream_artifact_hashes": {"frozen_policy": "b" * 64},
+        "created_at": NOW,
+        "documents": [
+            _document("drama-v2", system_key="drama", system_id=SYSTEM_A, split="test", hash_char="2"),
+            _document("dist-v2", system_key="distribution", system_id=SYSTEM_B, split="test", hash_char="4"),
+        ],
+        "gold_artifact": _artifact("test-gold.json", "5"),
+        "prediction_artifact": _artifact("test-predictions.json", "6"),
+        "transformation_artifact": _artifact("legacy-transformations.json", "7"),
+        "source_transformation_commitment_artifact": _artifact("source-transformations.json", "8"),
+        "transformation_projection_artifact": _artifact("transformation-projection.json", "0"),
+        "transformation_projection_revision": "source-fact-unit-projection-v1",
+        "prompt_revisions": {"resolver": "resolver@1"},
+        "model_revisions": {"taxonomy_resolver": "verify@1"},
+    }
+
+    with pytest.raises(ValidationError, match="dataset_v3_legacy_transformation_forbidden"):
+        TaxonomyDatasetManifest.model_validate(payload)
+
+
+def test_legacy_transformation_canonical_hash_keeps_v1_field_set() -> None:
+    transformations = TaxonomyTransformationSet(
+        schema_version=1,
+        corpus_id="cross-prd-pilot-v1",
+        records=[],
+    )
+    expected_payload = {
+        "schema_version": 1,
+        "corpus_id": "cross-prd-pilot-v1",
+        "records": [],
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            expected_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+    assert transformations.canonical_hash == expected
 
 
 def test_evaluation_accepts_v2_locked_test_bound_to_distinct_calibration_dataset() -> None:
@@ -1436,6 +1550,49 @@ def test_release_gate_is_incomplete_until_operational_thresholds_are_approved() 
     assert result.overall_status == "incomplete"
     assert "reuse_coverage_threshold_missing" in result.system_results[0].gate_findings
     assert "human_intervention_threshold_missing" in result.system_results[0].gate_findings
+
+
+def test_release_gate_requires_reuse_examples_when_reuse_baseline_is_enabled() -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [
+            _gold(
+                "gold1",
+                document_key="drama-v2",
+                system_key="drama",
+                split="test",
+                expected="new_node",
+            )
+        ],
+    )
+    frozen = _frozen_policy(dataset, gold)
+    predictions = _predictions(
+        dataset,
+        [
+            _prediction(
+                "gold1",
+                document_key="drama-v2",
+                system_key="drama",
+                split="test",
+                outcome="unresolved",
+            )
+        ],
+        policy_hash=frozen.policy_hash,
+        frozen_policy_hash=frozen.canonical_hash,
+    )
+
+    result = evaluate_taxonomy_generalization(
+        dataset=dataset,
+        gold=gold,
+        predictions=predictions,
+        requirement_units=_requirement_units(dataset, gold),
+        frozen_policy=frozen,
+        gate=_gate(require_reuse_baseline=True, require_new_node_baseline=True),
+    )
+
+    assert result.overall_status != "pass"
+    assert "reuse_baseline_missing" in result.system_results[0].gate_findings
 
 
 def test_release_gate_requires_every_locked_test_document() -> None:

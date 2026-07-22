@@ -17,6 +17,7 @@ from src.testcase_generator.schemas.taxonomy_evaluation import ArtifactRef, Reco
 from src.testcase_generator.schemas.taxonomy_resolution import TaxonomyResolution
 
 PilotCorpusSplit = Literal["bootstrap", "calibration", "test"]
+PilotTransformationKind = Literal["chapter_reorder", "title_rewrite", "synonym", "multi_capability"]
 
 
 def _canonical_hash(value: object) -> str:
@@ -324,18 +325,107 @@ class PilotCalibrationPolicyCompletionReceipt(BaseModel):
     gold_attestation: ArtifactRef
 
 
+class PilotSourceTransformationRecord(BaseModel):
+    """预测前由人工按 source fact 冻结的语义不变关系。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    transformation_id: RecordId
+    system_key: RecordId
+    semantic_group_id: RecordId
+    source_fact_id: RecordId
+    variant_fact_id: RecordId
+    kind: PilotTransformationKind
+    transformation_revision: str = Field(min_length=1, max_length=255)
+    source_quote_hash: Sha256
+    variant_quote_hash: Sha256
+
+    @model_validator(mode="after")
+    def validate_transformation(self) -> PilotSourceTransformationRecord:
+        if self.source_fact_id == self.variant_fact_id:
+            raise ValueError("source_transformation_self_reference")
+        if self.source_quote_hash == self.variant_quote_hash and self.kind != "chapter_reorder":
+            raise ValueError("source_transformation_quote_unchanged")
+        return self
+
+
+class PilotSourceTransformationCommitment(BaseModel):
+    """只绑定 source fact，不预知本次模型生成的 Requirement Unit 身份。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    schema_version: Literal[1]
+    corpus_id: RecordId
+    source_commitment_hash: Sha256
+    source_gold_sha256: Sha256
+    projection_revision: str = Field(min_length=1, max_length=255)
+    review_method: Literal["human_independent"] = "human_independent"
+    reviewed_by: str = Field(min_length=1, max_length=100)
+    reviewed_at: datetime
+    records: list[PilotSourceTransformationRecord] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_commitment(self) -> PilotSourceTransformationCommitment:
+        _require_aware(self.reviewed_at, "source_transformation_review_time_timezone_required")
+        identities = [item.transformation_id for item in self.records]
+        variants = [item.variant_fact_id for item in self.records]
+        if len(identities) != len(set(identities)):
+            raise ValueError("duplicate_source_transformation_id")
+        if len(variants) != len(set(variants)):
+            raise ValueError("duplicate_source_transformation_variant")
+        source_facts = {item.source_fact_id for item in self.records}
+        variant_facts = set(variants)
+        if source_facts & variant_facts:
+            raise ValueError("source_transformation_fact_role_conflict")
+        groups: dict[str, tuple[str, str]] = {}
+        source_groups: dict[str, tuple[str, str]] = {}
+        for item in self.records:
+            group = groups.setdefault(item.semantic_group_id, (item.system_key, item.source_fact_id))
+            if group != (item.system_key, item.source_fact_id):
+                raise ValueError(f"source_transformation_group_conflict:{item.semantic_group_id}")
+            source_group = source_groups.setdefault(
+                item.source_fact_id,
+                (item.system_key, item.semantic_group_id),
+            )
+            if source_group != (item.system_key, item.semantic_group_id):
+                raise ValueError(f"source_transformation_source_group_conflict:{item.source_fact_id}")
+        return self
+
+    @property
+    def canonical_hash(self) -> str:
+        payload = self.model_dump(mode="json")
+        payload["records"] = sorted(payload["records"], key=lambda item: item["transformation_id"])
+        return _canonical_hash(payload)
+
+
 class PilotLockedTestInputCommitment(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2, 3]
     source_gold_sha256: Sha256
+    source_transformation_commitment_sha256: Sha256 | None = None
+    evolution_policy_sha256: Sha256 | None = None
     gate_sha256: Sha256
+
+    @model_validator(mode="after")
+    def validate_commitment(self) -> PilotLockedTestInputCommitment:
+        if self.schema_version == 1 and (
+            self.source_transformation_commitment_sha256 is not None or self.evolution_policy_sha256 is not None
+        ):
+            raise ValueError("pilot_locked_test_v1_transformation_commitment_forbidden")
+        if self.schema_version in {2, 3} and self.source_transformation_commitment_sha256 is None:
+            raise ValueError("pilot_locked_test_v2_transformation_commitment_required")
+        if self.schema_version == 2 and self.evolution_policy_sha256 is not None:
+            raise ValueError("pilot_locked_test_v2_evolution_policy_forbidden")
+        if self.schema_version == 3 and self.evolution_policy_sha256 is None:
+            raise ValueError("pilot_locked_test_v3_evolution_policy_required")
+        return self
 
 
 class PilotLockedTestCompletionReceipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2, 3]
     test_dataset_hash: Sha256
     frozen_policy_hash: Sha256
     dataset: ArtifactRef
@@ -344,6 +434,11 @@ class PilotLockedTestCompletionReceipt(BaseModel):
     concept_refs: ArtifactRef
     predictions: ArtifactRef
     source_gold: ArtifactRef
+    source_transformation_commitment: ArtifactRef | None = None
+    transformation_projection: ArtifactRef | None = None
+    transformation_projection_revision: str | None = Field(default=None, min_length=1, max_length=255)
+    evolution_policy: ArtifactRef | None = None
+    evolutions: dict[RecordId, ArtifactRef] = Field(default_factory=dict)
     derived_gold: ArtifactRef
     source_coverage_metrics: ArtifactRef
     gate: ArtifactRef
@@ -354,8 +449,22 @@ class PilotLockedTestCompletionReceipt(BaseModel):
 
     @model_validator(mode="after")
     def validate_system_sets(self) -> PilotLockedTestCompletionReceipt:
-        if set(self.output_manifests) != set(self.output_manifest_hashes):
+        systems = set(self.output_manifests)
+        if systems != set(self.output_manifest_hashes):
             raise ValueError("pilot_locked_test_receipt_systems_mismatch")
+        transformation_fields = (
+            self.source_transformation_commitment,
+            self.transformation_projection,
+            self.transformation_projection_revision,
+        )
+        if self.schema_version == 1 and any(item is not None for item in transformation_fields):
+            raise ValueError("pilot_locked_test_receipt_v1_transformation_fields_forbidden")
+        if self.schema_version in {2, 3} and any(item is None for item in transformation_fields):
+            raise ValueError("pilot_locked_test_receipt_v2_transformation_fields_required")
+        if self.schema_version in {1, 2} and (self.evolution_policy is not None or self.evolutions):
+            raise ValueError("pilot_locked_test_receipt_legacy_evolution_fields_forbidden")
+        if self.schema_version == 3 and (self.evolution_policy is None or set(self.evolutions) != systems):
+            raise ValueError("pilot_locked_test_receipt_v3_evolution_fields_required")
         return self
 
 
@@ -364,7 +473,7 @@ class PilotLockedTestFailureReceipt(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2, 3]
     failure_kind: Literal["source_coverage_quality_gate", "execution"]
     error_type: str = Field(min_length=1, max_length=255)
     test_dataset_hash: Sha256 | None = None
@@ -375,6 +484,10 @@ class PilotLockedTestFailureReceipt(BaseModel):
     concept_refs: ArtifactRef | None = None
     predictions: ArtifactRef | None = None
     source_gold: ArtifactRef | None = None
+    source_transformation_commitment: ArtifactRef | None = None
+    transformation_projection_revision: str | None = Field(default=None, min_length=1, max_length=255)
+    evolution_policy: ArtifactRef | None = None
+    evolutions: dict[RecordId, ArtifactRef] = Field(default_factory=dict)
     source_coverage_metrics: ArtifactRef | None = None
     gate: ArtifactRef | None = None
     report: ArtifactRef | None = None
@@ -402,6 +515,16 @@ class PilotLockedTestFailureReceipt(BaseModel):
                 or any(item is None for item in quality_artifacts)
                 or not self.output_manifests
                 or set(self.output_manifests) != set(self.output_manifest_hashes)
+                or (
+                    self.schema_version in {2, 3}
+                    and (
+                        self.source_transformation_commitment is None or self.transformation_projection_revision is None
+                    )
+                    or (
+                        self.schema_version == 3
+                        and (self.evolution_policy is None or set(self.evolutions) != set(self.output_manifests))
+                    )
+                )
             ):
                 raise ValueError("pilot_locked_test_quality_failure_evidence_required")
             if (
@@ -418,8 +541,18 @@ class PilotLockedTestFailureReceipt(BaseModel):
             or self.output_manifests
             or self.output_manifest_hashes
             or self.findings
+            or self.source_transformation_commitment is not None
+            or self.transformation_projection_revision is not None
+            or self.evolution_policy is not None
+            or self.evolutions
         ):
             raise ValueError("pilot_locked_test_execution_failure_evidence_forbidden")
+        if self.schema_version == 1 and (
+            self.source_transformation_commitment is not None or self.transformation_projection_revision is not None
+        ):
+            raise ValueError("pilot_locked_test_failure_v1_transformation_fields_forbidden")
+        if self.schema_version in {1, 2} and (self.evolution_policy is not None or self.evolutions):
+            raise ValueError("pilot_locked_test_failure_legacy_evolution_fields_forbidden")
         return self
 
 

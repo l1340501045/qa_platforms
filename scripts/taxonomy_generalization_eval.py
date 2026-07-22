@@ -38,7 +38,12 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Taxonomy 跨 PRD pilot 离线评估（默认 dry-run，不调用模型、不写数据库）"
     )
-    parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument(
+        "--dataset",
+        type=Path,
+        required=True,
+        help="calibration 或历史 v1/v2 dataset；v3 locked-test 必须使用 taxonomy_pilot.py verify-locked-test",
+    )
     parser.add_argument("--policy", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gate", type=Path)

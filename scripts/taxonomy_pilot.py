@@ -33,6 +33,7 @@ from src.platform_api.core.model_runtime import (  # noqa: E402
 )
 from src.platform_api.core.settings import settings  # noqa: E402
 from src.testcase_generator.schemas.parsed_context import SourceItem  # noqa: E402
+from src.testcase_generator.schemas.requirement_unit import RequirementUnit  # noqa: E402
 from src.testcase_generator.schemas.taxonomy import TaxonomyManifest  # noqa: E402
 from src.testcase_generator.schemas.taxonomy_evaluation import (  # noqa: E402
     ArtifactRef,
@@ -57,6 +58,7 @@ from src.testcase_generator.schemas.taxonomy_pilot import (  # noqa: E402
     PilotLockedTestInputCommitment,
     PilotResolutionRecord,
     PilotResolutionSet,
+    PilotSourceTransformationCommitment,
 )
 from src.testcase_generator.schemas.taxonomy_resolution import TaxonomyResolutionPolicy  # noqa: E402
 from src.testcase_generator.services.llm_client import LLMClient, llm_stats  # noqa: E402
@@ -88,15 +90,24 @@ from src.testcase_generator.services.taxonomy_evaluation import (  # noqa: E402
     render_taxonomy_evaluation_report,
     validate_evaluation_artifact_hashes,
 )
+from src.testcase_generator.services.taxonomy_evolution import (  # noqa: E402
+    EVOLUTION_PROMPT_REVISION,
+    TaxonomyEvolutionPolicy,
+    TaxonomyEvolutionResult,
+    TaxonomyEvolutionService,
+    build_llm_taxonomy_evolution_binding,
+)
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash  # noqa: E402
 from src.testcase_generator.services.taxonomy_pilot import (  # noqa: E402
+    PILOT_TRANSFORMATION_PROJECTION_REVISION,
     PilotArtifactError,
     PilotRunLedger,
     PilotSourceCoverageError,
     VerifiedPilotBootstrap,
+    build_evolution_draft_manifests,
     build_pilot_frozen_policy,
     build_provisional_bootstrap_gold,
-    derive_locked_test_gold,
+    derive_locked_test_evidence,
     freeze_pilot_corpus,
     load_frozen_corpus,
     load_split_snapshots,
@@ -104,8 +115,11 @@ from src.testcase_generator.services.taxonomy_pilot import (  # noqa: E402
     project_resolution_predictions,
     render_locked_test_source_coverage_failure,
     reserve_locked_test,
+    validate_pilot_locked_test_gate,
     verify_pilot_bootstrap_artifacts,
     verify_pilot_calibration_artifacts,
+    verify_pilot_locked_test_artifacts,
+    verify_pilot_locked_test_failure_artifacts,
     verify_pilot_policy_freeze_artifacts,
     verify_pilot_requirement_artifacts,
     write_json_atomic_once,
@@ -180,9 +194,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     locked_test.add_argument("--root", type=Path, required=True)
     locked_test.add_argument("--source-gold", type=Path, required=True)
+    locked_test.add_argument("--transformation-commitment", type=Path, required=True)
     locked_test.add_argument("--gate", type=Path, required=True)
     locked_test.add_argument("--actor", required=True)
     locked_test.add_argument("--run-id", required=True)
+    verify_locked_test = subparsers.add_parser(
+        "verify-locked-test",
+        help="离线重放唯一 locked test 的输入承诺、机械投影、评估和终态回执",
+    )
+    verify_locked_test.add_argument("--root", type=Path, required=True)
     return parser
 
 
@@ -974,6 +994,67 @@ async def _resolve_split_units(
     return resolutions, concept_ref_set, predictions
 
 
+async def _evolve_locked_test_novel_units(
+    *,
+    bootstrap: VerifiedPilotBootstrap,
+    extractions: dict[str, RequirementUnitExtractionResult],
+    resolutions: PilotResolutionSet,
+    bundle: ModelConfigBundle,
+    policy: TaxonomyEvolutionPolicy,
+) -> dict[str, TaxonomyEvolutionResult]:
+    """只把 resolver 明确拒识为 novel 的 unit 送入 draft-only evolve。"""
+
+    units_by_id = {unit.unit_id: unit for extraction in extractions.values() for unit in extraction.units}
+    if len(units_by_id) != sum(len(extraction.units) for extraction in extractions.values()):
+        raise PilotArtifactError("pilot_locked_test_requirement_unit_duplicate")
+    novel_units_by_system: dict[str, list[RequirementUnit]] = {system_key: [] for system_key in bootstrap.manifests}
+    for record in resolutions.records:
+        if record.resolution.status != "unresolved" or record.resolution.unresolved_kind != "novel":
+            continue
+        unit = units_by_id.get(record.requirement_unit_id)
+        if unit is None or unit.system_id != bootstrap.manifests[record.system_key].system_id:
+            raise PilotArtifactError(f"pilot_evolution_requirement_unit_unknown:{record.requirement_unit_id}")
+        novel_units_by_system[record.system_key].append(unit)
+
+    llm_client = LLMClient(bundle)
+    model_binding = build_llm_taxonomy_evolution_binding(
+        llm_client.generate_structured,
+        model_revision=_model_revision(bundle, ModelRole.VERIFY),
+    )
+    service = TaxonomyEvolutionService(policy=policy)
+    results: dict[str, TaxonomyEvolutionResult] = {}
+    with model_runtime_scope(bundle):
+        for system_key, manifest in sorted(bootstrap.manifests.items()):
+            results[system_key] = await service.evolve(
+                active_manifest=manifest,
+                requirement_units=sorted(
+                    novel_units_by_system[system_key],
+                    key=lambda item: item.unit_id,
+                ),
+                model_binding=model_binding,
+                impact_snapshot={},
+            )
+    return results
+
+
+def _locked_test_evolution_policy() -> TaxonomyEvolutionPolicy:
+    return TaxonomyEvolutionPolicy(
+        schema_version=1,
+        max_context_chars=100_000,
+        max_operations=1_000,
+        fail_behavior="draft_only",
+    )
+
+
+def _json_artifact_sha256(value: object) -> str:
+    payload = (
+        value.model_dump_json(indent=2)
+        if hasattr(value, "model_dump_json")
+        else json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    )
+    return hashlib.sha256(f"{payload}\n".encode("utf-8")).hexdigest()
+
+
 def _build_calibration_provisional_gold(
     *,
     corpus: PilotFrozenCorpus,
@@ -1341,20 +1422,31 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
     corpus = load_frozen_corpus(root)
     bootstrap = verify_pilot_bootstrap_artifacts(root=root, corpus=corpus)
     policy_freeze = verify_pilot_policy_freeze_artifacts(root=root, corpus=corpus)
-    bundle = build_environment_model_bundle(settings)
-    _pin_runtime(root, bundle)
     run_id = _validated_record_id(args.run_id)
     run_root = root / "runs" / "locked-test" / run_id
     dataset_path = root / f"locked-test-dataset-{run_id}.json"
     if run_root.exists() or dataset_path.exists():
         raise PilotArtifactError(f"pilot_locked_test_run_already_exists:{run_id}")
     source_gold_path = args.source_gold.resolve()
+    source_transformation_path = args.transformation_commitment.resolve()
     gate_path = args.gate.resolve()
-    if not source_gold_path.is_file() or not gate_path.is_file():
+    if not source_gold_path.is_file() or not source_transformation_path.is_file() or not gate_path.is_file():
         raise PilotArtifactError("pilot_locked_test_committed_input_missing")
+    try:
+        preflight_gate = TaxonomyEvaluationGate.model_validate_json(gate_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - gate 配置必须在消费唯一 test 前完成预检
+        raise PilotArtifactError("pilot_locked_test_gate_invalid") from exc
+    validate_pilot_locked_test_gate(preflight_gate)
+    evolution_policy = _locked_test_evolution_policy()
+    evolution_policy_path = run_root / "policies" / "evolution-policy.json"
+    evolution_policy_sha256 = _json_artifact_sha256(evolution_policy)
+    bundle = build_environment_model_bundle(settings)
+    _pin_runtime(root, bundle)
     commitment = PilotLockedTestInputCommitment(
-        schema_version=1,
+        schema_version=3,
         source_gold_sha256=_sha256_file(source_gold_path),
+        source_transformation_commitment_sha256=_sha256_file(source_transformation_path),
+        evolution_policy_sha256=evolution_policy_sha256,
         gate_sha256=_sha256_file(gate_path),
     )
     ledger = PilotRunLedger(root / "run-ledger.jsonl")
@@ -1366,13 +1458,18 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
         input_commitment=commitment,
     )
     source_gold_copy_path = run_root / "reviews" / "test-source-gold.json"
+    source_transformation_copy_path = run_root / "reviews" / "source-transformations.json"
     frozen_gate_path = run_root / "evaluation" / "gate.json"
     llm_stats.calls.clear()
     try:
         _copy_file_once(source_gold_path, source_gold_copy_path)
+        _copy_file_once(source_transformation_path, source_transformation_copy_path)
         _copy_file_once(gate_path, frozen_gate_path)
+        write_json_once(evolution_policy_path, evolution_policy)
         if (
             _sha256_file(source_gold_copy_path) != commitment.source_gold_sha256
+            or _sha256_file(source_transformation_copy_path) != commitment.source_transformation_commitment_sha256
+            or _sha256_file(evolution_policy_path) != commitment.evolution_policy_sha256
             or _sha256_file(frozen_gate_path) != commitment.gate_sha256
         ):
             raise PilotArtifactError("pilot_locked_test_committed_input_changed")
@@ -1387,13 +1484,7 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
         degraded_calls = _strict_llm_telemetry_issues(llm_stats.calls)
         if degraded_calls:
             raise PilotArtifactError("pilot_degraded_llm_output:" + json.dumps(degraded_calls, ensure_ascii=False))
-        transformation_set = TaxonomyTransformationSet(
-            schema_version=1,
-            corpus_id=corpus.corpus_id,
-            records=[],
-        )
-        transformation_path = run_root / "evaluation" / "transformations.json"
-        write_json_once(transformation_path, transformation_set)
+        transformation_path = run_root / "evaluation" / "transformation-projection.json"
         runtime_path = root / "runtime" / "model-bundle.json"
         test_documents = sorted(
             (item for item in corpus.documents if item.split == "test"),
@@ -1402,13 +1493,15 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
         prompt_revisions = {
             "candidate_retriever": TAXONOMY_RETRIEVER_REVISION,
             "taxonomy_resolver": TAXONOMY_RESOLVER_PROMPT_REVISION,
+            "taxonomy_evolution": EVOLUTION_PROMPT_REVISION,
         }
         model_revisions = {
             "embedding": _model_revision(bundle, ModelRole.EMBEDDING),
             "taxonomy_resolver": _model_revision(bundle, ModelRole.VERIFY),
+            "taxonomy_evolution": _model_revision(bundle, ModelRole.VERIFY),
         }
         dataset_seed = TaxonomyDatasetManifest(
-            schema_version=2,
+            schema_version=3,
             corpus_id=corpus.corpus_id,
             pilot_corpus=True,
             split_strategy="document_level",
@@ -1422,6 +1515,7 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
                 "calibration_dataset": policy_freeze.frozen_policy.calibration_dataset_hash,
                 "frozen_policy": policy_freeze.frozen_policy.canonical_hash,
                 "runtime_manifest": _sha256_file(runtime_path),
+                "evolution_policy": evolution_policy_sha256,
                 **{
                     f"output_manifest.{system_key}": value
                     for system_key, value in sorted(bootstrap.receipt.output_manifest_hashes.items())
@@ -1450,12 +1544,17 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
                 "path": str((run_root / "predictions" / "predictions.json").relative_to(root)),
                 "sha256": "0" * 64,
             },
-            transformation_artifact=_artifact(root, transformation_path),
+            source_transformation_commitment_artifact=_artifact(root, source_transformation_copy_path),
+            transformation_projection_artifact={
+                "path": str(transformation_path.relative_to(root)),
+                "sha256": "0" * 64,
+            },
+            transformation_projection_revision=PILOT_TRANSFORMATION_PROJECTION_REVISION,
             prompt_revisions=prompt_revisions,
             model_revisions=model_revisions,
         )
         dataset_hash = dataset_seed.dataset_hash
-        resolutions, concept_ref_set, predictions = await _resolve_split_units(
+        resolutions, concept_ref_set, _ = await _resolve_split_units(
             corpus=corpus,
             bootstrap=bootstrap,
             documents=test_documents,
@@ -1468,6 +1567,41 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
             prompt_revisions=prompt_revisions,
             model_revisions=model_revisions,
             frozen_policy_hash=policy_freeze.frozen_policy.canonical_hash,
+        )
+        evolutions = await _evolve_locked_test_novel_units(
+            bootstrap=bootstrap,
+            extractions=extractions,
+            resolutions=resolutions,
+            bundle=bundle,
+            policy=evolution_policy,
+        )
+        evolution_requirement_units = {
+            unit.unit_id: unit for extraction in extractions.values() for unit in extraction.units
+        }
+        output_manifest_models = build_evolution_draft_manifests(
+            active_manifests=bootstrap.manifests,
+            evolution_results=evolutions,
+            requirement_units=evolution_requirement_units,
+        )
+        evolution_paths = {
+            system_key: run_root / "raw" / "evolutions" / f"{system_key}.json" for system_key in sorted(evolutions)
+        }
+        output_manifest_paths = {
+            system_key: run_root / "manifests" / f"{system_key}.json" for system_key in sorted(output_manifest_models)
+        }
+        for system_key, path in evolution_paths.items():
+            write_json_once(path, evolutions[system_key])
+        for system_key, path in output_manifest_paths.items():
+            write_json_once(path, output_manifest_models[system_key])
+        evolution_refs = {system_key: _artifact(root, path) for system_key, path in evolution_paths.items()}
+        output_manifest_refs = {system_key: _artifact(root, path) for system_key, path in output_manifest_paths.items()}
+        predictions = project_resolution_predictions(
+            resolutions=resolutions,
+            concept_refs=concept_ref_set.by_concept_id,
+            manifests=bootstrap.manifests,
+            manifest_artifacts=output_manifest_refs,
+            evolution_results=evolutions,
+            output_manifests=output_manifest_models,
         )
         resolution_path = run_root / "raw" / "resolutions.json"
         concept_ref_path = run_root / "artifacts" / "concept-refs.json"
@@ -1484,32 +1618,46 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
         # 预测已经不可变落盘后才揭盲 source gold，避免 test 标签影响 resolver。
         try:
             source_gold = PilotCoverageGoldSet.model_validate_json(source_gold_copy_path.read_text(encoding="utf-8"))
+            source_transformations = PilotSourceTransformationCommitment.model_validate_json(
+                source_transformation_copy_path.read_text(encoding="utf-8")
+            )
             gate = TaxonomyEvaluationGate.model_validate_json(frozen_gate_path.read_text(encoding="utf-8"))
         except Exception as exc:  # noqa: BLE001 - 揭盲输入统一转换为稳定错误码
             raise PilotArtifactError("pilot_locked_test_committed_input_invalid") from exc
+        validate_pilot_locked_test_gate(gate)
         if source_gold.reviewed_at > reservation.occurred_at:
             raise PilotArtifactError("pilot_locked_test_gold_not_frozen_before_reservation")
-        derived_gold, coverage_metrics = derive_locked_test_gold(
+        if (
+            source_transformations.reviewed_at > reservation.occurred_at
+            or source_transformations.source_gold_sha256 != commitment.source_gold_sha256
+        ):
+            raise PilotArtifactError("pilot_locked_test_transformation_commitment_not_frozen")
+        derived_gold, coverage_metrics, transformation_set = derive_locked_test_evidence(
             root=root,
             corpus=corpus,
             dataset=dataset_seed,
             extractions=extractions,
             source_gold=source_gold,
+            source_transformations=source_transformations,
         )
         derived_gold_path = run_root / "reviews" / "test-gold-derived.json"
         coverage_metrics_path = run_root / "evaluation" / "source-coverage-metrics.json"
         write_json_once(derived_gold_path, derived_gold)
+        write_json_once(transformation_path, transformation_set)
         write_json_once(coverage_metrics_path, asdict(coverage_metrics))
 
         dataset_payload = dataset_seed.model_dump(mode="json")
         dataset_payload["gold_artifact"] = _artifact(root, derived_gold_path).model_dump(mode="json")
         dataset_payload["prediction_artifact"] = _artifact(root, prediction_path).model_dump(mode="json")
+        dataset_payload["transformation_projection_artifact"] = _artifact(root, transformation_path).model_dump(
+            mode="json"
+        )
         dataset = TaxonomyDatasetManifest.model_validate(dataset_payload)
         if dataset.dataset_hash != dataset_hash:
             raise PilotArtifactError("pilot_locked_test_dataset_hash_drift")
         write_json_atomic_once(dataset_path, dataset)
         validate_evaluation_artifact_hashes(dataset=dataset, manifest_path=dataset_path)
-        requirement_units = load_requirement_unit_index(
+        evaluation_requirement_units = load_requirement_unit_index(
             dataset=dataset,
             manifest_path=dataset_path,
             document_splits={"test"},
@@ -1519,14 +1667,14 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
             dataset_path=dataset_path,
             predictions=predictions,
         )
-        if loaded_manifests != bootstrap.manifests:
+        if loaded_manifests != output_manifest_models:
             raise PilotArtifactError("pilot_locked_test_manifest_binding_invalid")
         evaluation = evaluate_taxonomy_generalization(
             dataset=dataset,
             gold=derived_gold,
             predictions=predictions,
             output_manifests=loaded_manifests,
-            requirement_units=requirement_units,
+            requirement_units=evaluation_requirement_units,
             transformations=transformation_set,
             frozen_policy=policy_freeze.frozen_policy,
             gate=gate,
@@ -1543,7 +1691,7 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
             run_id=run_id,
             actor=args.actor,
             payload={
-                "schema_version": 1,
+                "schema_version": 3,
                 "test_dataset_hash": dataset.dataset_hash,
                 "frozen_policy_hash": policy_freeze.frozen_policy.canonical_hash,
                 "dataset": _artifact(root, dataset_path).model_dump(mode="json"),
@@ -1552,16 +1700,23 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
                 "concept_refs": _artifact(root, concept_ref_path).model_dump(mode="json"),
                 "predictions": _artifact(root, prediction_path).model_dump(mode="json"),
                 "source_gold": _artifact(root, source_gold_copy_path).model_dump(mode="json"),
+                "source_transformation_commitment": _artifact(
+                    root,
+                    source_transformation_copy_path,
+                ).model_dump(mode="json"),
+                "transformation_projection": _artifact(root, transformation_path).model_dump(mode="json"),
+                "transformation_projection_revision": PILOT_TRANSFORMATION_PROJECTION_REVISION,
+                "evolution_policy": _artifact(root, evolution_policy_path).model_dump(mode="json"),
+                "evolutions": {key: value.model_dump(mode="json") for key, value in sorted(evolution_refs.items())},
                 "derived_gold": _artifact(root, derived_gold_path).model_dump(mode="json"),
                 "source_coverage_metrics": _artifact(root, coverage_metrics_path).model_dump(mode="json"),
                 "gate": _artifact(root, frozen_gate_path).model_dump(mode="json"),
                 "evaluation": _artifact(root, evaluation_path).model_dump(mode="json"),
                 "report": _artifact(root, report_path).model_dump(mode="json"),
                 "output_manifests": {
-                    key: value.model_dump(mode="json")
-                    for key, value in sorted(bootstrap.receipt.output_manifests.items())
+                    key: value.model_dump(mode="json") for key, value in sorted(output_manifest_refs.items())
                 },
-                "output_manifest_hashes": bootstrap.receipt.output_manifest_hashes,
+                "output_manifest_hashes": predictions.output_manifest_hashes,
             },
         )
         return {
@@ -1587,7 +1742,7 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
         _telemetry_if_missing(root, run_id)
         _fsync_artifact_tree(run_root)
         receipt = PilotLockedTestFailureReceipt(
-            schema_version=1,
+            schema_version=3,
             error_type=type(exc).__name__,
             failure_kind="source_coverage_quality_gate",
             test_dataset_hash=dataset_hash,
@@ -1598,11 +1753,15 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
             concept_refs=_artifact(root, concept_ref_path),
             predictions=_artifact(root, prediction_path),
             source_gold=_artifact(root, source_gold_copy_path),
+            source_transformation_commitment=_artifact(root, source_transformation_copy_path),
+            transformation_projection_revision=PILOT_TRANSFORMATION_PROJECTION_REVISION,
+            evolution_policy=_artifact(root, evolution_policy_path),
+            evolutions=evolution_refs,
             source_coverage_metrics=_artifact(root, coverage_metrics_path),
             gate=_artifact(root, frozen_gate_path),
             report=_artifact(root, report_path),
-            output_manifests=bootstrap.receipt.output_manifests,
-            output_manifest_hashes=bootstrap.receipt.output_manifest_hashes,
+            output_manifests=output_manifest_refs,
+            output_manifest_hashes=predictions.output_manifest_hashes,
             findings=exc.findings,
         )
         ledger.append(
@@ -1616,7 +1775,7 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
     except Exception as exc:
         _telemetry_if_missing(root, run_id)
         receipt = PilotLockedTestFailureReceipt(
-            schema_version=1,
+            schema_version=3,
             error_type=type(exc).__name__,
             failure_kind="execution",
         )
@@ -1628,6 +1787,32 @@ async def _run_locked_test(args: argparse.Namespace) -> dict[str, object]:
             payload=receipt.model_dump(mode="json"),
         )
         raise
+
+
+def _verify_locked_test(args: argparse.Namespace) -> dict[str, object]:
+    root = args.root.resolve()
+    corpus = load_frozen_corpus(root)
+    events = PilotRunLedger(root / "run-ledger.jsonl").read_events()
+    if any(event.event_type == "locked_test_completed" for event in events):
+        verified = verify_pilot_locked_test_artifacts(root=root, corpus=corpus)
+        return {
+            "terminal_status": "completed",
+            "run_id": verified.completion_event.run_id,
+            "dataset_hash": verified.dataset.dataset_hash,
+            "evaluation_status": verified.evaluation.overall_status,
+            "evidence_replayed": True,
+        }
+    if any(event.event_type == "locked_test_failed" for event in events):
+        verified_failure = verify_pilot_locked_test_failure_artifacts(root=root, corpus=corpus)
+        return {
+            "terminal_status": "failed",
+            "run_id": verified_failure.failure_event.run_id,
+            "dataset_hash": verified_failure.receipt.test_dataset_hash,
+            "failure_kind": verified_failure.receipt.failure_kind,
+            "error_type": verified_failure.receipt.error_type,
+            "evidence_replayed": verified_failure.source_coverage_metrics is not None,
+        }
+    raise PilotArtifactError("pilot_locked_test_terminal_event_missing")
 
 
 async def _run_async(args: argparse.Namespace) -> dict[str, object]:
@@ -1652,7 +1837,19 @@ async def _run_async(args: argparse.Namespace) -> dict[str, object]:
         return await _resolve_calibration(args)
     if args.command == "freeze-calibration-policy":
         return _freeze_calibration_policy(args)
-    return await _run_locked_test(args)
+    if args.command == "run-locked-test":
+        return await _run_locked_test(args)
+    if args.command == "verify-locked-test":
+        return _verify_locked_test(args)
+    raise PilotArtifactError(f"pilot_command_unsupported:{args.command}")
+
+
+def _result_exit_code(args: argparse.Namespace, result: dict[str, object]) -> int:
+    if args.command == "run-locked-test":
+        return 0 if result.get("overall_status") == "pass" else 2
+    if args.command == "verify-locked-test":
+        return 0 if result.get("terminal_status") == "completed" and result.get("evaluation_status") == "pass" else 2
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1660,7 +1857,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = asyncio.run(_run_async(args))
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
-        return 0
+        return _result_exit_code(args, result)
     except (
         OSError,
         ValueError,

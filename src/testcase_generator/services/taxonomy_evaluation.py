@@ -207,7 +207,16 @@ def validate_evaluation_artifact_hashes(
         )
     )
     if include_transformations:
-        refs.append((dataset.corpus_id, "transformations", dataset.transformation_artifact))
+        if dataset.schema_version == 3:
+            assert dataset.source_transformation_commitment_artifact is not None
+            refs.append(
+                (
+                    dataset.corpus_id,
+                    "source_transformations",
+                    dataset.source_transformation_commitment_artifact,
+                )
+            )
+        refs.append((dataset.corpus_id, "transformations", dataset.resolved_transformation_artifact))
     for owner, kind, ref in refs:
         path = _resolve_path(manifest_path, ref)
         if not path.is_file():
@@ -272,10 +281,12 @@ def load_evaluation_inputs(
     TaxonomyFrozenPolicy,
 ]:
     dataset = TaxonomyDatasetManifest.model_validate_json(dataset_path.read_text(encoding="utf-8"))
+    if dataset.schema_version == 3:
+        raise ValueError("dataset_v3_requires_locked_test_receipt_replay")
     validate_evaluation_artifact_hashes(dataset=dataset, manifest_path=dataset_path)
     gold_path = _resolve_path(dataset_path, dataset.gold_artifact)
     prediction_path = _resolve_path(dataset_path, dataset.prediction_artifact)
-    transformation_path = _resolve_path(dataset_path, dataset.transformation_artifact)
+    transformation_path = _resolve_path(dataset_path, dataset.resolved_transformation_artifact)
     gold = TaxonomyGoldSet.model_validate_json(gold_path.read_text(encoding="utf-8"))
     predictions = TaxonomyPredictionSet.model_validate_json(prediction_path.read_text(encoding="utf-8"))
     output_manifests = load_prediction_output_manifests(
@@ -298,6 +309,18 @@ def _validate_transformations(
 ) -> None:
     if transformations.corpus_id != dataset.corpus_id:
         raise ValueError("transformation_corpus_mismatch")
+    if dataset.schema_version == 3:
+        assert dataset.source_transformation_commitment_artifact is not None
+        if (
+            transformations.schema_version != 2
+            or transformations.dataset_hash != dataset.dataset_hash
+            or transformations.source_transformation_commitment_hash
+            != dataset.source_transformation_commitment_artifact.sha256
+            or transformations.projection_revision != dataset.transformation_projection_revision
+        ):
+            raise ValueError("transformation_projection_binding_mismatch")
+    elif transformations.schema_version != 1:
+        raise ValueError("legacy_transformation_schema_mismatch")
     gold_by_id = {item.record_id: item for item in gold.records}
     transformation_by_variant = {item.variant_record_id: item for item in transformations.records}
     expected_variant_ids = {item.record_id for item in gold.records if item.variant_kind != "original"}
@@ -1011,6 +1034,8 @@ def _evaluate_system(
             incomplete.append("independent_dev_gold_missing")
         if not independent_gold:
             incomplete.append(f"independent_{split}_gold_missing")
+    if gate.require_reuse_baseline and not expected_reuse_count:
+        incomplete.append("reuse_baseline_missing")
     if auto_count:
         if metrics.exact_primary_precision is None:
             incomplete.append("reuse_precision_missing")
@@ -1135,7 +1160,7 @@ def evaluate_taxonomy_generalization(
             transformations=transformations,
             requirement_units=requirement_units,
         )
-    if dataset.schema_version == 2 and dataset.evaluation_split == "test":
+    if dataset.schema_version in {2, 3} and dataset.evaluation_split == "test":
         upstream_hashes = dataset.upstream_artifact_hashes or {}
         if upstream_hashes.get("calibration_dataset") != frozen_policy.calibration_dataset_hash:
             raise ValueError("test_dataset_calibration_binding_mismatch")

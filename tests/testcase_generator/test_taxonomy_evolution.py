@@ -20,6 +20,7 @@ from src.testcase_generator.services.taxonomy_evolution import (
     TaxonomyEvolutionRequest,
     TaxonomyEvolutionService,
     build_llm_taxonomy_evolution_binding,
+    validate_taxonomy_evolution_result_replay,
 )
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 
@@ -259,6 +260,34 @@ async def test_novel_requirement_produces_explicit_add_proposal_without_mutating
     assert operation.proposed_nodes[0].stable_key == "task.scheduled_submit"
     assert operation.evidence[0].text == unit.source_quote
     assert operation.operation_id.startswith("evo_")
+
+    round_tripped = type(result).model_validate_json(result.model_dump_json())
+    validate_taxonomy_evolution_result_replay(
+        active_manifest=active,
+        requirement_units=[unit],
+        policy=_policy(),
+        result=round_tripped,
+        impact_snapshot={"product.sync": {"case_count": 12, "mapping_count": 3}},
+    )
+    tampered = round_tripped.model_copy(update={"input_hash": "f" * 64})
+    with pytest.raises(ValueError, match="evolution_result_input_binding_mismatch"):
+        validate_taxonomy_evolution_result_replay(
+            active_manifest=active,
+            requirement_units=[unit],
+            policy=_policy(),
+            result=tampered,
+            impact_snapshot={"product.sync": {"case_count": 12, "mapping_count": 3}},
+        )
+    tampered_operation = round_tripped.operations[0].model_copy(update={"rollback": "伪造回滚说明"})
+    tampered = round_tripped.model_copy(update={"operations": [tampered_operation]})
+    with pytest.raises(ValueError, match="evolution_result_operation_replay_mismatch"):
+        validate_taxonomy_evolution_result_replay(
+            active_manifest=active,
+            requirement_units=[unit],
+            policy=_policy(),
+            result=tampered,
+            impact_snapshot={"product.sync": {"case_count": 12, "mapping_count": 3}},
+        )
 
 
 async def test_model_add_cannot_duplicate_existing_stable_key_or_label() -> None:

@@ -22,7 +22,7 @@ from src.knowledge_base.services.parsers.markdown_parser import (
     canonicalize_markdown,
 )
 from src.testcase_generator.schemas.requirement_unit import RequirementUnit
-from src.testcase_generator.schemas.taxonomy import TaxonomyManifest
+from src.testcase_generator.schemas.taxonomy import TaxonomyManifest, TaxonomyNodeManifest
 from src.testcase_generator.schemas.taxonomy_evaluation import (
     ArtifactRef,
     TaxonomyDatasetManifest,
@@ -35,6 +35,8 @@ from src.testcase_generator.schemas.taxonomy_evaluation import (
     TaxonomyKnownNode,
     TaxonomyPredictionRecord,
     TaxonomyPredictionSet,
+    TaxonomyProposedNode,
+    TaxonomyTransformationRecord,
     TaxonomyTransformationSet,
 )
 from src.testcase_generator.schemas.taxonomy_pilot import (
@@ -59,6 +61,7 @@ from src.testcase_generator.schemas.taxonomy_pilot import (
     PilotRequirementExtractionArtifact,
     PilotRequirementExtractionCompletionReceipt,
     PilotResolutionSet,
+    PilotSourceTransformationCommitment,
     build_pilot_ledger_event,
 )
 from src.testcase_generator.schemas.taxonomy_resolution import TaxonomyResolutionPolicy
@@ -78,6 +81,12 @@ from src.testcase_generator.services.taxonomy_evaluation import (
     render_taxonomy_evaluation_report,
     validate_evaluation_artifact_hashes,
 )
+from src.testcase_generator.services.taxonomy_evolution import (
+    TaxonomyEvolutionOperation,
+    TaxonomyEvolutionPolicy,
+    TaxonomyEvolutionResult,
+    validate_taxonomy_evolution_result_replay,
+)
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 from src.testcase_generator.stages.parse.node import extract_document_inventory_sections
 
@@ -88,6 +97,63 @@ class PilotArtifactError(RuntimeError):
 
 class LockedTestAlreadyConsumedError(PilotArtifactError):
     pass
+
+
+PILOT_TRANSFORMATION_PROJECTION_REVISION = "source-fact-unit-projection-v1"
+PILOT_MINIMUM_SEMANTIC_STABILITY = 0.95
+_LOCKED_TEST_DATASET_SCHEMA_BY_RECEIPT_SCHEMA = {1: 2, 2: 3, 3: 3}
+
+
+def validate_pilot_locked_test_gate(gate: TaxonomyEvaluationGate) -> None:
+    if not gate.require_independent_gold:
+        raise PilotArtifactError("pilot_locked_test_independent_gold_required")
+    if not gate.require_complete_corpus:
+        raise PilotArtifactError("pilot_locked_test_complete_corpus_required")
+    if not gate.require_reuse_baseline:
+        raise PilotArtifactError("pilot_locked_test_reuse_baseline_required")
+    if not gate.require_new_node_baseline:
+        raise PilotArtifactError("pilot_locked_test_new_node_baseline_required")
+    if not gate.require_operational_thresholds:
+        raise PilotArtifactError("pilot_locked_test_operational_thresholds_required")
+    operational_thresholds = (
+        (
+            gate.minimum_expected_reuse_coverage,
+            "pilot_locked_test_reuse_coverage_threshold_required",
+        ),
+        (
+            gate.minimum_new_node_precision,
+            "pilot_locked_test_new_node_precision_threshold_required",
+        ),
+        (
+            gate.minimum_new_node_recall,
+            "pilot_locked_test_new_node_recall_threshold_required",
+        ),
+        (
+            gate.minimum_proposal_operation_type_accuracy,
+            "pilot_locked_test_operation_type_threshold_required",
+        ),
+        (
+            gate.maximum_human_intervention_rate,
+            "pilot_locked_test_human_intervention_threshold_required",
+        ),
+    )
+    for value, error in operational_thresholds:
+        if value is None:
+            raise PilotArtifactError(error)
+    if gate.minimum_reuse_precision < 0.95:
+        raise PilotArtifactError("pilot_locked_test_reuse_precision_gate_too_low")
+    if gate.minimum_hierarchical_path_accuracy < 0.95:
+        raise PilotArtifactError("pilot_locked_test_path_accuracy_gate_too_low")
+    if gate.minimum_semantic_stability < PILOT_MINIMUM_SEMANTIC_STABILITY:
+        raise PilotArtifactError("pilot_locked_test_semantic_stability_gate_too_low")
+    if gate.maximum_duplicate_node_rate > 0:
+        raise PilotArtifactError("pilot_locked_test_duplicate_node_gate_too_weak")
+    if gate.maximum_unsupported_node_rate > 0:
+        raise PilotArtifactError("pilot_locked_test_unsupported_node_gate_too_weak")
+    if gate.minimum_structural_invariant_rate < 1:
+        raise PilotArtifactError("pilot_locked_test_structural_invariant_gate_too_low")
+    if gate.maximum_operational_failure_rate > 0:
+        raise PilotArtifactError("pilot_locked_test_operational_failure_gate_too_weak")
 
 
 _STAGE_TERMINALS: dict[PilotEventType, frozenset[PilotEventType]] = {
@@ -1335,7 +1401,7 @@ def _derive_locked_test_gold_records(
     corpus: PilotFrozenCorpus,
     extractions: Mapping[str, RequirementUnitExtractionResult],
     source_gold: PilotCoverageGoldSet,
-) -> tuple[list[TaxonomyGoldRecord], PilotCoverageVerificationMetrics]:
+) -> tuple[list[TaxonomyGoldRecord], PilotCoverageVerificationMetrics, dict[str, str]]:
     """把预测前冻结、预测落盘后揭盲的 source-fact 标签机械匹配到 test extraction。"""
 
     if (
@@ -1479,7 +1545,7 @@ def _derive_locked_test_gold_records(
         raise PilotSourceCoverageError(metrics, sorted(set(findings)))
     if not gold_records:
         raise PilotArtifactError("pilot_locked_test_gold_empty")
-    return gold_records, metrics
+    return gold_records, metrics, matched_fact_units
 
 
 def derive_locked_test_gold(
@@ -1498,7 +1564,7 @@ def derive_locked_test_gold(
         or dataset.source_commitment_hash != corpus.source_commitment_hash
     ):
         raise PilotArtifactError("pilot_locked_test_source_gold_binding_invalid")
-    gold_records, metrics = _derive_locked_test_gold_records(
+    gold_records, metrics, _ = _derive_locked_test_gold_records(
         root=root,
         corpus=corpus,
         extractions=extractions,
@@ -1516,6 +1582,146 @@ def derive_locked_test_gold(
         ),
         metrics,
     )
+
+
+def _source_transformation_facts(
+    *,
+    corpus: PilotFrozenCorpus,
+    source_gold: PilotCoverageGoldSet,
+    source_transformations: PilotSourceTransformationCommitment,
+) -> dict[str, tuple[str, PilotCoverageGoldFact]]:
+    if (
+        source_transformations.corpus_id != corpus.corpus_id
+        or source_transformations.source_commitment_hash != corpus.source_commitment_hash
+        or source_transformations.projection_revision != PILOT_TRANSFORMATION_PROJECTION_REVISION
+    ):
+        raise PilotArtifactError("pilot_source_transformation_commitment_binding_invalid")
+    if source_transformations.reviewed_at < source_gold.reviewed_at:
+        raise PilotArtifactError("pilot_source_transformation_review_precedes_source_gold")
+    facts: dict[str, tuple[str, PilotCoverageGoldFact]] = {}
+    for record in source_gold.records:
+        for fact in record.facts:
+            facts.setdefault(fact.fact_id, (record.system_key, fact))
+    for transformation in source_transformations.records:
+        source_entry = facts.get(transformation.source_fact_id)
+        variant_entry = facts.get(transformation.variant_fact_id)
+        if source_entry is None or variant_entry is None:
+            raise PilotArtifactError(f"pilot_source_transformation_fact_missing:{transformation.transformation_id}")
+        source_system, source_fact = source_entry
+        variant_system, variant_fact = variant_entry
+        if source_system != transformation.system_key or variant_system != transformation.system_key:
+            raise PilotArtifactError(f"pilot_source_transformation_system_mismatch:{transformation.transformation_id}")
+        if (
+            source_fact.source_quote_hash != transformation.source_quote_hash
+            or variant_fact.source_quote_hash != transformation.variant_quote_hash
+        ):
+            raise PilotArtifactError(f"pilot_source_transformation_quote_mismatch:{transformation.transformation_id}")
+        if (
+            source_fact.taxonomy_expectation is None
+            or variant_fact.taxonomy_expectation is None
+            or source_fact.taxonomy_expectation != variant_fact.taxonomy_expectation
+        ):
+            raise PilotArtifactError(
+                f"pilot_source_transformation_expectation_mismatch:{transformation.transformation_id}"
+            )
+    return facts
+
+
+def derive_locked_test_evidence(
+    *,
+    root: Path,
+    corpus: PilotFrozenCorpus,
+    dataset: TaxonomyDatasetManifest,
+    extractions: Mapping[str, RequirementUnitExtractionResult],
+    source_gold: PilotCoverageGoldSet,
+    source_transformations: PilotSourceTransformationCommitment,
+) -> tuple[TaxonomyGoldSet, PilotCoverageVerificationMetrics, TaxonomyTransformationSet]:
+    """揭盲后将 source-fact gold 和变形承诺机械投影到本次唯一 extraction。"""
+
+    if (
+        dataset.schema_version != 3
+        or dataset.evaluation_split != "test"
+        or dataset.source_commitment_hash != corpus.source_commitment_hash
+        or dataset.source_transformation_commitment_artifact is None
+        or dataset.transformation_projection_revision != PILOT_TRANSFORMATION_PROJECTION_REVISION
+    ):
+        raise PilotArtifactError("pilot_locked_test_transformation_dataset_binding_invalid")
+    _source_transformation_facts(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_transformations=source_transformations,
+    )
+    gold_records, metrics, matched_fact_units = _derive_locked_test_gold_records(
+        root=root,
+        corpus=corpus,
+        extractions=extractions,
+        source_gold=source_gold,
+    )
+    units_by_id = {unit.unit_id: unit for extraction in extractions.values() for unit in extraction.units}
+    records_by_unit = {record.requirement_unit_id: record for record in gold_records}
+    semantic_updates: dict[str, tuple[str, str]] = {}
+    projected: list[TaxonomyTransformationRecord] = []
+    for transformation in sorted(
+        source_transformations.records,
+        key=lambda item: item.transformation_id,
+    ):
+        source_unit_id = matched_fact_units[transformation.source_fact_id]
+        variant_unit_id = matched_fact_units[transformation.variant_fact_id]
+        source_record = records_by_unit[source_unit_id]
+        variant_record = records_by_unit[variant_unit_id]
+        source_unit = units_by_id[source_unit_id]
+        variant_unit = units_by_id[variant_unit_id]
+        source_update = (transformation.semantic_group_id, "original")
+        previous_source = semantic_updates.setdefault(source_unit_id, source_update)
+        if previous_source != source_update:
+            raise PilotArtifactError(f"pilot_source_transformation_source_conflict:{transformation.transformation_id}")
+        semantic_updates[variant_unit_id] = (
+            transformation.semantic_group_id,
+            transformation.kind,
+        )
+        projected.append(
+            TaxonomyTransformationRecord(
+                transformation_id=transformation.transformation_id,
+                system_key=transformation.system_key,
+                split="test",
+                semantic_group_id=transformation.semantic_group_id,
+                source_record_id=source_record.record_id,
+                variant_record_id=variant_record.record_id,
+                kind=transformation.kind,
+                transformation_revision=transformation.transformation_revision,
+                source_text_hash=hashlib.sha256(source_unit.statement.encode("utf-8")).hexdigest(),
+                variant_text_hash=hashlib.sha256(variant_unit.statement.encode("utf-8")).hexdigest(),
+            )
+        )
+    transformed_gold_records = [
+        record.model_copy(
+            update={
+                "semantic_group_id": semantic_updates[record.requirement_unit_id][0],
+                "variant_kind": semantic_updates[record.requirement_unit_id][1],
+            }
+        )
+        if record.requirement_unit_id in semantic_updates
+        else record
+        for record in gold_records
+    ]
+    gold = TaxonomyGoldSet(
+        schema_version=1,
+        corpus_id=corpus.corpus_id,
+        dataset_hash=dataset.dataset_hash,
+        review_method="human_independent",
+        reviewed_by=source_gold.reviewed_by,
+        reviewed_at=source_gold.reviewed_at,
+        records=transformed_gold_records,
+    )
+    transformations = TaxonomyTransformationSet(
+        schema_version=2,
+        corpus_id=corpus.corpus_id,
+        dataset_hash=dataset.dataset_hash,
+        source_transformation_commitment_hash=dataset.source_transformation_commitment_artifact.sha256,
+        projection_revision=PILOT_TRANSFORMATION_PROJECTION_REVISION,
+        records=projected,
+    )
+    return gold, metrics, transformations
 
 
 def reserve_locked_test(
@@ -1647,6 +1853,60 @@ def _verify_locked_test_requirement_extractions(
     return extractions, artifact_refs
 
 
+def _load_locked_test_evolution_artifacts(
+    *,
+    root: Path,
+    run_root: Path,
+    receipt: PilotLockedTestCompletionReceipt | PilotLockedTestFailureReceipt,
+    bootstrap: VerifiedPilotBootstrap,
+) -> tuple[
+    TaxonomyEvolutionPolicy | None,
+    dict[str, TaxonomyEvolutionResult] | None,
+    dict[str, TaxonomyManifest],
+]:
+    if receipt.schema_version < 3:
+        return None, None, bootstrap.manifests
+    if receipt.evolution_policy is None or set(receipt.evolutions) != set(bootstrap.manifests):
+        raise PilotArtifactError("pilot_locked_test_evolution_evidence_missing")
+    policy_path = _verify_exact_artifact(
+        root=root,
+        artifact=receipt.evolution_policy,
+        expected_path=run_root / "policies" / "evolution-policy.json",
+        code="pilot_locked_test_evolution_policy_artifact_invalid",
+    )
+    evolution_paths = {
+        system_key: _verify_exact_artifact(
+            root=root,
+            artifact=receipt.evolutions[system_key],
+            expected_path=run_root / "raw" / "evolutions" / f"{system_key}.json",
+            code=f"pilot_locked_test_evolution_artifact_invalid:{system_key}",
+        )
+        for system_key in sorted(bootstrap.manifests)
+    }
+    output_manifest_paths = {
+        system_key: _verify_exact_artifact(
+            root=root,
+            artifact=receipt.output_manifests[system_key],
+            expected_path=run_root / "manifests" / f"{system_key}.json",
+            code=f"pilot_locked_test_output_manifest_artifact_invalid:{system_key}",
+        )
+        for system_key in sorted(bootstrap.manifests)
+    }
+    try:
+        policy = TaxonomyEvolutionPolicy.model_validate_json(policy_path.read_text(encoding="utf-8"))
+        evolutions = {
+            system_key: TaxonomyEvolutionResult.model_validate_json(path.read_text(encoding="utf-8"))
+            for system_key, path in evolution_paths.items()
+        }
+        output_manifests = {
+            system_key: TaxonomyManifest.model_validate_json(path.read_text(encoding="utf-8"))
+            for system_key, path in output_manifest_paths.items()
+        }
+    except Exception as exc:  # noqa: BLE001 - 回执绑定的 evolve 证据必须严格可重放
+        raise PilotArtifactError("pilot_locked_test_evolution_artifact_schema_invalid") from exc
+    return policy, evolutions, output_manifests
+
+
 def _verify_locked_test_prediction_binding(
     *,
     corpus: PilotFrozenCorpus,
@@ -1659,6 +1919,9 @@ def _verify_locked_test_prediction_binding(
     predictions: TaxonomyPredictionSet,
     output_manifests: Mapping[str, ArtifactRef],
     output_manifest_hashes: Mapping[str, str],
+    evolution_policy: TaxonomyEvolutionPolicy | None = None,
+    evolution_results: Mapping[str, TaxonomyEvolutionResult] | None = None,
+    output_manifest_models: Mapping[str, TaxonomyManifest] | None = None,
 ) -> None:
     expected_documents = {item.document_key: item for item in corpus.documents if item.split == "test"}
     expected_units = {
@@ -1692,8 +1955,7 @@ def _verify_locked_test_prediction_binding(
                 f"pilot_locked_test_prediction_unit_binding_invalid:{prediction_record.requirement_unit_id}"
             )
     if (
-        dict(output_manifests) != bootstrap.receipt.output_manifests
-        or dict(output_manifest_hashes) != bootstrap.receipt.output_manifest_hashes
+        resolutions.output_manifest_hashes != bootstrap.receipt.output_manifest_hashes
         or resolutions.dataset_hash != test_dataset_hash
         or predictions.dataset_hash != test_dataset_hash
         or resolutions.policy_hash != frozen_policy.policy_hash
@@ -1702,11 +1964,65 @@ def _verify_locked_test_prediction_binding(
         or predictions.frozen_policy_hash != frozen_policy.canonical_hash
     ):
         raise PilotArtifactError("pilot_locked_test_prediction_binding_invalid")
+    if evolution_results is None:
+        if (
+            evolution_policy is not None
+            or output_manifest_models is not None
+            or dict(output_manifests) != bootstrap.receipt.output_manifests
+            or dict(output_manifest_hashes) != bootstrap.receipt.output_manifest_hashes
+        ):
+            raise PilotArtifactError("pilot_locked_test_prediction_binding_invalid")
+        resolved_output_manifests = bootstrap.manifests
+    else:
+        if evolution_policy is None or output_manifest_models is None:
+            raise PilotArtifactError("pilot_locked_test_evolution_evidence_missing")
+        requirement_units = {unit.unit_id: unit for extraction in extractions.values() for unit in extraction.units}
+        rebuilt_manifests = build_evolution_draft_manifests(
+            active_manifests=bootstrap.manifests,
+            evolution_results=evolution_results,
+            requirement_units=requirement_units,
+        )
+        if rebuilt_manifests != dict(output_manifest_models):
+            raise PilotArtifactError("pilot_locked_test_evolution_manifest_projection_mismatch")
+        if (
+            predictions.output_manifest_artifacts != dict(output_manifests)
+            or predictions.output_manifest_hashes != dict(output_manifest_hashes)
+            or {system_key: manifest_hash(manifest) for system_key, manifest in output_manifest_models.items()}
+            != dict(output_manifest_hashes)
+        ):
+            raise PilotArtifactError("pilot_locked_test_evolution_manifest_binding_invalid")
+        for system_key, evolution in evolution_results.items():
+            if (
+                evolution.policy_version != evolution_policy.canonical_hash
+                or predictions.prompt_revisions.get("taxonomy_evolution") != evolution.prompt_revision
+                or predictions.model_revisions.get("taxonomy_evolution") != evolution.model_revision
+            ):
+                raise PilotArtifactError(f"pilot_locked_test_evolution_binding_invalid:{system_key}")
+            novel_units = [
+                requirement_units[item.requirement_unit_id]
+                for item in resolutions.records
+                if item.system_key == system_key
+                and item.resolution.status == "unresolved"
+                and item.resolution.unresolved_kind == "novel"
+            ]
+            try:
+                validate_taxonomy_evolution_result_replay(
+                    active_manifest=bootstrap.manifests[system_key],
+                    requirement_units=novel_units,
+                    policy=evolution_policy,
+                    result=evolution,
+                    impact_snapshot={},
+                )
+            except ValueError as exc:
+                raise PilotArtifactError(f"pilot_locked_test_evolution_replay_invalid:{system_key}") from exc
+        resolved_output_manifests = dict(output_manifest_models)
     projected = project_resolution_predictions(
         resolutions=resolutions,
         concept_refs=concept_refs.by_concept_id,
         manifests=bootstrap.manifests,
         manifest_artifacts=output_manifests,
+        evolution_results=evolution_results,
+        output_manifests=resolved_output_manifests if evolution_results is not None else None,
     )
     if projected != predictions:
         raise PilotArtifactError("pilot_locked_test_prediction_projection_mismatch")
@@ -1746,6 +2062,8 @@ def verify_pilot_locked_test_failure_artifacts(
         receipt = PilotLockedTestFailureReceipt.model_validate(failure_event.payload)
     except Exception as exc:  # noqa: BLE001 - 台账失败终态也必须可强类型重放
         raise PilotArtifactError("pilot_locked_test_failure_payload_invalid") from exc
+    if receipt.schema_version != commitment.schema_version:
+        raise PilotArtifactError("pilot_locked_test_failure_commitment_schema_mismatch")
     policy_freeze = verify_pilot_policy_freeze_artifacts(root=root, corpus=corpus)
     _verify_locked_test_start_binding(
         start_event=start_event,
@@ -1772,6 +2090,10 @@ def verify_pilot_locked_test_failure_artifacts(
         or receipt.source_coverage_metrics is None
         or receipt.gate is None
         or receipt.report is None
+        or (
+            receipt.schema_version >= 2
+            and (receipt.source_transformation_commitment is None or receipt.transformation_projection_revision is None)
+        )
     ):
         raise PilotArtifactError("pilot_locked_test_quality_failure_evidence_missing")
     dataset_path = _verify_exact_artifact(
@@ -1804,6 +2126,15 @@ def verify_pilot_locked_test_failure_artifacts(
         expected_path=run_root / "reviews" / "test-source-gold.json",
         code="pilot_locked_test_failure_source_gold_artifact_invalid",
     )
+    source_transformation_path: Path | None = None
+    if receipt.schema_version >= 2:
+        assert receipt.source_transformation_commitment is not None
+        source_transformation_path = _verify_exact_artifact(
+            root=root,
+            artifact=receipt.source_transformation_commitment,
+            expected_path=run_root / "reviews" / "source-transformations.json",
+            code="pilot_locked_test_failure_source_transformation_artifact_invalid",
+        )
     metrics_path = _verify_exact_artifact(
         root=root,
         artifact=receipt.source_coverage_metrics,
@@ -1822,7 +2153,24 @@ def verify_pilot_locked_test_failure_artifacts(
         expected_path=run_root / "evaluation" / "SOURCE-COVERAGE-FAILURE.md",
         code="pilot_locked_test_failure_report_artifact_invalid",
     )
-    if receipt.source_gold.sha256 != commitment.source_gold_sha256 or receipt.gate.sha256 != commitment.gate_sha256:
+    if (
+        receipt.source_gold.sha256 != commitment.source_gold_sha256
+        or receipt.gate.sha256 != commitment.gate_sha256
+        or (
+            receipt.schema_version >= 2
+            and (
+                receipt.source_transformation_commitment is None
+                or receipt.source_transformation_commitment.sha256 != commitment.source_transformation_commitment_sha256
+            )
+        )
+        or (
+            receipt.schema_version == 3
+            and (
+                receipt.evolution_policy is None
+                or receipt.evolution_policy.sha256 != commitment.evolution_policy_sha256
+            )
+        )
+    ):
         raise PilotArtifactError("pilot_locked_test_failure_commitment_mismatch")
     try:
         dataset = TaxonomyDatasetManifest.model_validate_json(dataset_path.read_text(encoding="utf-8"))
@@ -1830,7 +2178,16 @@ def verify_pilot_locked_test_failure_artifacts(
         concept_refs = PilotConceptRefSet.model_validate_json(concept_ref_path.read_text(encoding="utf-8"))
         predictions = TaxonomyPredictionSet.model_validate_json(prediction_path.read_text(encoding="utf-8"))
         source_gold = PilotCoverageGoldSet.model_validate_json(source_gold_path.read_text(encoding="utf-8"))
-        TaxonomyEvaluationGate.model_validate_json(gate_path.read_text(encoding="utf-8"))
+        source_transformations = (
+            PilotSourceTransformationCommitment.model_validate_json(
+                source_transformation_path.read_text(encoding="utf-8")
+            )
+            if source_transformation_path is not None
+            else None
+        )
+        gate = TaxonomyEvaluationGate.model_validate_json(gate_path.read_text(encoding="utf-8"))
+        if receipt.schema_version >= 2:
+            validate_pilot_locked_test_gate(gate)
         metrics_payload = json.loads(metrics_path.read_text(encoding="utf-8"))
         expected_metric_keys = {
             "coverage_record_count",
@@ -1850,6 +2207,17 @@ def verify_pilot_locked_test_failure_artifacts(
         raise PilotArtifactError("pilot_locked_test_failure_artifact_schema_invalid") from exc
     if source_gold.reviewed_at > start_event.occurred_at:
         raise PilotArtifactError("pilot_locked_test_gold_not_frozen_before_reservation")
+    if source_transformations is not None:
+        if (
+            source_transformations.reviewed_at > start_event.occurred_at
+            or source_transformations.source_gold_sha256 != commitment.source_gold_sha256
+        ):
+            raise PilotArtifactError("pilot_locked_test_transformation_commitment_not_frozen")
+        _source_transformation_facts(
+            corpus=corpus,
+            source_gold=source_gold,
+            source_transformations=source_transformations,
+        )
     extractions, _ = _verify_locked_test_requirement_extractions(
         root=root,
         corpus=corpus,
@@ -1857,6 +2225,12 @@ def verify_pilot_locked_test_failure_artifacts(
         summaries=receipt.requirement_extractions,
     )
     bootstrap = verify_pilot_bootstrap_artifacts(root=root, corpus=corpus)
+    evolution_policy, evolution_results, output_manifest_models = _load_locked_test_evolution_artifacts(
+        root=root,
+        run_root=run_root,
+        receipt=receipt,
+        bootstrap=bootstrap,
+    )
     expected_documents = {item.document_key: item for item in corpus.documents if item.split == "test"}
     expected_upstream = {
         "bootstrap_event": bootstrap.event.event_hash,
@@ -1869,15 +2243,24 @@ def verify_pilot_locked_test_failure_artifacts(
             f"output_manifest.{system_key}": value
             for system_key, value in sorted(bootstrap.receipt.output_manifest_hashes.items())
         },
+        **(
+            {"evolution_policy": receipt.evolution_policy.sha256}
+            if receipt.schema_version == 3 and receipt.evolution_policy is not None
+            else {}
+        ),
     }
     expected_gold_placeholder = ArtifactRef(
         path=str((run_root / "reviews" / "test-gold-derived.json").relative_to(root)),
         sha256="0" * 64,
     )
+    expected_projection_placeholder = ArtifactRef(
+        path=str((run_root / "evaluation" / "transformation-projection.json").relative_to(root)),
+        sha256="0" * 64,
+    )
     if receipt.frozen_policy_hash != policy_freeze.frozen_policy.canonical_hash:
         raise PilotArtifactError("pilot_locked_test_failure_policy_binding_invalid")
     if (
-        dataset.schema_version != 2
+        dataset.schema_version != _LOCKED_TEST_DATASET_SCHEMA_BY_RECEIPT_SCHEMA[receipt.schema_version]
         or dataset.evaluation_split != "test"
         or dataset.corpus_id != corpus.corpus_id
         or dataset.source_commitment_hash != corpus.source_commitment_hash
@@ -1891,14 +2274,24 @@ def verify_pilot_locked_test_failure_artifacts(
         or dataset.model_revisions != resolutions.model_revisions
         or dataset.model_revisions != predictions.model_revisions
         or {item.document_key for item in dataset.documents} != set(expected_documents)
+        or (
+            receipt.schema_version >= 2
+            and (
+                dataset.source_transformation_commitment_artifact != receipt.source_transformation_commitment
+                or dataset.transformation_projection_artifact != expected_projection_placeholder
+                or dataset.transformation_projection_revision != receipt.transformation_projection_revision
+            )
+        )
     ):
         raise PilotArtifactError("pilot_locked_test_failure_dataset_binding_invalid")
-    _verify_exact_artifact(
-        root=root,
-        artifact=dataset.transformation_artifact,
-        expected_path=run_root / "evaluation" / "transformations.json",
-        code="pilot_locked_test_failure_transformation_artifact_invalid",
-    )
+    if receipt.schema_version == 1:
+        assert dataset.transformation_artifact is not None
+        _verify_exact_artifact(
+            root=root,
+            artifact=dataset.transformation_artifact,
+            expected_path=run_root / "evaluation" / "transformations.json",
+            code="pilot_locked_test_failure_transformation_artifact_invalid",
+        )
     extraction_refs = {
         document_key: summary.artifact for document_key, summary in receipt.requirement_extractions.items()
     }
@@ -1925,6 +2318,9 @@ def verify_pilot_locked_test_failure_artifacts(
         predictions=predictions,
         output_manifests=receipt.output_manifests,
         output_manifest_hashes=receipt.output_manifest_hashes,
+        evolution_policy=evolution_policy,
+        evolution_results=evolution_results,
+        output_manifest_models=output_manifest_models if evolution_results is not None else None,
     )
     try:
         _derive_locked_test_gold_records(
@@ -1988,6 +2384,8 @@ def verify_pilot_locked_test_artifacts(
         receipt = PilotLockedTestCompletionReceipt.model_validate(completion_event.payload)
     except Exception as exc:  # noqa: BLE001 - 台账必须可强类型重放
         raise PilotArtifactError("pilot_locked_test_completion_payload_invalid") from exc
+    if receipt.schema_version != commitment.schema_version:
+        raise PilotArtifactError("pilot_locked_test_completion_commitment_schema_mismatch")
     run_root = (root / "runs" / "locked-test" / completion_event.run_id).resolve()
     dataset_path = _verify_exact_artifact(
         root=root,
@@ -1995,7 +2393,7 @@ def verify_pilot_locked_test_artifacts(
         expected_path=root / f"locked-test-dataset-{completion_event.run_id}.json",
         code="pilot_locked_test_dataset_artifact_invalid",
     )
-    artifact_specs = (
+    artifact_specs = [
         (receipt.resolutions, run_root / "raw" / "resolutions.json", "resolution"),
         (receipt.concept_refs, run_root / "artifacts" / "concept-refs.json", "concept_ref"),
         (receipt.predictions, run_root / "predictions" / "predictions.json", "prediction"),
@@ -2009,7 +2407,24 @@ def verify_pilot_locked_test_artifacts(
         (receipt.gate, run_root / "evaluation" / "gate.json", "gate"),
         (receipt.evaluation, run_root / "evaluation" / "evaluation.json", "evaluation"),
         (receipt.report, run_root / "evaluation" / "REPORT.md", "report"),
-    )
+    ]
+    if receipt.schema_version >= 2:
+        assert receipt.source_transformation_commitment is not None
+        assert receipt.transformation_projection is not None
+        artifact_specs.extend(
+            (
+                (
+                    receipt.source_transformation_commitment,
+                    run_root / "reviews" / "source-transformations.json",
+                    "source_transformation",
+                ),
+                (
+                    receipt.transformation_projection,
+                    run_root / "evaluation" / "transformation-projection.json",
+                    "transformation_projection",
+                ),
+            )
+        )
     paths = {
         name: _verify_exact_artifact(
             root=root,
@@ -2019,7 +2434,24 @@ def verify_pilot_locked_test_artifacts(
         )
         for artifact, expected_path, name in artifact_specs
     }
-    if receipt.source_gold.sha256 != commitment.source_gold_sha256 or receipt.gate.sha256 != commitment.gate_sha256:
+    if (
+        receipt.source_gold.sha256 != commitment.source_gold_sha256
+        or receipt.gate.sha256 != commitment.gate_sha256
+        or (
+            receipt.schema_version >= 2
+            and (
+                receipt.source_transformation_commitment is None
+                or receipt.source_transformation_commitment.sha256 != commitment.source_transformation_commitment_sha256
+            )
+        )
+        or (
+            receipt.schema_version == 3
+            and (
+                receipt.evolution_policy is None
+                or receipt.evolution_policy.sha256 != commitment.evolution_policy_sha256
+            )
+        )
+    ):
         raise PilotArtifactError("pilot_locked_test_commitment_mismatch")
     try:
         dataset = TaxonomyDatasetManifest.model_validate_json(dataset_path.read_text(encoding="utf-8"))
@@ -2027,17 +2459,32 @@ def verify_pilot_locked_test_artifacts(
         concept_refs = PilotConceptRefSet.model_validate_json(paths["concept_ref"].read_text(encoding="utf-8"))
         predictions = TaxonomyPredictionSet.model_validate_json(paths["prediction"].read_text(encoding="utf-8"))
         source_gold = PilotCoverageGoldSet.model_validate_json(paths["source_gold"].read_text(encoding="utf-8"))
+        source_transformations = (
+            PilotSourceTransformationCommitment.model_validate_json(
+                paths["source_transformation"].read_text(encoding="utf-8")
+            )
+            if receipt.schema_version >= 2
+            else None
+        )
         derived_gold = TaxonomyGoldSet.model_validate_json(paths["derived_gold"].read_text(encoding="utf-8"))
         gate = TaxonomyEvaluationGate.model_validate_json(paths["gate"].read_text(encoding="utf-8"))
+        if receipt.schema_version >= 2:
+            validate_pilot_locked_test_gate(gate)
         evaluation = TaxonomyEvaluationResult.model_validate_json(paths["evaluation"].read_text(encoding="utf-8"))
         coverage_metrics_payload = json.loads(paths["coverage_metrics"].read_text(encoding="utf-8"))
         transformations = TaxonomyTransformationSet.model_validate_json(
-            _resolve_artifact(root, dataset.transformation_artifact.path).read_text(encoding="utf-8")
+            _resolve_artifact(root, dataset.resolved_transformation_artifact.path).read_text(encoding="utf-8")
         )
     except Exception as exc:  # noqa: BLE001 - completed 必须绑定完整强类型产物
         raise PilotArtifactError("pilot_locked_test_artifact_schema_invalid") from exc
 
     bootstrap = verify_pilot_bootstrap_artifacts(root=root, corpus=corpus)
+    evolution_policy, evolution_results, output_manifest_models = _load_locked_test_evolution_artifacts(
+        root=root,
+        run_root=run_root,
+        receipt=receipt,
+        bootstrap=bootstrap,
+    )
     policy_freeze = verify_pilot_policy_freeze_artifacts(root=root, corpus=corpus)
     _verify_locked_test_start_binding(
         start_event=start_event,
@@ -2046,6 +2493,11 @@ def verify_pilot_locked_test_artifacts(
     )
     if source_gold.reviewed_at > start_event.occurred_at:
         raise PilotArtifactError("pilot_locked_test_gold_not_frozen_before_reservation")
+    if source_transformations is not None and (
+        source_transformations.reviewed_at > start_event.occurred_at
+        or source_transformations.source_gold_sha256 != commitment.source_gold_sha256
+    ):
+        raise PilotArtifactError("pilot_locked_test_transformation_commitment_not_frozen")
     expected_documents = {item.document_key: item for item in corpus.documents if item.split == "test"}
     expected_upstream = {
         "bootstrap_event": bootstrap.event.event_hash,
@@ -2058,9 +2510,14 @@ def verify_pilot_locked_test_artifacts(
             f"output_manifest.{system_key}": value
             for system_key, value in sorted(bootstrap.receipt.output_manifest_hashes.items())
         },
+        **(
+            {"evolution_policy": receipt.evolution_policy.sha256}
+            if receipt.schema_version == 3 and receipt.evolution_policy is not None
+            else {}
+        ),
     }
     if (
-        dataset.schema_version != 2
+        dataset.schema_version != _LOCKED_TEST_DATASET_SCHEMA_BY_RECEIPT_SCHEMA[receipt.schema_version]
         or dataset.evaluation_split != "test"
         or dataset.corpus_id != corpus.corpus_id
         or dataset.source_commitment_hash != corpus.source_commitment_hash
@@ -2068,7 +2525,19 @@ def verify_pilot_locked_test_artifacts(
         or dataset.created_at != corpus.frozen_at
         or dataset.dataset_hash != receipt.test_dataset_hash
         or receipt.frozen_policy_hash != policy_freeze.frozen_policy.canonical_hash
+        or dataset.prompt_revisions != resolutions.prompt_revisions
+        or dataset.prompt_revisions != predictions.prompt_revisions
+        or dataset.model_revisions != resolutions.model_revisions
+        or dataset.model_revisions != predictions.model_revisions
         or {item.document_key for item in dataset.documents} != set(expected_documents)
+        or (
+            receipt.schema_version >= 2
+            and (
+                dataset.source_transformation_commitment_artifact != receipt.source_transformation_commitment
+                or dataset.transformation_projection_artifact != receipt.transformation_projection
+                or dataset.transformation_projection_revision != receipt.transformation_projection_revision
+            )
+        )
     ):
         raise PilotArtifactError("pilot_locked_test_dataset_binding_invalid")
 
@@ -2101,18 +2570,37 @@ def verify_pilot_locked_test_artifacts(
         predictions=predictions,
         output_manifests=receipt.output_manifests,
         output_manifest_hashes=receipt.output_manifest_hashes,
+        evolution_policy=evolution_policy,
+        evolution_results=evolution_results,
+        output_manifest_models=output_manifest_models if evolution_results is not None else None,
     )
 
-    rebuilt_gold, coverage_metrics = derive_locked_test_gold(
-        root=root,
-        corpus=corpus,
-        dataset=dataset,
-        extractions=extractions,
-        source_gold=source_gold,
-    )
-    if rebuilt_gold != derived_gold or coverage_metrics_payload != {
-        **asdict(coverage_metrics),
-    }:
+    if source_transformations is None:
+        rebuilt_gold, coverage_metrics = derive_locked_test_gold(
+            root=root,
+            corpus=corpus,
+            dataset=dataset,
+            extractions=extractions,
+            source_gold=source_gold,
+        )
+        rebuilt_transformations = transformations
+    else:
+        rebuilt_gold, coverage_metrics, rebuilt_transformations = derive_locked_test_evidence(
+            root=root,
+            corpus=corpus,
+            dataset=dataset,
+            extractions=extractions,
+            source_gold=source_gold,
+            source_transformations=source_transformations,
+        )
+    if (
+        rebuilt_gold != derived_gold
+        or rebuilt_transformations != transformations
+        or coverage_metrics_payload
+        != {
+            **asdict(coverage_metrics),
+        }
+    ):
         raise PilotArtifactError("pilot_locked_test_gold_projection_mismatch")
     try:
         validate_evaluation_artifact_hashes(dataset=dataset, manifest_path=dataset_path)
@@ -2289,25 +2777,137 @@ def build_provisional_bootstrap_gold(
     )
 
 
+def build_evolution_draft_manifests(
+    *,
+    active_manifests: Mapping[str, TaxonomyManifest],
+    evolution_results: Mapping[str, TaxonomyEvolutionResult],
+    requirement_units: Mapping[str, RequirementUnit],
+) -> dict[str, TaxonomyManifest]:
+    """从受校验的 evolve change set 机械生成仅供评估的完整 draft manifest。"""
+
+    if set(evolution_results) != set(active_manifests):
+        raise PilotArtifactError("pilot_evolution_systems_mismatch")
+    if any(unit_id != unit.unit_id for unit_id, unit in requirement_units.items()):
+        raise PilotArtifactError("pilot_evolution_requirement_unit_index_invalid")
+
+    draft_manifests: dict[str, TaxonomyManifest] = {}
+    for system_key, active_manifest in sorted(active_manifests.items()):
+        evolution = evolution_results[system_key]
+        active_hash = manifest_hash(active_manifest)
+        if evolution.active_manifest_hash != active_hash:
+            raise PilotArtifactError(f"pilot_evolution_manifest_mismatch:{system_key}")
+
+        next_sort_order: dict[str | None, int] = {}
+        for active_node in active_manifest.nodes:
+            next_sort_order[active_node.parent_stable_key] = max(
+                next_sort_order.get(active_node.parent_stable_key, 0),
+                active_node.sort_order + 1,
+            )
+        materialized_nodes: list[TaxonomyNodeManifest] = []
+        for operation in sorted(evolution.operations, key=lambda item: item.operation_id):
+            evidence_by_unit = {item.requirement_unit_id: item for item in operation.evidence}
+            if len(evidence_by_unit) != len(operation.evidence) or set(evidence_by_unit) != set(
+                operation.requirement_unit_ids
+            ):
+                raise PilotArtifactError(f"pilot_evolution_operation_evidence_mismatch:{operation.operation_id}")
+            for unit_id, example in evidence_by_unit.items():
+                unit = requirement_units.get(unit_id)
+                if unit is None or unit.system_id != active_manifest.system_id:
+                    raise PilotArtifactError(f"pilot_evolution_requirement_unit_unknown:{unit_id}")
+                if example.text != unit.source_quote or example.document_content_hash != unit.document_content_hash:
+                    raise PilotArtifactError(f"pilot_evolution_requirement_evidence_mismatch:{unit_id}")
+            for proposed_node in sorted(operation.proposed_nodes, key=lambda item: item.stable_key):
+                parent_key = proposed_node.parent_stable_key
+                sort_order = next_sort_order.get(parent_key, 0)
+                next_sort_order[parent_key] = sort_order + 1
+                try:
+                    node_examples = [evidence_by_unit[unit_id] for unit_id in proposed_node.requirement_unit_ids]
+                except KeyError as exc:
+                    raise PilotArtifactError(
+                        f"pilot_evolution_node_evidence_mismatch:{proposed_node.stable_key}"
+                    ) from exc
+                materialized_nodes.append(
+                    TaxonomyNodeManifest(
+                        stable_key=proposed_node.stable_key,
+                        node_type=proposed_node.node_type,
+                        display_name=proposed_node.display_name,
+                        parent_stable_key=proposed_node.parent_stable_key,
+                        aliases=proposed_node.aliases,
+                        sort_order=sort_order,
+                        node_status="active",
+                        definition=proposed_node.definition,
+                        scope_note=proposed_node.scope_note,
+                        in_scope_examples=node_examples,
+                        out_of_scope_examples=[],
+                    )
+                )
+        if not materialized_nodes:
+            draft_manifests[system_key] = active_manifest
+            continue
+        try:
+            draft_manifests[system_key] = TaxonomyManifest(
+                schema_version=2,
+                system_id=active_manifest.system_id,
+                version=active_manifest.version + 1,
+                change_note=f"locked-test evolve draft {evolution.proposal_hash or evolution.input_hash}",
+                created_by="taxonomy-pilot-evolve",
+                nodes=[*active_manifest.nodes, *materialized_nodes],
+                mappings=active_manifest.mappings,
+            )
+        except Exception as exc:  # noqa: BLE001 - 完整 draft manifest 必须 fail closed
+            raise PilotArtifactError(f"pilot_evolution_output_manifest_invalid:{system_key}") from exc
+    return draft_manifests
+
+
+def _evolution_prediction_input_hash(
+    *,
+    resolution_input_hash: str,
+    evolution_input_hash: str,
+    operation_id: str | None,
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "resolution_input_hash": resolution_input_hash,
+                "evolution_input_hash": evolution_input_hash,
+                "operation_id": operation_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
 def project_resolution_predictions(
     *,
     resolutions: PilotResolutionSet,
     concept_refs: Mapping[UUID, PilotConceptRef],
     manifests: Mapping[str, TaxonomyManifest],
     manifest_artifacts: Mapping[str, ArtifactRef],
+    evolution_results: Mapping[str, TaxonomyEvolutionResult] | None = None,
+    output_manifests: Mapping[str, TaxonomyManifest] | None = None,
 ) -> TaxonomyPredictionSet:
-    """只从原始 resolution 投影评估记录，不接受手填目标、分数或 disposition。"""
+    """从 resolver/evolve 原始产物机械投影评估记录。"""
 
     paths = {system_key: _manifest_paths(manifest) for system_key, manifest in manifests.items()}
+    resolved_output_manifests = dict(output_manifests or manifests)
+    if set(resolved_output_manifests) != set(manifests):
+        raise PilotArtifactError("pilot_resolution_output_manifest_systems_mismatch")
+    if evolution_results is None and output_manifests is not None and resolved_output_manifests != dict(manifests):
+        raise PilotArtifactError("pilot_resolution_output_manifest_without_evolution")
     output_manifest_hashes: dict[str, str] = {}
+    active_manifest_hashes: dict[str, str] = {}
     known_nodes: list[TaxonomyKnownNode] = []
     manifest_keys: dict[str, set[str]] = {}
     if set(manifest_artifacts) != set(manifests):
         raise PilotArtifactError("pilot_resolution_manifest_artifacts_incomplete")
     for system_key, manifest in manifests.items():
-        output_manifest_hashes[system_key] = manifest_hash(manifest)
+        active_manifest_hash = manifest_hash(manifest)
+        active_manifest_hashes[system_key] = active_manifest_hash
+        output_manifest_hashes[system_key] = manifest_hash(resolved_output_manifests[system_key])
         manifest_keys[system_key] = {node.stable_key for node in manifest.nodes if node.node_status == "active"}
-        if resolutions.output_manifest_hashes.get(system_key) != output_manifest_hashes[system_key]:
+        if resolutions.output_manifest_hashes.get(system_key) != active_manifest_hash:
             raise PilotArtifactError(f"pilot_resolution_manifest_hash_mismatch:{system_key}")
         known_nodes.extend(
             TaxonomyKnownNode(
@@ -2319,12 +2919,70 @@ def project_resolution_predictions(
             for node in manifest.nodes
         )
 
+    operation_by_unit: dict[str, TaxonomyEvolutionOperation] = {}
+    evolution_by_system: dict[str, TaxonomyEvolutionResult] = {}
+    proposed_nodes: list[TaxonomyProposedNode] = []
+    tree_diff: list[dict[str, object]] = []
+    if evolution_results is not None:
+        if set(evolution_results) != set(manifests):
+            raise PilotArtifactError("pilot_evolution_systems_mismatch")
+        units_by_id = {item.requirement_unit_id: item for item in resolutions.records}
+        if len(units_by_id) != len(resolutions.records):
+            raise PilotArtifactError("pilot_resolution_requirement_unit_duplicate")
+        expected_novel_by_system: dict[str, set[str]] = {
+            system_key: {
+                item.requirement_unit_id
+                for item in resolutions.records
+                if item.system_key == system_key
+                and item.resolution.status == "unresolved"
+                and item.resolution.unresolved_kind == "novel"
+            }
+            for system_key in manifests
+        }
+        for system_key, evolution in sorted(evolution_results.items()):
+            if evolution.active_manifest_hash != manifest_hash(manifests[system_key]):
+                raise PilotArtifactError(f"pilot_evolution_manifest_mismatch:{system_key}")
+            for issue in evolution.issues:
+                issue_unit_ids = issue.requirement_unit_ids
+                if (
+                    len(issue_unit_ids) != len(set(issue_unit_ids))
+                    or not set(issue_unit_ids) <= expected_novel_by_system[system_key]
+                ):
+                    raise PilotArtifactError(f"pilot_evolution_issue_unit_invalid:{system_key}")
+            referenced = [unit_id for operation in evolution.operations for unit_id in operation.requirement_unit_ids]
+            referenced.extend(evolution.unresolved_requirement_unit_ids)
+            if set(referenced) != expected_novel_by_system[system_key] or len(referenced) != len(set(referenced)):
+                raise PilotArtifactError(f"pilot_evolution_novel_partition_invalid:{system_key}")
+            evolution_by_system[system_key] = evolution
+            for operation in sorted(evolution.operations, key=lambda item: item.operation_id):
+                for unit_id in operation.requirement_unit_ids:
+                    operation_by_unit[unit_id] = operation
+                tree_diff.append(
+                    {
+                        "system_key": system_key,
+                        "evolution_input_hash": evolution.input_hash,
+                        "operation": operation.model_dump(mode="json"),
+                    }
+                )
+                proposed_nodes.extend(
+                    TaxonomyProposedNode(
+                        system_key=system_key,
+                        stable_key=node.stable_key,
+                        node_type=node.node_type,
+                        display_name=node.display_name,
+                        parent_stable_key=node.parent_stable_key,
+                        aliases=node.aliases,
+                        evidence_requirement_unit_ids=node.requirement_unit_ids,
+                    )
+                    for node in operation.proposed_nodes
+                )
+
     projected: list[TaxonomyPredictionRecord] = []
     for raw in sorted(resolutions.records, key=lambda item: (item.document_key, item.requirement_unit_id)):
         resolution = raw.resolution
         if resolution.taxonomy_version_id != resolutions.taxonomy_version_ids[raw.system_key]:
             raise PilotArtifactError(f"pilot_resolution_taxonomy_version_mismatch:{raw.requirement_unit_id}")
-        if resolution.taxonomy_manifest_hash != output_manifest_hashes[raw.system_key]:
+        if resolution.taxonomy_manifest_hash != active_manifest_hashes[raw.system_key]:
             raise PilotArtifactError(f"pilot_resolution_manifest_mismatch:{raw.requirement_unit_id}")
         if resolution.policy_version != resolutions.policy_hash:
             raise PilotArtifactError(f"pilot_resolution_policy_mismatch:{raw.requirement_unit_id}")
@@ -2406,6 +3064,36 @@ def project_resolution_predictions(
                     )
                 )
         elif resolution.status == "unresolved":
+            unit_evolution = evolution_by_system.get(raw.system_key)
+            unit_operation = operation_by_unit.get(raw.requirement_unit_id)
+            if resolution.unresolved_kind == "novel" and unit_evolution is not None and unit_operation is not None:
+                projected.append(
+                    TaxonomyPredictionRecord(
+                        record_id=pilot_record_id(raw.document_key, raw.requirement_unit_id),
+                        document_key=raw.document_key,
+                        system_key=raw.system_key,
+                        split=raw.split,
+                        requirement_unit_id=raw.requirement_unit_id,
+                        input_hash=_evolution_prediction_input_hash(
+                            resolution_input_hash=resolution.input_hash,
+                            evolution_input_hash=unit_evolution.input_hash,
+                            operation_id=unit_operation.operation_id,
+                        ),
+                        outcome="proposal",
+                        predicted_operation=unit_operation.operation,
+                        latency_ms=raw.latency_ms,
+                        cost_usd=raw.cost_usd,
+                        write_disposition="draft",
+                    )
+                )
+                continue
+            input_hash = resolution.input_hash
+            if resolution.unresolved_kind == "novel" and unit_evolution is not None:
+                input_hash = _evolution_prediction_input_hash(
+                    resolution_input_hash=resolution.input_hash,
+                    evolution_input_hash=unit_evolution.input_hash,
+                    operation_id=None,
+                )
             projected.append(
                 TaxonomyPredictionRecord(
                     record_id=pilot_record_id(raw.document_key, raw.requirement_unit_id),
@@ -2413,7 +3101,7 @@ def project_resolution_predictions(
                     system_key=raw.system_key,
                     split=raw.split,
                     requirement_unit_id=raw.requirement_unit_id,
-                    input_hash=resolution.input_hash,
+                    input_hash=input_hash,
                     outcome="unresolved",
                     unresolved_kind=resolution.unresolved_kind,
                     latency_ms=raw.latency_ms,
@@ -2434,9 +3122,11 @@ def project_resolution_predictions(
         prompt_revisions=resolutions.prompt_revisions,
         model_revisions=resolutions.model_revisions,
         records=projected,
+        proposed_nodes=proposed_nodes,
         known_nodes=known_nodes,
         output_manifest_hashes=output_manifest_hashes,
         output_manifest_artifacts=dict(manifest_artifacts),
+        tree_diff=tree_diff,
     )
 
 

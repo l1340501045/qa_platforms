@@ -51,7 +51,7 @@ class TaxonomyDatasetManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    schema_version: Literal[1, 2]
+    schema_version: Literal[1, 2, 3]
     corpus_id: RecordId
     pilot_corpus: Literal[True]
     split_strategy: Literal["document_level"]
@@ -63,7 +63,10 @@ class TaxonomyDatasetManifest(BaseModel):
     documents: list[TaxonomyDatasetDocument] = Field(min_length=2)
     gold_artifact: ArtifactRef
     prediction_artifact: ArtifactRef
-    transformation_artifact: ArtifactRef
+    transformation_artifact: ArtifactRef | None = None
+    source_transformation_commitment_artifact: ArtifactRef | None = None
+    transformation_projection_artifact: ArtifactRef | None = None
+    transformation_projection_revision: str | None = Field(default=None, min_length=1, max_length=255)
     prompt_revisions: dict[str, str] = Field(min_length=1)
     model_revisions: dict[str, str] = Field(min_length=1)
 
@@ -114,6 +117,26 @@ class TaxonomyDatasetManifest(BaseModel):
             if {item.split for item in self.documents} != {self.evaluation_split}:
                 raise ValueError("dataset_v2_stage_split_mismatch")
 
+        if self.schema_version in {1, 2}:
+            if self.transformation_artifact is None:
+                raise ValueError("dataset_legacy_transformation_required")
+            if (
+                self.source_transformation_commitment_artifact is not None
+                or self.transformation_projection_artifact is not None
+                or self.transformation_projection_revision is not None
+            ):
+                raise ValueError("dataset_legacy_transformation_stage_fields_forbidden")
+        else:
+            if self.transformation_artifact is not None:
+                raise ValueError("dataset_v3_legacy_transformation_forbidden")
+            if (
+                self.evaluation_split != "test"
+                or self.source_transformation_commitment_artifact is None
+                or self.transformation_projection_artifact is None
+                or self.transformation_projection_revision is None
+            ):
+                raise ValueError("dataset_v3_transformation_stage_identity_required")
+
         if any(not key.strip() or not value.strip() for key, value in self.prompt_revisions.items()):
             raise ValueError("empty_prompt_revision")
         if any(not key.strip() or not value.strip() for key, value in self.model_revisions.items()):
@@ -133,11 +156,23 @@ class TaxonomyDatasetManifest(BaseModel):
                 item.model_dump(mode="json")
                 for item in sorted(self.documents, key=lambda document: document.document_key)
             ],
-            "transformation_artifact": self.transformation_artifact.model_dump(mode="json"),
             "prompt_revisions": dict(sorted(self.prompt_revisions.items())),
             "model_revisions": dict(sorted(self.model_revisions.items())),
         }
-        if self.schema_version == 2:
+        if self.schema_version in {1, 2}:
+            assert self.transformation_artifact is not None
+            payload["transformation_artifact"] = self.transformation_artifact.model_dump(mode="json")
+        else:
+            assert self.source_transformation_commitment_artifact is not None
+            payload.update(
+                {
+                    "source_transformation_commitment_artifact": (
+                        self.source_transformation_commitment_artifact.model_dump(mode="json")
+                    ),
+                    "transformation_projection_revision": self.transformation_projection_revision,
+                }
+            )
+        if self.schema_version in {2, 3}:
             payload.update(
                 {
                     "evaluation_split": self.evaluation_split,
@@ -146,6 +181,14 @@ class TaxonomyDatasetManifest(BaseModel):
                 }
             )
         return _canonical_hash(payload)
+
+    @property
+    def resolved_transformation_artifact(self) -> ArtifactRef:
+        if self.schema_version == 3:
+            assert self.transformation_projection_artifact is not None
+            return self.transformation_projection_artifact
+        assert self.transformation_artifact is not None
+        return self.transformation_artifact
 
 
 class TaxonomyGoldRecord(BaseModel):
@@ -377,8 +420,11 @@ class TaxonomyTransformationRecord(BaseModel):
 class TaxonomyTransformationSet(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     corpus_id: RecordId
+    dataset_hash: Sha256 | None = None
+    source_transformation_commitment_hash: Sha256 | None = None
+    projection_revision: str | None = Field(default=None, min_length=1, max_length=255)
     records: list[TaxonomyTransformationRecord] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -389,11 +435,25 @@ class TaxonomyTransformationSet(BaseModel):
             raise ValueError("duplicate_transformation_id")
         if len(variants) != len(set(variants)):
             raise ValueError("duplicate_transformation_variant")
+        if self.schema_version == 1:
+            if (
+                self.dataset_hash is not None
+                or self.source_transformation_commitment_hash is not None
+                or self.projection_revision is not None
+            ):
+                raise ValueError("transformation_v1_projection_fields_forbidden")
+        elif (
+            self.dataset_hash is None
+            or self.source_transformation_commitment_hash is None
+            or self.projection_revision is None
+            or not self.records
+        ):
+            raise ValueError("transformation_v2_projection_identity_required")
         return self
 
     @property
     def canonical_hash(self) -> str:
-        payload = self.model_dump(mode="json")
+        payload = self.model_dump(mode="json", exclude_none=self.schema_version == 1)
         payload["records"] = sorted(payload["records"], key=lambda item: item["transformation_id"])
         return _canonical_hash(payload)
 
@@ -789,6 +849,7 @@ class TaxonomyEvaluationGate(BaseModel):
     minimum_proposal_operation_type_accuracy: float | None = Field(default=None, ge=0, le=1)
     maximum_human_intervention_rate: float | None = Field(default=None, ge=0, le=1)
     maximum_operational_failure_rate: float = Field(default=0, ge=0, le=1)
+    require_reuse_baseline: bool = False
     require_new_node_baseline: bool = True
     require_independent_gold: bool = True
     require_operational_thresholds: bool = True

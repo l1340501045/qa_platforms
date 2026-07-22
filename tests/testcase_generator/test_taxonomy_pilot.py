@@ -63,6 +63,8 @@ from src.testcase_generator.schemas.taxonomy_pilot import (
     PilotLockedTestInputCommitment,
     PilotResolutionRecord,
     PilotResolutionSet,
+    PilotSourceTransformationCommitment,
+    PilotSourceTransformationRecord,
     build_pilot_ledger_event,
 )
 from src.testcase_generator.schemas.taxonomy_resolution import (
@@ -81,14 +83,26 @@ from src.testcase_generator.services.taxonomy_bootstrap import (
     TaxonomyBootstrapPolicy,
     TaxonomyBootstrapResult,
 )
+from src.testcase_generator.services.taxonomy_evolution import (
+    EvolutionNodeDraft,
+    TaxonomyEvolutionDraftBatch,
+    TaxonomyEvolutionIssue,
+    TaxonomyEvolutionModelBinding,
+    TaxonomyEvolutionOperationDraft,
+    TaxonomyEvolutionPolicy,
+    TaxonomyEvolutionService,
+)
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 from src.testcase_generator.services.taxonomy_pilot import (
+    PILOT_TRANSFORMATION_PROJECTION_REVISION,
     LockedTestAlreadyConsumedError,
     PilotArtifactError,
     PilotRunLedger,
     PilotSourceCoverageError,
+    build_evolution_draft_manifests,
     build_pilot_frozen_policy,
     build_provisional_bootstrap_gold,
+    derive_locked_test_evidence,
     derive_locked_test_gold,
     freeze_pilot_corpus,
     load_frozen_corpus,
@@ -124,7 +138,14 @@ def _spec(tmp_path: Path) -> PilotCorpusSpec:
     values = (
         ("motion-bootstrap", "漫剧初版功能 PRD", "motion", SYSTEM_A, "bootstrap", "漫剧基线需求"),
         ("motion-calibration", "漫剧 1.5 PRD", "motion", SYSTEM_A, "calibration", "漫剧校准需求"),
-        ("motion-test", "漫剧 2.0 PRD", "motion", SYSTEM_A, "test", "漫剧锁定测试需求"),
+        (
+            "motion-test",
+            "漫剧 2.0 PRD",
+            "motion",
+            SYSTEM_A,
+            "test",
+            "漫剧商品同步锁定测试需求\n漫剧商品同步需求同义表述\n漫剧商品批量同步锁定测试需求\n漫剧商品批量同步需求同义表述",
+        ),
         (
             "distribution-bootstrap",
             "分销 v1.2 PRD",
@@ -141,7 +162,14 @@ def _spec(tmp_path: Path) -> PilotCorpusSpec:
             "calibration",
             "分销校准需求",
         ),
-        ("distribution-test", "分销 API 优化 PRD", "distribution", SYSTEM_B, "test", "分销锁定测试需求"),
+        (
+            "distribution-test",
+            "分销 API 优化 PRD",
+            "distribution",
+            SYSTEM_B,
+            "test",
+            "分销商品同步锁定测试需求\n分销商品同步需求同义表述\n分销商品批量同步锁定测试需求\n分销商品批量同步需求同义表述",
+        ),
     )
     for index, (document_key, title, system_key, system_id, split, content) in enumerate(values, start=1):
         path = tmp_path / f"source-{index}.md"
@@ -521,29 +549,34 @@ def _locked_test_source_gold_and_dataset(root: Path, corpus):
     ):
         snapshot = (root / document.source.path).read_text(encoding="utf-8")
         source_ref = f"prd:{document.title} §测试章节"
-        unit = RequirementUnit(
-            unit_id=build_requirement_unit_id(
+        units = [
+            RequirementUnit(
+                unit_id=build_requirement_unit_id(
+                    document_content_hash=document.source.sha256,
+                    source_ref=source_ref,
+                    statement=statement,
+                ),
+                system_id=document.system_id,
+                document_id=document.document_id,
                 document_content_hash=document.source.sha256,
                 source_ref=source_ref,
-                statement=snapshot,
-            ),
-            system_id=document.system_id,
-            document_id=document.document_id,
-            document_content_hash=document.source.sha256,
-            source_ref=source_ref,
-            source_quote=snapshot,
-            source_quote_hash=build_source_quote_hash(snapshot),
-            structural_key=f"{document.system_key}.fixture",
-            title="测试需求",
-            statement=snapshot,
-            observable_outcome=snapshot,
-            scope_status="atomic",
-        )
+                source_quote=statement,
+                source_quote_hash=build_source_quote_hash(statement),
+                structural_key="product.sync" if index <= 2 else "product.bulk-sync",
+                title="商品同步" if index <= 2 else "商品批量同步",
+                statement=statement,
+                observable_outcome="系统完成同一业务能力。",
+                scope_status="atomic",
+            )
+            for index, statement in enumerate(snapshot.splitlines(), start=1)
+            if statement.strip()
+        ]
+        assert len(units) == 4
         extraction = _extraction_with_units(
             document_id=document.document_id,
             document_content_hash=document.source.sha256,
             source_ref=source_ref,
-            units=[unit],
+            units=units,
         )
         extraction_path = root / "runs" / "locked-test" / "fixture" / "requirements" / f"{document.document_key}.json"
         extraction_path.parent.mkdir(parents=True, exist_ok=True)
@@ -575,17 +608,28 @@ def _locked_test_source_gold_and_dataset(root: Path, corpus):
                 expected_disposition="requirements_present",
                 facts=[
                     PilotCoverageGoldFact(
-                        fact_id=f"fact-{_sha(document.document_key)[:24]}",
+                        fact_id=f"fact-{_sha(f'{document.document_key}:{index}')[:24]}",
                         source_quote=unit.source_quote,
                         source_quote_hash=unit.source_quote_hash,
                         statement=unit.statement,
-                        taxonomy_expectation={
-                            "expected_disposition": "reuse",
-                            "expected_primary_stable_key": "product.sync",
-                            "expected_path": ["business.assets", "product.sync"],
-                            "eligible_for_auto": True,
-                        },
+                        taxonomy_expectation=(
+                            {
+                                "expected_disposition": "reuse",
+                                "expected_primary_stable_key": "product.sync",
+                                "expected_path": ["business.assets", "product.sync"],
+                                "eligible_for_auto": True,
+                            }
+                            if index <= 2
+                            else {
+                                "expected_disposition": "new_node",
+                                "expected_new_node_stable_key": "product.bulk-sync",
+                                "expected_operation": "add",
+                                "expected_path": ["business.assets", "product.bulk-sync"],
+                                "eligible_for_auto": True,
+                            }
+                        ),
                     )
+                    for index, unit in enumerate(units, start=1)
                 ],
             )
         )
@@ -630,6 +674,78 @@ def _locked_test_source_gold_and_dataset(root: Path, corpus):
     return extractions, dataset, source_gold
 
 
+def _source_transformation_commitment(
+    *,
+    corpus,
+    source_gold: PilotCoverageGoldSet,
+    source_gold_sha256: str,
+) -> PilotSourceTransformationCommitment:
+    records = []
+    for source_record in sorted(source_gold.records, key=lambda item: item.system_key):
+        assert len(source_record.facts) == 4
+        for pair_index in range(0, len(source_record.facts), 2):
+            source_fact, variant_fact = source_record.facts[pair_index : pair_index + 2]
+            group_kind = "reuse" if pair_index == 0 else "new-node"
+            records.append(
+                PilotSourceTransformationRecord(
+                    transformation_id=f"transformation-{source_record.system_key}-{group_kind}",
+                    system_key=source_record.system_key,
+                    semantic_group_id=f"semantic-group-{source_record.system_key}-{group_kind}",
+                    source_fact_id=source_fact.fact_id,
+                    variant_fact_id=variant_fact.fact_id,
+                    kind="synonym",
+                    transformation_revision="human-reviewed-synonym-v1",
+                    source_quote_hash=source_fact.source_quote_hash,
+                    variant_quote_hash=variant_fact.source_quote_hash,
+                )
+            )
+    return PilotSourceTransformationCommitment(
+        schema_version=1,
+        corpus_id=corpus.corpus_id,
+        source_commitment_hash=corpus.source_commitment_hash,
+        source_gold_sha256=source_gold_sha256,
+        projection_revision=PILOT_TRANSFORMATION_PROJECTION_REVISION,
+        review_method="human_independent",
+        reviewed_by="transformation-reviewer",
+        reviewed_at=NOW + timedelta(minutes=2),
+        records=records,
+    )
+
+
+def _write_locked_test_inputs(
+    *,
+    tmp_path: Path,
+    corpus,
+    source_gold: PilotCoverageGoldSet,
+    gate: TaxonomyEvaluationGate | None = None,
+) -> tuple[Path, Path, Path]:
+    source_gold_path = tmp_path / "locked-source-gold.json"
+    transformation_path = tmp_path / "locked-source-transformations.json"
+    gate_path = tmp_path / "locked-gate.json"
+    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
+    commitment = _source_transformation_commitment(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_gold_sha256=hashlib.sha256(source_gold_path.read_bytes()).hexdigest(),
+    )
+    transformation_path.write_text(commitment.model_dump_json(), encoding="utf-8")
+    gate_path.write_text((gate or _locked_test_gate()).model_dump_json(), encoding="utf-8")
+    return source_gold_path, transformation_path, gate_path
+
+
+def _locked_test_gate(**overrides: object) -> TaxonomyEvaluationGate:
+    values: dict[str, object] = {
+        "require_reuse_baseline": True,
+        "minimum_expected_reuse_coverage": 1,
+        "minimum_new_node_precision": 1,
+        "minimum_new_node_recall": 1,
+        "minimum_proposal_operation_type_accuracy": 1,
+        "maximum_human_intervention_rate": 0.5,
+    }
+    values.update(overrides)
+    return TaxonomyEvaluationGate.model_validate(values)
+
+
 def _gold_attestation(
     corpus_id: str,
     provisional_gold: TaxonomyGoldSet,
@@ -655,8 +771,9 @@ def _gold_attestation(
 
 def _locked_test_commitment() -> PilotLockedTestInputCommitment:
     return PilotLockedTestInputCommitment(
-        schema_version=1,
+        schema_version=2,
         source_gold_sha256="a" * 64,
+        source_transformation_commitment_sha256="c" * 64,
         gate_sha256="b" * 64,
     )
 
@@ -691,10 +808,52 @@ async def _fake_locked_test_resolve(
     concept_ids = {item.system_key: item.concept_id for item in references}
     records = []
     for document in documents:
-        for unit in extractions[document.document_key].units:
+        for unit_index, unit in enumerate(extractions[document.document_key].units, start=1):
             version_id = version_ids[document.system_key]
             concept_id = concept_ids[document.system_key]
             manifest_hash_value = manifest_hash(bootstrap.manifests[document.system_key])
+            if unit_index > 2:
+                resolution = TaxonomyResolution(
+                    schema_version=1,
+                    status="unresolved",
+                    unresolved_kind="novel",
+                    method="evolve",
+                    taxonomy_version_id=version_id,
+                    reason_code="fixture_novel",
+                    reason="测试夹具中的新增能力。",
+                    input_hash=_sha(f"locked:{unit.unit_id}"),
+                    taxonomy_manifest_hash=manifest_hash_value,
+                    policy_version=policy.canonical_hash,
+                    model_revision=policy.model_revision,
+                    requirement_unit_ids=[unit.unit_id],
+                )
+            else:
+                resolution = TaxonomyResolution(
+                    schema_version=1,
+                    status="mapped",
+                    method="policy_auto",
+                    taxonomy_version_id=version_id,
+                    primary_concept_id=concept_id,
+                    candidates=[
+                        TaxonomyCandidate(
+                            taxonomy_version_id=version_id,
+                            concept_id=concept_id,
+                            stable_key="product.sync",
+                            score=0.95,
+                            rank=1,
+                            evidence=[unit.source_ref],
+                        )
+                    ],
+                    confidence=0.95,
+                    margin=0.95,
+                    reason_code="fixture_match",
+                    reason="测试夹具中的确定匹配。",
+                    input_hash=_sha(f"locked:{unit.unit_id}"),
+                    taxonomy_manifest_hash=manifest_hash_value,
+                    policy_version=policy.canonical_hash,
+                    model_revision=policy.model_revision,
+                    requirement_unit_ids=[unit.unit_id],
+                )
             records.append(
                 PilotResolutionRecord(
                     document_key=document.document_key,
@@ -702,32 +861,7 @@ async def _fake_locked_test_resolve(
                     split="test",
                     requirement_unit_id=unit.unit_id,
                     latency_ms=10,
-                    resolution=TaxonomyResolution(
-                        schema_version=1,
-                        status="mapped",
-                        method="policy_auto",
-                        taxonomy_version_id=version_id,
-                        primary_concept_id=concept_id,
-                        candidates=[
-                            TaxonomyCandidate(
-                                taxonomy_version_id=version_id,
-                                concept_id=concept_id,
-                                stable_key="product.sync",
-                                score=0.95,
-                                rank=1,
-                                evidence=[unit.source_ref],
-                            )
-                        ],
-                        confidence=0.95,
-                        margin=0.95,
-                        reason_code="fixture_match",
-                        reason="测试夹具中的确定匹配。",
-                        input_hash=_sha(f"locked:{unit.unit_id}"),
-                        taxonomy_manifest_hash=manifest_hash_value,
-                        policy_version=policy.canonical_hash,
-                        model_revision=policy.model_revision,
-                        requirement_unit_ids=[unit.unit_id],
-                    ),
+                    resolution=resolution,
                 )
             )
     resolutions = PilotResolutionSet(
@@ -750,6 +884,41 @@ async def _fake_locked_test_resolve(
         manifest_artifacts=bootstrap.receipt.output_manifests,
     )
     return resolutions, concept_refs, predictions
+
+
+def _fake_evolution_binding(_generate_structured, *, model_revision):
+    async def propose(request):
+        unit_ids = [unit.unit_id for unit in request.requirement_units]
+        return TaxonomyEvolutionDraftBatch(
+            operations=(
+                [
+                    TaxonomyEvolutionOperationDraft(
+                        operation="add",
+                        proposed_nodes=[
+                            EvolutionNodeDraft(
+                                stable_key="product.bulk-sync",
+                                node_type="capability",
+                                display_name="商品批量同步",
+                                parent_stable_key="business.assets",
+                                definition="一次同步多个商品。",
+                                scope_note="不包含单个商品人工新建。",
+                                requirement_unit_ids=unit_ids,
+                            )
+                        ],
+                        requirement_unit_ids=unit_ids,
+                        reason="测试夹具中的新增能力。",
+                    )
+                ]
+                if unit_ids
+                else []
+            )
+        )
+
+    return TaxonomyEvolutionModelBinding(
+        propose_changes=propose,
+        prompt_revision=taxonomy_pilot_script.EVOLUTION_PROMPT_REVISION,
+        model_revision=model_revision,
+    )
 
 
 def _append_locked_test_prerequisites(
@@ -1454,6 +1623,8 @@ def test_cli_exposes_one_shot_locked_test_without_test_preprocessing_command(tmp
             str(tmp_path),
             "--source-gold",
             str(tmp_path / "test-source-gold.json"),
+            "--transformation-commitment",
+            str(tmp_path / "source-transformations.json"),
             "--gate",
             str(tmp_path / "gate.json"),
             "--actor",
@@ -1464,6 +1635,7 @@ def test_cli_exposes_one_shot_locked_test_without_test_preprocessing_command(tmp
     )
 
     assert args.command == "run-locked-test"
+    assert args.transformation_commitment == tmp_path / "source-transformations.json"
     with pytest.raises(SystemExit):
         _parser().parse_args(
             [
@@ -1478,6 +1650,135 @@ def test_cli_exposes_one_shot_locked_test_without_test_preprocessing_command(tmp
                 "forbidden-test-preprocess",
             ]
         )
+
+
+def test_cli_exposes_locked_test_receipt_replay(tmp_path: Path) -> None:
+    args = _parser().parse_args(
+        [
+            "verify-locked-test",
+            "--root",
+            str(tmp_path),
+        ]
+    )
+
+    assert args.command == "verify-locked-test"
+    assert args.root == tmp_path
+
+
+@pytest.mark.parametrize(
+    ("command", "result", "expected"),
+    [
+        ("run-locked-test", {"overall_status": "pass"}, 0),
+        ("run-locked-test", {"overall_status": "fail"}, 2),
+        (
+            "verify-locked-test",
+            {"terminal_status": "completed", "evaluation_status": "pass"},
+            0,
+        ),
+        (
+            "verify-locked-test",
+            {"terminal_status": "completed", "evaluation_status": "incomplete"},
+            2,
+        ),
+        (
+            "verify-locked-test",
+            {"terminal_status": "failed", "evidence_replayed": True},
+            2,
+        ),
+        ("freeze", {"corpus_id": "pilot"}, 0),
+    ],
+)
+def test_cli_exit_code_distinguishes_valid_evidence_from_quality_pass(
+    command: str,
+    result: dict[str, object],
+    expected: int,
+) -> None:
+    assert taxonomy_pilot_script._result_exit_code(SimpleNamespace(command=command), result) == expected
+
+
+def test_locked_test_rejects_weakened_semantic_gate_before_reservation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, corpus = _freeze(tmp_path)
+    ledger = PilotRunLedger(root / "run-ledger.jsonl")
+    _append_locked_test_prerequisites(ledger, corpus)
+    _append_policy_freeze(ledger, corpus)
+    _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+        gate=_locked_test_gate(minimum_semantic_stability=0),
+    )
+
+    def runtime_must_not_pin(*args, **kwargs):
+        raise AssertionError("低于业务门槛的 gate 不得写入 runtime pin")
+
+    monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", runtime_must_not_pin)
+
+    async def extraction_must_not_run(**kwargs):
+        raise AssertionError("低于业务门槛的 gate 不得消费 locked test")
+
+    monkeypatch.setattr(taxonomy_pilot_script, "_extract_split_requirement_units", extraction_must_not_run)
+
+    with pytest.raises(PilotArtifactError, match="pilot_locked_test_semantic_stability_gate_too_low"):
+        asyncio.run(
+            taxonomy_pilot_script._run_locked_test(
+                SimpleNamespace(
+                    root=root,
+                    source_gold=source_gold_path,
+                    transformation_commitment=transformation_path,
+                    gate=gate_path,
+                    actor="locked-test-owner",
+                    run_id="locked-test-weakened-gate",
+                )
+            )
+        )
+
+    assert not any(event.event_type == "locked_test_started" for event in ledger.read_events())
+
+
+@pytest.mark.parametrize(
+    ("override", "error"),
+    [
+        ({"require_independent_gold": False}, "pilot_locked_test_independent_gold_required"),
+        ({"require_complete_corpus": False}, "pilot_locked_test_complete_corpus_required"),
+        ({"require_reuse_baseline": False}, "pilot_locked_test_reuse_baseline_required"),
+        ({"require_new_node_baseline": False}, "pilot_locked_test_new_node_baseline_required"),
+        ({"require_operational_thresholds": False}, "pilot_locked_test_operational_thresholds_required"),
+        ({"minimum_reuse_precision": 0.94}, "pilot_locked_test_reuse_precision_gate_too_low"),
+        ({"minimum_hierarchical_path_accuracy": 0.94}, "pilot_locked_test_path_accuracy_gate_too_low"),
+        ({"maximum_duplicate_node_rate": 0.01}, "pilot_locked_test_duplicate_node_gate_too_weak"),
+        ({"maximum_unsupported_node_rate": 0.01}, "pilot_locked_test_unsupported_node_gate_too_weak"),
+        ({"minimum_structural_invariant_rate": 0.99}, "pilot_locked_test_structural_invariant_gate_too_low"),
+        ({"maximum_operational_failure_rate": 0.01}, "pilot_locked_test_operational_failure_gate_too_weak"),
+    ],
+)
+def test_locked_test_gate_rejects_weakened_methodology(
+    override: dict[str, object],
+    error: str,
+) -> None:
+    with pytest.raises(PilotArtifactError, match=error):
+        taxonomy_pilot_service.validate_pilot_locked_test_gate(_locked_test_gate(**override))
+
+
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("minimum_expected_reuse_coverage", "pilot_locked_test_reuse_coverage_threshold_required"),
+        ("minimum_new_node_precision", "pilot_locked_test_new_node_precision_threshold_required"),
+        ("minimum_new_node_recall", "pilot_locked_test_new_node_recall_threshold_required"),
+        (
+            "minimum_proposal_operation_type_accuracy",
+            "pilot_locked_test_operation_type_threshold_required",
+        ),
+        ("maximum_human_intervention_rate", "pilot_locked_test_human_intervention_threshold_required"),
+    ],
+)
+def test_locked_test_gate_requires_frozen_operational_thresholds(field: str, error: str) -> None:
+    with pytest.raises(PilotArtifactError, match=error):
+        taxonomy_pilot_service.validate_pilot_locked_test_gate(_locked_test_gate(**{field: None}))
 
 
 def test_bootstrap_snapshot_loader_never_reads_locked_test_path(tmp_path: Path) -> None:
@@ -1885,7 +2186,7 @@ def test_locked_test_failure_replay_rejects_rehashed_start_payload(tmp_path: Pat
         run_id=start.run_id,
         actor="pilot-operator",
         payload=PilotLockedTestFailureReceipt(
-            schema_version=1,
+            schema_version=2,
             failure_kind="execution",
             error_type="RuntimeError",
         ).model_dump(mode="json"),
@@ -2223,9 +2524,155 @@ def test_locked_test_gold_is_derived_from_precommitted_source_facts_without_unit
         "motion-test",
         "distribution-test",
     }
-    assert {record.expected_primary_stable_key for record in derived_gold.records} == {"product.sync"}
+    assert {record.expected_disposition for record in derived_gold.records} == {"reuse", "new_node"}
+    assert {
+        record.expected_primary_stable_key for record in derived_gold.records if record.expected_disposition == "reuse"
+    } == {"product.sync"}
+    assert {
+        record.expected_new_node_stable_key
+        for record in derived_gold.records
+        if record.expected_disposition == "new_node"
+    } == {"product.bulk-sync"}
     assert metrics.extraction_recall == 1
     assert metrics.extraction_precision == 1
+
+
+def test_locked_test_projects_precommitted_source_transformations_without_dataset_hash_drift(
+    tmp_path: Path,
+) -> None:
+    root, corpus = _freeze(tmp_path)
+    extractions, legacy_dataset, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_path = root / "runs" / "locked-test" / "fixture" / "reviews" / "test-source-gold.json"
+    source_gold_path.parent.mkdir(parents=True, exist_ok=True)
+    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
+    commitment = _source_transformation_commitment(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_gold_sha256=hashlib.sha256(source_gold_path.read_bytes()).hexdigest(),
+    )
+    commitment_path = root / "runs" / "locked-test" / "fixture" / "reviews" / "source-transformations.json"
+    commitment_path.write_text(commitment.model_dump_json(), encoding="utf-8")
+    projection_path = root / "runs" / "locked-test" / "fixture" / "evaluation" / "transformation-projection.json"
+    legacy_payload = legacy_dataset.model_dump(mode="json")
+    legacy_payload.pop("transformation_artifact")
+    dataset = TaxonomyDatasetManifest.model_validate(
+        {
+            **legacy_payload,
+            "schema_version": 3,
+            "source_transformation_commitment_artifact": {
+                "path": str(commitment_path.relative_to(root)),
+                "sha256": hashlib.sha256(commitment_path.read_bytes()).hexdigest(),
+            },
+            "transformation_projection_artifact": {
+                "path": str(projection_path.relative_to(root)),
+                "sha256": "0" * 64,
+            },
+            "transformation_projection_revision": PILOT_TRANSFORMATION_PROJECTION_REVISION,
+        }
+    )
+
+    derived_gold, metrics, transformations = derive_locked_test_evidence(
+        root=root,
+        corpus=corpus,
+        dataset=dataset,
+        extractions=extractions,
+        source_gold=source_gold,
+        source_transformations=commitment,
+    )
+    projected_dataset = dataset.model_copy(
+        update={
+            "transformation_projection_artifact": ArtifactRef(
+                path=str(projection_path.relative_to(root)),
+                sha256=transformations.canonical_hash,
+            )
+        }
+    )
+
+    assert metrics.extraction_recall == 1
+    assert len(transformations.records) == 4
+    assert transformations.schema_version == 2
+    assert transformations.dataset_hash == dataset.dataset_hash
+    assert (
+        transformations.source_transformation_commitment_hash
+        == hashlib.sha256(commitment_path.read_bytes()).hexdigest()
+    )
+    assert projected_dataset.dataset_hash == dataset.dataset_hash
+    assert {record.variant_kind for record in derived_gold.records} == {"original", "synonym"}
+    assert len({record.semantic_group_id for record in derived_gold.records}) == 4
+
+
+def test_source_transformation_commitment_rejects_fact_as_both_source_and_variant(tmp_path: Path) -> None:
+    root, corpus = _freeze(tmp_path)
+    _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_payload = source_gold.model_dump_json()
+    commitment = _source_transformation_commitment(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_gold_sha256=hashlib.sha256(source_gold_payload.encode("utf-8")).hexdigest(),
+    )
+    payload = commitment.model_dump(mode="json")
+    payload["records"][1]["source_fact_id"] = payload["records"][0]["variant_fact_id"]
+
+    with pytest.raises(ValidationError, match="source_transformation_fact_role_conflict"):
+        PilotSourceTransformationCommitment.model_validate(payload)
+
+
+def test_source_transformation_commitment_rejects_source_fact_in_multiple_groups(tmp_path: Path) -> None:
+    root, corpus = _freeze(tmp_path)
+    _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_payload = source_gold.model_dump_json()
+    commitment = _source_transformation_commitment(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_gold_sha256=hashlib.sha256(source_gold_payload.encode("utf-8")).hexdigest(),
+    )
+    payload = commitment.model_dump(mode="json")
+    payload["records"][1]["source_fact_id"] = payload["records"][0]["source_fact_id"]
+
+    with pytest.raises(ValidationError, match="source_transformation_source_group_conflict"):
+        PilotSourceTransformationCommitment.model_validate(payload)
+
+
+def test_locked_test_rejects_transformation_review_before_source_gold(tmp_path: Path) -> None:
+    root, corpus = _freeze(tmp_path)
+    extractions, legacy_dataset, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_path = root / "reviews" / "test-source-gold.json"
+    source_gold_path.parent.mkdir(parents=True, exist_ok=True)
+    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
+    commitment = _source_transformation_commitment(
+        corpus=corpus,
+        source_gold=source_gold,
+        source_gold_sha256=hashlib.sha256(source_gold_path.read_bytes()).hexdigest(),
+    ).model_copy(update={"reviewed_at": source_gold.reviewed_at - timedelta(seconds=1)})
+    commitment_path = root / "reviews" / "source-transformations.json"
+    commitment_path.write_text(commitment.model_dump_json(), encoding="utf-8")
+    legacy_payload = legacy_dataset.model_dump(mode="json")
+    legacy_payload.pop("transformation_artifact")
+    dataset = TaxonomyDatasetManifest.model_validate(
+        {
+            **legacy_payload,
+            "schema_version": 3,
+            "source_transformation_commitment_artifact": {
+                "path": str(commitment_path.relative_to(root)),
+                "sha256": hashlib.sha256(commitment_path.read_bytes()).hexdigest(),
+            },
+            "transformation_projection_artifact": {
+                "path": "evaluation/transformation-projection.json",
+                "sha256": "0" * 64,
+            },
+            "transformation_projection_revision": PILOT_TRANSFORMATION_PROJECTION_REVISION,
+        }
+    )
+
+    with pytest.raises(PilotArtifactError, match="pilot_source_transformation_review_precedes_source_gold"):
+        derive_locked_test_evidence(
+            root=root,
+            corpus=corpus,
+            dataset=dataset,
+            extractions=extractions,
+            source_gold=source_gold,
+            source_transformations=commitment,
+        )
 
 
 def test_locked_test_overlap_references_count_one_source_fact_and_one_unit_once(tmp_path: Path) -> None:
@@ -2279,10 +2726,10 @@ def test_locked_test_overlap_references_count_one_source_fact_and_one_unit_once(
         source_gold=source_gold,
     )
 
-    assert len(derived_gold.records) == 2
-    assert metrics.expected_fact_count == 2
-    assert metrics.matched_fact_count == 2
-    assert metrics.extracted_unit_count == 2
+    assert len(derived_gold.records) == 8
+    assert metrics.expected_fact_count == 8
+    assert metrics.matched_fact_count == 8
+    assert metrics.extracted_unit_count == 8
 
 
 def test_locked_test_overlap_fact_may_be_recovered_from_only_one_window(tmp_path: Path) -> None:
@@ -2339,10 +2786,10 @@ def test_locked_test_overlap_fact_may_be_recovered_from_only_one_window(tmp_path
         source_gold=source_gold,
     )
 
-    assert len(derived_gold.records) == 2
-    assert metrics.expected_fact_count == 2
-    assert metrics.matched_fact_count == 2
-    assert metrics.extracted_unit_count == 2
+    assert len(derived_gold.records) == 8
+    assert metrics.expected_fact_count == 8
+    assert metrics.matched_fact_count == 8
+    assert metrics.extracted_unit_count == 8
 
 
 def test_locked_test_fact_id_reuse_requires_same_overlapping_section(tmp_path: Path) -> None:
@@ -2509,75 +2956,44 @@ def test_one_shot_locked_test_completes_with_hidden_source_gold_and_fake_models(
     ledger = PilotRunLedger(root / "run-ledger.jsonl")
     _append_locked_test_prerequisites(ledger, corpus)
     _append_policy_freeze(ledger, corpus)
-    _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
-    source_gold_path = tmp_path / "locked-source-gold.json"
-    gate_path = tmp_path / "locked-gate.json"
-    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
-    gate_path.write_text(
-        TaxonomyEvaluationGate(
-            minimum_semantic_stability=0,
-            require_new_node_baseline=False,
-            require_operational_thresholds=False,
-            require_complete_corpus=True,
-        ).model_dump_json(),
-        encoding="utf-8",
+    source_extractions, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+        gate=_locked_test_gate(),
     )
     monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", lambda root, bundle: None)
 
     async def fake_extract(*, root, corpus, split, output_dir, bundle, allow_locked_test=False):
         assert split == "test"
         assert allow_locked_test is True
-        extractions = {}
         summaries = {}
-        for document in sorted(
-            (item for item in corpus.documents if item.split == "test"),
-            key=lambda item: item.document_key,
-        ):
-            snapshot = (root / document.source.path).read_text(encoding="utf-8")
-            source_ref = f"prd:{document.title} §测试章节"
-            unit = RequirementUnit(
-                unit_id=build_requirement_unit_id(
-                    document_content_hash=document.source.sha256,
-                    source_ref=source_ref,
-                    statement=snapshot,
-                ),
-                system_id=document.system_id,
-                document_id=document.document_id,
-                document_content_hash=document.source.sha256,
-                source_ref=source_ref,
-                source_quote=snapshot,
-                source_quote_hash=build_source_quote_hash(snapshot),
-                structural_key=f"{document.system_key}.fixture",
-                title="测试需求",
-                statement=snapshot,
-                observable_outcome=snapshot,
-                scope_status="atomic",
-            )
-            extraction = _extraction_with_units(
-                document_id=document.document_id,
-                document_content_hash=document.source.sha256,
-                source_ref=source_ref,
-                units=[unit],
-            )
-            path = output_dir / f"{document.document_key}.json"
+        for document_key, extraction in sorted(source_extractions.items()):
+            path = output_dir / f"{document_key}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(extraction.model_dump_json(), encoding="utf-8")
-            extractions[document.document_key] = extraction
-            summaries[document.document_key] = _requirement_artifact_summary(
+            summaries[document_key] = _requirement_artifact_summary(
                 root=root,
                 path=path,
                 extraction=extraction,
             )
-        return extractions, summaries
+        return source_extractions, summaries
 
     monkeypatch.setattr(taxonomy_pilot_script, "_extract_split_requirement_units", fake_extract)
     monkeypatch.setattr(taxonomy_pilot_script, "_resolve_split_units", _fake_locked_test_resolve)
+    monkeypatch.setattr(
+        taxonomy_pilot_script,
+        "build_llm_taxonomy_evolution_binding",
+        _fake_evolution_binding,
+    )
 
     result = asyncio.run(
         taxonomy_pilot_script._run_locked_test(
             SimpleNamespace(
                 root=root,
                 source_gold=source_gold_path,
+                transformation_commitment=transformation_path,
                 gate=gate_path,
                 actor="locked-test-owner",
                 run_id="locked-test-fake-001",
@@ -2594,6 +3010,37 @@ def test_one_shot_locked_test_completes_with_hidden_source_gold_and_fake_models(
     verified = verify_pilot_locked_test_artifacts(root=root, corpus=corpus)
     assert verified.evaluation.overall_status == "pass"
     assert verified.dataset.dataset_hash == result["dataset_hash"]
+    assert verified.dataset.schema_version == 3
+    assert verified.receipt.schema_version == 3
+    assert verified.receipt.evolution_policy is not None
+    assert set(verified.receipt.evolutions) == {"distribution", "motion"}
+    assert all(
+        result.metrics.semantic_stability_rate == 1
+        and result.metrics.exact_primary_precision == 1
+        and result.metrics.expected_reuse_coverage == 1
+        and result.metrics.new_node_precision == 1
+        and result.metrics.new_node_recall == 1
+        and result.metrics.proposal_operation_type_accuracy == 1
+        and result.metrics.human_intervention_rate == 0.5
+        for result in verified.evaluation.system_results
+    )
+    replay = taxonomy_pilot_script._verify_locked_test(SimpleNamespace(root=root))
+    assert replay["terminal_status"] == "completed"
+    assert replay["evidence_replayed"] is True
+
+    evolution_ref = verified.receipt.evolutions["motion"]
+    evolution_path = root / evolution_ref.path
+    original_evolution = evolution_path.read_text(encoding="utf-8")
+    evolution_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(PilotArtifactError, match="pilot_locked_test_evolution_artifact_invalid:motion"):
+        verify_pilot_locked_test_artifacts(root=root, corpus=corpus)
+    evolution_path.write_text(original_evolution, encoding="utf-8")
+
+    assert verified.receipt.transformation_projection is not None
+    projection_path = root / verified.receipt.transformation_projection.path
+    projection_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(PilotArtifactError, match="pilot_locked_test_transformation_projection_artifact_invalid"):
+        verify_pilot_locked_test_artifacts(root=root, corpus=corpus)
 
 
 def test_failed_one_shot_consumes_locked_test_before_test_extraction(
@@ -2605,10 +3052,11 @@ def test_failed_one_shot_consumes_locked_test_before_test_extraction(
     _append_locked_test_prerequisites(ledger, corpus)
     _append_policy_freeze(ledger, corpus)
     _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
-    source_gold_path = tmp_path / "locked-source-gold.json"
-    gate_path = tmp_path / "locked-gate.json"
-    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
-    gate_path.write_text(TaxonomyEvaluationGate().model_dump_json(), encoding="utf-8")
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+    )
     monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", lambda root, bundle: None)
 
     async def fail_extraction(**kwargs):
@@ -2618,6 +3066,7 @@ def test_failed_one_shot_consumes_locked_test_before_test_extraction(
     args = SimpleNamespace(
         root=root,
         source_gold=source_gold_path,
+        transformation_commitment=transformation_path,
         gate=gate_path,
         actor="locked-test-owner",
         run_id="locked-test-failed-001",
@@ -2644,25 +3093,33 @@ def test_failed_one_shot_consumes_locked_test_before_test_extraction(
         )
 
 
+@pytest.mark.parametrize("drift_input", ["source_gold", "transformation", "gate"])
 def test_locked_test_rejects_committed_input_drift_before_model_extraction(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    drift_input: str,
 ) -> None:
     root, corpus = _freeze(tmp_path)
     ledger = PilotRunLedger(root / "run-ledger.jsonl")
     _append_locked_test_prerequisites(ledger, corpus)
     _append_policy_freeze(ledger, corpus)
     _, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
-    source_gold_path = tmp_path / "locked-source-gold.json"
-    gate_path = tmp_path / "locked-gate.json"
-    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
-    gate_path.write_text(TaxonomyEvaluationGate().model_dump_json(), encoding="utf-8")
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+    )
     monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", lambda root, bundle: None)
     original_copy = taxonomy_pilot_script._copy_file_once
+    drift_path = {
+        "source_gold": source_gold_path,
+        "transformation": transformation_path,
+        "gate": gate_path,
+    }[drift_input]
 
     def copy_with_drift(source: Path, target: Path) -> None:
         original_copy(source, target)
-        if source == source_gold_path:
+        if source == drift_path:
             target.write_text(target.read_text(encoding="utf-8") + "\n", encoding="utf-8")
 
     async def extraction_must_not_run(**kwargs):
@@ -2677,6 +3134,7 @@ def test_locked_test_rejects_committed_input_drift_before_model_extraction(
                 SimpleNamespace(
                     root=root,
                     source_gold=source_gold_path,
+                    transformation_commitment=transformation_path,
                     gate=gate_path,
                     actor="locked-test-owner",
                     run_id="locked-test-input-drift",
@@ -2698,10 +3156,11 @@ def test_locked_test_does_not_open_hidden_source_gold_before_predictions_are_fix
     _append_locked_test_prerequisites(ledger, corpus)
     _append_policy_freeze(ledger, corpus)
     source_extractions, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
-    source_gold_path = tmp_path / "locked-source-gold.json"
-    gate_path = tmp_path / "locked-gate.json"
-    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
-    gate_path.write_text(TaxonomyEvaluationGate().model_dump_json(), encoding="utf-8")
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+    )
     monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", lambda root, bundle: None)
     call_order: list[str] = []
 
@@ -2723,6 +3182,7 @@ def test_locked_test_does_not_open_hidden_source_gold_before_predictions_are_fix
         raise RuntimeError("synthetic resolver crash")
 
     original_validate_json = PilotCoverageGoldSet.model_validate_json
+    original_transformation_validate_json = PilotSourceTransformationCommitment.model_validate_json
 
     def track_source_gold(cls, value, *args, **kwargs):
         decoded = json.loads(value)
@@ -2730,9 +3190,18 @@ def test_locked_test_does_not_open_hidden_source_gold_before_predictions_are_fix
             call_order.append("source_gold")
         return original_validate_json(value, *args, **kwargs)
 
+    def track_source_transformations(cls, value, *args, **kwargs):
+        call_order.append("source_transformations")
+        return original_transformation_validate_json(value, *args, **kwargs)
+
     monkeypatch.setattr(taxonomy_pilot_script, "_extract_split_requirement_units", fake_extract)
     monkeypatch.setattr(taxonomy_pilot_script, "_resolve_split_units", fail_after_prediction_start)
     monkeypatch.setattr(PilotCoverageGoldSet, "model_validate_json", classmethod(track_source_gold))
+    monkeypatch.setattr(
+        PilotSourceTransformationCommitment,
+        "model_validate_json",
+        classmethod(track_source_transformations),
+    )
 
     with pytest.raises(RuntimeError, match="synthetic resolver crash"):
         asyncio.run(
@@ -2740,6 +3209,7 @@ def test_locked_test_does_not_open_hidden_source_gold_before_predictions_are_fix
                 SimpleNamespace(
                     root=root,
                     source_gold=source_gold_path,
+                    transformation_commitment=transformation_path,
                     gate=gate_path,
                     actor="locked-test-owner",
                     run_id="locked-test-hidden-gold-order",
@@ -2759,10 +3229,11 @@ def test_locked_test_reports_extraction_recall_failure_instead_of_hiding_missing
     _append_locked_test_prerequisites(ledger, corpus)
     _append_policy_freeze(ledger, corpus)
     source_extractions, _, source_gold = _locked_test_source_gold_and_dataset(root, corpus)
-    source_gold_path = tmp_path / "locked-source-gold.json"
-    gate_path = tmp_path / "locked-gate.json"
-    source_gold_path.write_text(source_gold.model_dump_json(), encoding="utf-8")
-    gate_path.write_text(TaxonomyEvaluationGate().model_dump_json(), encoding="utf-8")
+    source_gold_path, transformation_path, gate_path = _write_locked_test_inputs(
+        tmp_path=tmp_path,
+        corpus=corpus,
+        source_gold=source_gold,
+    )
     monkeypatch.setattr(taxonomy_pilot_script, "_pin_runtime", lambda root, bundle: None)
 
     async def extraction_with_one_missing_fact(*, root, corpus, split, output_dir, bundle, allow_locked_test=False):
@@ -2816,6 +3287,11 @@ def test_locked_test_reports_extraction_recall_failure_instead_of_hiding_missing
         extraction_with_one_missing_fact,
     )
     monkeypatch.setattr(taxonomy_pilot_script, "_resolve_split_units", _fake_locked_test_resolve)
+    monkeypatch.setattr(
+        taxonomy_pilot_script,
+        "build_llm_taxonomy_evolution_binding",
+        _fake_evolution_binding,
+    )
 
     with pytest.raises(PilotSourceCoverageError, match="source_coverage_gate_failed"):
         asyncio.run(
@@ -2823,6 +3299,7 @@ def test_locked_test_reports_extraction_recall_failure_instead_of_hiding_missing
                 SimpleNamespace(
                     root=root,
                     source_gold=source_gold_path,
+                    transformation_commitment=transformation_path,
                     gate=gate_path,
                     actor="locked-test-owner",
                     run_id="locked-test-coverage-fail",
@@ -2838,6 +3315,8 @@ def test_locked_test_reports_extraction_recall_failure_instead_of_hiding_missing
     assert failure_receipt.resolutions is not None
     assert failure_receipt.concept_refs is not None
     assert failure_receipt.predictions is not None
+    assert failure_receipt.source_transformation_commitment is not None
+    assert failure_receipt.transformation_projection_revision == PILOT_TRANSFORMATION_PROJECTION_REVISION
     assert failure_receipt.source_coverage_metrics is not None
     assert failure_receipt.report is not None
     metrics_ref = failure_receipt.source_coverage_metrics
@@ -3407,6 +3886,189 @@ def test_resolution_projection_preserves_raw_identity_and_unknown_cost() -> None
     assert record.predicted_path == ["business.assets", "product.sync"]
     assert record.score == 0.93
     assert record.cost_usd is None
+
+
+def test_resolution_projection_materializes_novel_evolution_proposal() -> None:
+    base_unit = _unit()
+    manifest = _manifest(base_unit)
+    source_quote = "系统支持一次批量同步多个商品。"
+    novel_unit = RequirementUnit(
+        unit_id=build_requirement_unit_id(
+            document_content_hash=base_unit.document_content_hash,
+            source_ref="prd:商品 §批量同步",
+            statement=source_quote,
+        ),
+        system_id=base_unit.system_id,
+        document_id=base_unit.document_id,
+        document_content_hash=base_unit.document_content_hash,
+        source_ref="prd:商品 §批量同步",
+        source_quote=source_quote,
+        source_quote_hash=build_source_quote_hash(source_quote),
+        structural_key="product.bulk-sync",
+        title="商品批量同步",
+        statement=source_quote,
+        observable_outcome="商品列表一次出现多条同步结果。",
+        scope_status="atomic",
+    )
+    resolution = TaxonomyResolution(
+        schema_version=1,
+        status="unresolved",
+        unresolved_kind="novel",
+        method="evolve",
+        taxonomy_version_id=TAXONOMY_VERSION_ID,
+        reason_code="novel_capability",
+        reason="已有节点无法表达批量同步能力。",
+        input_hash="6" * 64,
+        taxonomy_manifest_hash=manifest_hash(manifest),
+        policy_version="8" * 64,
+        model_revision="verify@1",
+        requirement_unit_ids=[novel_unit.unit_id],
+    )
+    raw = PilotResolutionSet(
+        schema_version=1,
+        run_id="test-resolution-evolve",
+        generated_at=NOW,
+        dataset_hash="9" * 64,
+        policy_hash="8" * 64,
+        frozen_policy_hash="7" * 64,
+        prompt_revisions={"resolver": "resolver@1", "taxonomy_evolution": "evolution@1"},
+        model_revisions={"taxonomy_resolver": "verify@1", "taxonomy_evolution": "verify@1"},
+        taxonomy_version_ids={"motion": TAXONOMY_VERSION_ID},
+        output_manifest_hashes={"motion": manifest_hash(manifest)},
+        records=[
+            PilotResolutionRecord(
+                document_key="motion-test",
+                system_key="motion",
+                split="test",
+                requirement_unit_id=novel_unit.unit_id,
+                latency_ms=123,
+                resolution=resolution,
+            )
+        ],
+    )
+    evolution_policy = TaxonomyEvolutionPolicy(
+        schema_version=1,
+        max_context_chars=20_000,
+        max_operations=10,
+    )
+
+    async def propose(_request):
+        return TaxonomyEvolutionDraftBatch(
+            operations=[
+                TaxonomyEvolutionOperationDraft(
+                    operation="add",
+                    proposed_nodes=[
+                        EvolutionNodeDraft(
+                            stable_key="product.bulk-sync",
+                            node_type="capability",
+                            display_name="商品批量同步",
+                            parent_stable_key="business.assets",
+                            definition="一次同步多个商品。",
+                            scope_note="不包含单个商品人工新建。",
+                            requirement_unit_ids=[novel_unit.unit_id],
+                        )
+                    ],
+                    requirement_unit_ids=[novel_unit.unit_id],
+                    reason="这是现有 taxonomy 未覆盖的新能力。",
+                )
+            ]
+        )
+
+    evolution = asyncio.run(
+        TaxonomyEvolutionService(policy=evolution_policy).evolve(
+            active_manifest=manifest,
+            requirement_units=[novel_unit],
+            model_binding=TaxonomyEvolutionModelBinding(
+                propose_changes=propose,
+                prompt_revision="evolution@1",
+                model_revision="verify@1",
+            ),
+            impact_snapshot={},
+        )
+    )
+    evolution = type(evolution).model_validate_json(evolution.model_dump_json())
+    output_manifests = build_evolution_draft_manifests(
+        active_manifests={"motion": manifest},
+        evolution_results={"motion": evolution},
+        requirement_units={novel_unit.unit_id: novel_unit},
+    )
+    output_ref = ArtifactRef(path="manifests/motion-evolved.json", sha256="e" * 64)
+
+    predictions = project_resolution_predictions(
+        resolutions=raw,
+        concept_refs={},
+        manifests={"motion": manifest},
+        manifest_artifacts={"motion": output_ref},
+        evolution_results={"motion": evolution},
+        output_manifests=output_manifests,
+    )
+
+    assert predictions.records[0].outcome == "proposal"
+    assert predictions.records[0].predicted_operation == "add"
+    assert predictions.records[0].input_hash != resolution.input_hash
+    assert [node.stable_key for node in predictions.proposed_nodes] == ["product.bulk-sync"]
+    assert predictions.output_manifest_hashes == {"motion": manifest_hash(output_manifests["motion"])}
+    assert {node.stable_key for node in output_manifests["motion"].nodes} == {
+        "business.assets",
+        "product.sync",
+        "product.bulk-sync",
+    }
+
+    tampered_evolution = evolution.model_copy(
+        update={
+            "issues": [
+                TaxonomyEvolutionIssue(
+                    code="model_failed",
+                    requirement_unit_ids=[base_unit.unit_id],
+                    details={"error_type": "SyntheticFailure"},
+                )
+            ]
+        }
+    )
+    with pytest.raises(PilotArtifactError, match="pilot_evolution_issue_unit_invalid:motion"):
+        project_resolution_predictions(
+            resolutions=raw,
+            concept_refs={},
+            manifests={"motion": manifest},
+            manifest_artifacts={"motion": output_ref},
+            evolution_results={"motion": tampered_evolution},
+            output_manifests=output_manifests,
+        )
+
+
+def test_evolution_draft_manifest_validates_evidence_without_proposed_nodes() -> None:
+    unit = _unit()
+    manifest = _manifest(unit)
+
+    async def should_not_call(_request):
+        raise AssertionError("精确 structural key 命中不应调用模型")
+
+    evolution = asyncio.run(
+        TaxonomyEvolutionService(
+            policy=TaxonomyEvolutionPolicy(schema_version=1, max_context_chars=20_000, max_operations=10)
+        ).evolve(
+            active_manifest=manifest,
+            requirement_units=[unit],
+            model_binding=TaxonomyEvolutionModelBinding(
+                propose_changes=should_not_call,
+                prompt_revision="evolution@1",
+                model_revision="verify@1",
+            ),
+            impact_snapshot={},
+        )
+    )
+    operation = evolution.operations[0]
+    tampered_operation = operation.model_copy(
+        update={"evidence": [operation.evidence[0].model_copy(update={"text": "伪造证据"})]}
+    )
+    tampered_evolution = evolution.model_copy(update={"operations": [tampered_operation]})
+
+    with pytest.raises(PilotArtifactError, match="pilot_evolution_requirement_evidence_mismatch"):
+        build_evolution_draft_manifests(
+            active_manifests={"motion": manifest},
+            evolution_results={"motion": tampered_evolution},
+            requirement_units={unit.unit_id: unit},
+        )
 
 
 def test_resolution_projection_rejects_cross_system_concept_even_when_key_matches() -> None:

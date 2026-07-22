@@ -23,7 +23,7 @@ from src.testcase_generator.schemas.taxonomy import (
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 
 EVOLUTION_PROMPT_REVISION = "taxonomy-evolution-v1"
-EVOLUTION_ALGORITHM_REVISION = "taxonomy-evolution@1"
+EVOLUTION_ALGORITHM_REVISION = "taxonomy-evolution@2"
 
 _EVOLUTION_SYSTEM_PROMPT = """你是 active 业务 taxonomy 的演进仲裁器。
 输入只包含当前 immutable taxonomy 与尚未确定性复用的新 grounded requirement units。
@@ -100,6 +100,13 @@ class TaxonomyEvolutionOperationDraft(BaseModel):
     requirement_unit_ids: list[RequirementUnitId] = Field(min_length=1)
     reason: str = Field(min_length=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def validate_move_parent_is_explicit(cls, value: object) -> object:
+        if isinstance(value, dict) and value.get("operation") == "move" and "new_parent_stable_key" not in value:
+            raise ValueError("evolution_move_parent_required")
+        return value
+
     @model_validator(mode="after")
     def validate_operation_shape(self) -> TaxonomyEvolutionOperationDraft:
         if len(self.target_stable_keys) != len(set(self.target_stable_keys)):
@@ -112,14 +119,14 @@ class TaxonomyEvolutionOperationDraft(BaseModel):
         if any(not set(node.requirement_unit_ids) <= evidence_ids for node in self.proposed_nodes):
             raise ValueError("evolution_node_evidence_outside_operation")
 
+        parent_change_declared = self.new_parent_stable_key is not None
         change_fields = bool(
             self.proposed_nodes
             or self.new_display_name
             or self.aliases_to_add
             or self.replacement_stable_key
-            or "new_parent_stable_key" in self.model_fields_set
+            or parent_change_declared
         )
-        parent_change_declared = "new_parent_stable_key" in self.model_fields_set
         if self.operation == "add":
             if self.target_stable_keys:
                 raise ValueError("evolution_add_target_forbidden")
@@ -145,8 +152,6 @@ class TaxonomyEvolutionOperationDraft(BaseModel):
                 raise ValueError("evolution_rename_payload_invalid")
         elif self.operation == "move":
             self._require_one_target()
-            if "new_parent_stable_key" not in self.model_fields_set:
-                raise ValueError("evolution_move_parent_required")
             if self.proposed_nodes or self.new_display_name or self.aliases_to_add or self.replacement_stable_key:
                 raise ValueError("evolution_move_payload_invalid")
         elif self.operation == "split":
@@ -335,11 +340,12 @@ class TaxonomyEvolutionService:
         impact_snapshot: dict[str, dict[str, int]],
     ) -> TaxonomyEvolutionResult:
         active_hash = manifest_hash(active_manifest)
-        input_hash = _evolution_input_hash(
+        input_hash = build_taxonomy_evolution_input_hash(
             active_manifest_hash=active_hash,
             requirement_units=requirement_units,
             policy=self.policy,
-            model_binding=model_binding,
+            prompt_revision=model_binding.prompt_revision,
+            model_revision=model_binding.model_revision,
             impact_snapshot=impact_snapshot,
         )
 
@@ -583,7 +589,8 @@ def _materialize_operations(
         normalized_draft = _normalize_draft_names(draft)
         before_nodes = [active_by_key[key] for key in normalized_draft.target_stable_keys]
         impact = _combined_impact(normalized_draft.target_stable_keys, impact_snapshot)
-        operation_payload = normalized_draft.model_dump(mode="json", exclude_unset=True)
+        # JSON 往返后无法保留“原响应是否省略可选字段”，operation 身份不能依赖该进程内状态。
+        operation_payload = normalized_draft.model_dump(mode="json")
         operation_digest = _canonical_hash(
             {
                 "active_manifest_hash": active_hash,
@@ -782,12 +789,13 @@ def _operations_hash(operations: list[TaxonomyEvolutionOperation]) -> str:
     return _canonical_hash(payload)
 
 
-def _evolution_input_hash(
+def build_taxonomy_evolution_input_hash(
     *,
     active_manifest_hash: str,
     requirement_units: list[RequirementUnit],
     policy: TaxonomyEvolutionPolicy,
-    model_binding: TaxonomyEvolutionModelBinding,
+    prompt_revision: str,
+    model_revision: str,
     impact_snapshot: dict[str, dict[str, int]],
 ) -> str:
     payload = {
@@ -797,8 +805,69 @@ def _evolution_input_hash(
             unit.model_dump(mode="json") for unit in sorted(requirement_units, key=lambda item: item.unit_id)
         ],
         "policy_version": policy.canonical_hash,
-        "prompt_revision": model_binding.prompt_revision,
-        "model_revision": model_binding.model_revision,
+        "prompt_revision": prompt_revision,
+        "model_revision": model_revision,
         "impact_snapshot": impact_snapshot,
     }
     return _canonical_hash(payload)
+
+
+def validate_taxonomy_evolution_result_replay(
+    *,
+    active_manifest: TaxonomyManifest,
+    requirement_units: list[RequirementUnit],
+    policy: TaxonomyEvolutionPolicy,
+    result: TaxonomyEvolutionResult,
+    impact_snapshot: dict[str, dict[str, int]],
+) -> None:
+    """重放 evolve 的确定性封装；不重放模型生成本身。"""
+
+    canonical_issues = sorted(
+        result.issues,
+        key=lambda issue: (
+            issue.code,
+            issue.requirement_unit_ids,
+            json.dumps(issue.details, sort_keys=True),
+        ),
+    )
+    if (
+        result.operations != sorted(result.operations, key=lambda operation: operation.operation_id)
+        or result.unresolved_requirement_unit_ids != sorted(set(result.unresolved_requirement_unit_ids))
+        or result.issues != canonical_issues
+    ):
+        raise ValueError("evolution_result_canonical_order_invalid")
+
+    active_hash = manifest_hash(active_manifest)
+    expected_input_hash = build_taxonomy_evolution_input_hash(
+        active_manifest_hash=active_hash,
+        requirement_units=requirement_units,
+        policy=policy,
+        prompt_revision=result.prompt_revision,
+        model_revision=result.model_revision,
+        impact_snapshot=impact_snapshot,
+    )
+    if (
+        result.active_manifest_hash != active_hash
+        or result.policy_version != policy.canonical_hash
+        or result.input_hash != expected_input_hash
+    ):
+        raise ValueError("evolution_result_input_binding_mismatch")
+
+    drafts = [
+        TaxonomyEvolutionOperationDraft.model_validate(
+            operation.model_dump(
+                mode="python",
+                exclude={"operation_id", "evidence", "before_nodes", "impact", "rollback"},
+            )
+        )
+        for operation in result.operations
+    ]
+    replayed = _materialize_operations(
+        active_manifest=active_manifest,
+        active_hash=active_hash,
+        drafts=drafts,
+        units=sorted(requirement_units, key=lambda item: item.unit_id),
+        impact_snapshot=impact_snapshot,
+    )
+    if replayed != result.operations:
+        raise ValueError("evolution_result_operation_replay_mismatch")
