@@ -1,9 +1,12 @@
 """parse_service 图解析开关测试：关时产物与接入前一致"""
 
+import hashlib
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+
+from src.knowledge_base.services.parsers.markdown_parser import canonicalize_markdown
 
 
 def _make_doc(content: str = "# Test\n\nHello", image_refs=None):
@@ -22,15 +25,18 @@ def _make_doc(content: str = "# Test\n\nHello", image_refs=None):
 class TestImageCaptionSwitch:
     @pytest.mark.asyncio
     async def test_switch_off_no_vision_called(self):
-        """image_caption_enabled=False → 不调视觉、content 不变"""
-        doc = _make_doc("# §1\n\n![img](images/a.png)\n\nText")
+        """关图述时，生产正文与 hash 必须等于 canonical snapshot。"""
+        raw_text = "---\ntitle: PRD\n---\n\n  # §1\n\n![img](images/a.png)\n\nText  \n"
+        snapshot = canonicalize_markdown(raw_text)
+        doc = _make_doc(raw_text)
 
         with (
             patch("src.knowledge_base.services.parse_service.VectorizePipeline"),
-            patch("src.knowledge_base.services.parse_service.DocumentRepository") as MockRepo,
+            patch("src.knowledge_base.services.parse_service.DocumentRepository"),
             patch("src.knowledge_base.services.parse_service.settings") as mock_settings,
         ):
             mock_settings.image_caption_enabled = False
+            mock_settings.entity_graph_enabled = False
 
             from src.knowledge_base.services.parse_service import ParseService
 
@@ -45,7 +51,10 @@ class TestImageCaptionSwitch:
 
         call_kwargs = service.repo.update.call_args
         updated_content = call_kwargs.kwargs.get("content") or call_kwargs[1].get("content", "")
-        assert "[图述]" not in updated_content
+        assert updated_content == snapshot.content
+        assert call_kwargs.kwargs["content_hash"] == snapshot.canonical_sha256
+        assert call_kwargs.kwargs["image_refs"] == list(snapshot.image_refs)
+        assert call_kwargs.kwargs["metadata_"] == snapshot.frontmatter
         updated_captions = call_kwargs.kwargs.get("image_captions")
         assert updated_captions is None
 
@@ -61,8 +70,10 @@ class TestImageCaptionSwitch:
             patch("src.knowledge_base.services.parse_service.run_image_caption_pipeline") as mock_pipeline,
         ):
             mock_settings.image_caption_enabled = True
+            mock_settings.entity_graph_enabled = False
             mock_settings.image_caption_concurrency = 2
-            mock_pipeline.return_value = ("enriched content with [图述]", {"a.png": {"caption_text": "test"}})
+            enriched_content = "enriched content with [图述]"
+            mock_pipeline.return_value = (enriched_content, {"a.png": {"caption_text": "test"}})
 
             from src.knowledge_base.services.parse_service import ParseService
 
@@ -79,3 +90,4 @@ class TestImageCaptionSwitch:
         call_kwargs = service.repo.update.call_args
         updated_content = call_kwargs.kwargs.get("content") or call_kwargs[1].get("content", "")
         assert "enriched content" in updated_content
+        assert call_kwargs.kwargs["content_hash"] == hashlib.sha256(enriched_content.encode("utf-8")).hexdigest()

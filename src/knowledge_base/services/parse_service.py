@@ -7,14 +7,15 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.knowledge_base.repositories.document_repo import DocumentRepository
-from src.knowledge_base.services.parsers.markdown_parser import MarkdownParser
 from src.knowledge_base.services.embedding.vectorize_pipeline import VectorizePipeline
+from src.knowledge_base.services.parsers.markdown_parser import canonicalize_markdown
 from src.platform_api.core.settings import settings
+from src.platform_api.models.knowledge import Document
 
 logger = logging.getLogger(__name__)
 
 
-async def run_entity_graph_pipeline(doc, content: str, session) -> None:
+async def run_entity_graph_pipeline(doc: Document, content: str, session: AsyncSession) -> None:
     """实体图谱抽取流水线：章节切分 → LLM 抽实体/关系 → 落库。
 
     仅在 entity_graph_enabled=True 时被调用。
@@ -45,18 +46,21 @@ async def run_entity_graph_pipeline(doc, content: str, session) -> None:
     logger.info("实体图谱落库: doc=%s entities=%d relations=%d", doc.id, len(graph.entities), len(graph.relations))
 
 
-async def run_image_caption_pipeline(doc, parsed_content: str) -> tuple[str, dict]:
+async def run_image_caption_pipeline(
+    doc: Document,
+    parsed_content: str,
+) -> tuple[str, dict[str, dict[str, object]]]:
     """图解析流水线：收集图 → 视觉描述 → 注入 content。
 
     返回 (enriched_content, image_captions_dict)。
     仅在 image_caption_enabled=True 时被调用。
     """
+    from minio import Minio
+
     from src.knowledge_base.services.image_caption.caption_service import caption_images
     from src.knowledge_base.services.image_caption.content_injector import inject_captions
     from src.knowledge_base.services.image_caption.image_collector import collect_images
     from src.testcase_generator.services.llm_client import get_llm_client
-
-    from minio import Minio
 
     minio_client = Minio(
         endpoint=settings.minio_endpoint,
@@ -71,14 +75,19 @@ async def run_image_caption_pipeline(doc, parsed_content: str) -> tuple[str, dic
 
     image_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
     minio_objects = [
-        obj for obj in minio_client.list_objects(settings.minio_bucket, prefix=prefix, recursive=True)
+        obj
+        for obj in minio_client.list_objects(settings.minio_bucket, prefix=prefix, recursive=True)
         if any(obj.object_name.lower().endswith(ext) for ext in image_exts)
     ]
 
+    raw_image_refs: object = doc.image_refs
+    stored_image_refs = (
+        [item for item in raw_image_refs if isinstance(item, str)] if isinstance(raw_image_refs, list) else []
+    )
     image_refs_list = collect_images(
         system_id=str(doc.system_id),
         folder_path=doc.folder_path,
-        image_refs=doc.image_refs or [],
+        image_refs=stored_image_refs,
         minio_objects=minio_objects,
     )
 
@@ -115,7 +124,6 @@ class ParseService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = DocumentRepository(session)
-        self.parser = MarkdownParser()
         self.vectorize_pipeline = VectorizePipeline(session)
 
     async def parse_document(self, document_id: UUID) -> bool:
@@ -131,23 +139,22 @@ class ParseService:
             logger.warning("Document %s has empty content, skipping", document_id)
             return False
 
-        # 解析 markdown
-        parsed = self.parser.parse(raw_text)
+        # 纯 canonical snapshot 不包含图片描述等外部增强。
+        snapshot = canonicalize_markdown(raw_text)
 
         # ── 图解析（image_caption_enabled 开关控制）──────────────────────────
-        final_content = parsed.content
+        final_content = snapshot.content
+        content_hash = snapshot.canonical_sha256
         image_captions = None
         if settings.image_caption_enabled:
             logger.info("图解析开关已开，启动图描述流水线: doc=%s", document_id)
-            final_content, image_captions = await run_image_caption_pipeline(doc, parsed.content)
+            final_content, image_captions = await run_image_caption_pipeline(doc, snapshot.content)
+            content_hash = hashlib.sha256(final_content.encode("utf-8")).hexdigest()
 
         # ── 实体图谱抽取（entity_graph_enabled 开关控制）──────────────────────
         if settings.entity_graph_enabled:
             logger.info("实体图谱开关已开，启动抽取: doc=%s", document_id)
             await run_entity_graph_pipeline(doc, final_content, self.session)
-
-        # 计算 content_hash（基于最终 content，含图述）
-        content_hash = hashlib.sha256(final_content.encode("utf-8")).hexdigest()
 
         # 去重检查
         existing = await self.repo.find_by_content_hash(content_hash)
@@ -159,9 +166,9 @@ class ParseService:
         await self.repo.update(
             document_id,
             content=final_content,
-            image_refs=parsed.image_refs,
+            image_refs=list(snapshot.image_refs),
             content_hash=content_hash,
-            metadata_=parsed.frontmatter if parsed.frontmatter else doc.metadata_,
+            metadata_=snapshot.frontmatter if snapshot.frontmatter else doc.metadata_,
             image_captions=image_captions,
         )
 

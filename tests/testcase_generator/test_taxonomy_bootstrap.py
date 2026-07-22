@@ -10,6 +10,8 @@ from src.testcase_generator.schemas.requirement_unit import (
     build_source_quote_hash,
 )
 from src.testcase_generator.services.taxonomy_bootstrap import (
+    BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION,
+    BOOTSTRAP_PROPOSAL_PROMPT_REVISION,
     BootstrapCapabilityDraft,
     BootstrapCapabilityDraftBatch,
     BootstrapConsolidationRequest,
@@ -89,8 +91,8 @@ def _binding(local, consolidate) -> TaxonomyBootstrapModelBinding:
     return TaxonomyBootstrapModelBinding(
         propose_capabilities=local,
         consolidate_structure=consolidate,
-        proposal_prompt_revision="taxonomy-bootstrap-proposal-v1",
-        consolidation_prompt_revision="taxonomy-bootstrap-consolidation-v1",
+        proposal_prompt_revision=BOOTSTRAP_PROPOSAL_PROMPT_REVISION,
+        consolidation_prompt_revision=BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION,
         proposal_model_revision="primary@1",
         consolidation_model_revision="verify@1",
     )
@@ -208,7 +210,13 @@ async def test_manifest_examples_preserve_grounded_quote_not_model_summary() -> 
 
     async def consolidate(request) -> BootstrapStructureDraftBatch:
         proposal = request.proposals[0]
-        assert proposal.evidence[0].text == unit.source_quote
+        assert proposal.evidence_count == 1
+        assert len(proposal.evidence_excerpts) == 1
+        excerpt = proposal.evidence_excerpts[0]
+        assert excerpt.requirement_unit_id == unit.unit_id
+        assert excerpt.text == unit.source_quote
+        assert excerpt.source_quote_hash == unit.source_quote_hash
+        assert excerpt.truncated is False
         return BootstrapStructureDraftBatch(
             structure=BootstrapStructureDraft(
                 nodes=[
@@ -235,6 +243,71 @@ async def test_manifest_examples_preserve_grounded_quote_not_model_summary() -> 
 
     assert result.draft_manifest is not None
     assert (result.draft_manifest.nodes[0].in_scope_examples or [])[0].text == unit.source_quote
+
+
+async def test_consolidation_evidence_is_deterministically_bounded() -> None:
+    units = [
+        _unit(
+            f"规则 {index}",
+            structural_key=f"product.rule.{index}",
+            title=f"规则 {index}",
+            source_quote=(f"原始规则 {index}：" + "证据" * 300),
+        )
+        for index in range(5)
+    ]
+
+    async def local(_: BootstrapUnitBatch) -> BootstrapCapabilityDraftBatch:
+        return BootstrapCapabilityDraftBatch(
+            proposals=[
+                BootstrapCapabilityDraft(
+                    stable_key="product.rules",
+                    display_name="商品规则",
+                    definition="负责商品规则。",
+                    scope_note="仅覆盖输入规则。",
+                    requirement_unit_ids=[unit.unit_id for unit in units],
+                )
+            ]
+        )
+
+    async def consolidate(request) -> BootstrapStructureDraftBatch:
+        proposal = request.proposals[0]
+        assert proposal.evidence_count == 5
+        ordered = sorted(units, key=lambda item: item.unit_id)
+        assert [item.requirement_unit_id for item in proposal.evidence_excerpts] == [
+            ordered[0].unit_id,
+            ordered[2].unit_id,
+            ordered[4].unit_id,
+        ]
+        for excerpt in proposal.evidence_excerpts:
+            source = next(unit for unit in units if unit.unit_id == excerpt.requirement_unit_id)
+            assert excerpt.text == source.source_quote[:320]
+            assert excerpt.source_quote_hash == source.source_quote_hash
+            assert excerpt.truncated is True
+        return BootstrapStructureDraftBatch(
+            structure=BootstrapStructureDraft(
+                nodes=[
+                    BootstrapNodeDraft(
+                        node_key="product-rules",
+                        stable_key="product.rules",
+                        node_type="module",
+                        display_name="商品规则",
+                        definition="负责商品规则。",
+                        scope_note="仅覆盖输入规则。",
+                        source_proposal_ids=[proposal.proposal_id],
+                    )
+                ],
+                assignments=[
+                    BootstrapProposalAssignmentDraft(
+                        proposal_id=proposal.proposal_id,
+                        target_node_key="product-rules",
+                    )
+                ],
+            )
+        )
+
+    result = await _bootstrap(units, local=local, consolidate=consolidate)
+
+    assert result.draft_manifest is not None
 
 
 async def test_synonymous_requirements_can_consolidate_to_one_capability() -> None:
@@ -592,7 +665,7 @@ async def test_llm_bootstrap_binding_uses_primary_then_verify_with_fixed_control
     await binding.consolidate_structure(BootstrapConsolidationRequest.model_construct(proposals=[]))
 
     assert binding.proposal_prompt_revision == "taxonomy-bootstrap-proposal-v1"
-    assert binding.consolidation_prompt_revision == "taxonomy-bootstrap-consolidation-v1"
+    assert binding.consolidation_prompt_revision == BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION
     assert [call[1]["model_role"] for call in calls] == ["primary", "verify"]
     assert all(call[1]["temperature"] == 0 for call in calls)
 
@@ -606,7 +679,7 @@ def test_bootstrap_binding_rejects_blank_or_ambiguous_revisions() -> None:
             propose_capabilities=noop,
             consolidate_structure=noop,
             proposal_prompt_revision=" taxonomy-bootstrap-proposal-v1 ",
-            consolidation_prompt_revision="taxonomy-bootstrap-consolidation-v1",
+            consolidation_prompt_revision=BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION,
             proposal_model_revision="primary@1",
             consolidation_model_revision="verify@1",
         )

@@ -13,7 +13,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from src.testcase_generator.schemas.requirement_unit import RequirementUnit, RequirementUnitId
+from src.testcase_generator.schemas.requirement_unit import (
+    RequirementUnit,
+    RequirementUnitId,
+    build_source_quote_hash,
+)
 from src.testcase_generator.schemas.taxonomy import (
     Sha256,
     StableKey,
@@ -25,8 +29,10 @@ from src.testcase_generator.schemas.taxonomy_resolution import bootstrap_proposa
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 
 BOOTSTRAP_PROPOSAL_PROMPT_REVISION = "taxonomy-bootstrap-proposal-v1"
-BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION = "taxonomy-bootstrap-consolidation-v1"
+BOOTSTRAP_CONSOLIDATION_PROMPT_REVISION = "taxonomy-bootstrap-consolidation-v2"
 BOOTSTRAP_ALGORITHM_REVISION = "taxonomy-bootstrap@1"
+_CONSOLIDATION_EVIDENCE_SAMPLE_SIZE = 3
+_CONSOLIDATION_EVIDENCE_MAX_CHARS = 320
 
 _PROPOSAL_SYSTEM_PROMPT = """你是业务能力归纳器，只处理输入中的 grounded atomic requirement units。
 规则：
@@ -43,7 +49,8 @@ _CONSOLIDATION_SYSTEM_PROMPT = """你是业务 taxonomy 草案仲裁器，只处
 3. 每个节点必须引用至少一个 source_proposal_id，父节点也不能是无来源的装饰目录。
 4. 每个 proposal 必须且只能 assignment 到一个最具体目标节点。
 5. display name 不带章节号；stable key 一旦导入将成为稳定身份，不使用版本号或文档名。
-6. 只输出 draft，不声称已激活，不输出输入之外的业务事实。"""
+6. evidence_excerpts 是确定性抽样的原文前缀，只用于核验 proposal 是否有来源；它不是完整证据集。
+7. 只输出 draft，不声称已激活，不输出输入之外的业务事实。"""
 
 StructuredGenerateFn = Callable[..., Awaitable[object]]
 CapabilityProposalFn = Callable[["BootstrapUnitBatch"], Awaitable[object]]
@@ -146,10 +153,88 @@ class BootstrapCapabilityProposal(BaseModel):
         return self
 
 
+class BootstrapEvidenceExcerpt(BaseModel):
+    """供全局仲裁核验的有限原文；完整证据仍保留在 grounded proposal。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    requirement_unit_id: RequirementUnitId
+    source_quote_hash: Sha256
+    text: str = Field(min_length=1, max_length=_CONSOLIDATION_EVIDENCE_MAX_CHARS)
+    truncated: bool
+
+    @model_validator(mode="after")
+    def validate_complete_quote_hash(self) -> BootstrapEvidenceExcerpt:
+        if not self.truncated and build_source_quote_hash(self.text) != self.source_quote_hash:
+            raise ValueError("bootstrap_evidence_excerpt_hash_mismatch")
+        return self
+
+
+class BootstrapConsolidationProposal(BaseModel):
+    """全局仲裁携带紧凑语义及最多三条可核验原文，避免无证据归并和超大请求。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    proposal_id: str = Field(pattern=r"^bp_[0-9a-f]{64}$")
+    stable_key: StableKey
+    display_name: str = Field(min_length=1, max_length=255)
+    aliases: list[str] = Field(default_factory=list)
+    definition: str = Field(min_length=1)
+    scope_note: str = Field(min_length=1)
+    requirement_unit_ids: list[RequirementUnitId] = Field(min_length=1)
+    evidence_count: int = Field(ge=1)
+    evidence_excerpts: list[BootstrapEvidenceExcerpt] = Field(
+        min_length=1,
+        max_length=_CONSOLIDATION_EVIDENCE_SAMPLE_SIZE,
+    )
+
+    @model_validator(mode="after")
+    def validate_evidence_excerpts(self) -> BootstrapConsolidationProposal:
+        excerpt_ids = [item.requirement_unit_id for item in self.evidence_excerpts]
+        if len(excerpt_ids) != len(set(excerpt_ids)):
+            raise ValueError("duplicate_bootstrap_evidence_excerpt")
+        if not set(excerpt_ids) <= set(self.requirement_unit_ids):
+            raise ValueError("bootstrap_evidence_excerpt_unit_unknown")
+        if self.evidence_count != len(self.requirement_unit_ids):
+            raise ValueError("bootstrap_evidence_count_mismatch")
+        return self
+
+    @classmethod
+    def from_grounded(cls, proposal: BootstrapCapabilityProposal) -> BootstrapConsolidationProposal:
+        return cls(
+            proposal_id=proposal.proposal_id,
+            stable_key=proposal.stable_key,
+            display_name=proposal.display_name,
+            aliases=proposal.aliases,
+            definition=proposal.definition,
+            scope_note=proposal.scope_note,
+            requirement_unit_ids=proposal.requirement_unit_ids,
+            evidence_count=len(proposal.evidence),
+            evidence_excerpts=_bounded_evidence_excerpts(proposal),
+        )
+
+
+def _bounded_evidence_excerpts(proposal: BootstrapCapabilityProposal) -> list[BootstrapEvidenceExcerpt]:
+    ordered = sorted(proposal.evidence, key=lambda item: item.requirement_unit_id)
+    if len(ordered) <= _CONSOLIDATION_EVIDENCE_SAMPLE_SIZE:
+        selected = ordered
+    else:
+        selected = [ordered[0], ordered[(len(ordered) - 1) // 2], ordered[-1]]
+    return [
+        BootstrapEvidenceExcerpt(
+            requirement_unit_id=example.requirement_unit_id,
+            source_quote_hash=build_source_quote_hash(example.text),
+            text=example.text[:_CONSOLIDATION_EVIDENCE_MAX_CHARS],
+            truncated=len(example.text) > _CONSOLIDATION_EVIDENCE_MAX_CHARS,
+        )
+        for example in selected
+    ]
+
+
 class BootstrapConsolidationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    proposals: list[BootstrapCapabilityProposal] = Field(min_length=1)
+    proposals: list[BootstrapConsolidationProposal] = Field(min_length=1)
 
 
 class BootstrapNodeDraft(BaseModel):
@@ -489,7 +574,9 @@ class TaxonomyBootstrapService:
         if not proposals:
             return result(unresolved=unresolved, issues=issues)
 
-        consolidation_request = BootstrapConsolidationRequest(proposals=proposals)
+        consolidation_request = BootstrapConsolidationRequest(
+            proposals=[BootstrapConsolidationProposal.from_grounded(proposal) for proposal in proposals]
+        )
         if len(_canonical_json(consolidation_request)) > self.policy.max_consolidation_chars:
             issues.append(TaxonomyBootstrapIssue(code="consolidation_context_budget_exceeded"))
             return result(proposals=proposals, unresolved=unit_ids, issues=issues)
