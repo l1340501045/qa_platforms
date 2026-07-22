@@ -8,6 +8,8 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 import pytest
 from pydantic import ValidationError
 
+import src.testcase_generator.services.taxonomy_evaluation as taxonomy_evaluation_service
+from scripts.taxonomy_generalization_eval import _write_frozen_policy
 from scripts.taxonomy_generalization_eval import main as evaluation_cli_main
 from src.testcase_generator.schemas.requirement_unit import (
     RequirementUnit,
@@ -26,6 +28,7 @@ from src.testcase_generator.schemas.taxonomy_evaluation import (
     TaxonomyGoldNode,
     TaxonomyGoldRecord,
     TaxonomyGoldSet,
+    TaxonomyKnownNode,
     TaxonomyPredictionRecord,
     TaxonomyPredictionSet,
     TaxonomyProposedNode,
@@ -33,7 +36,11 @@ from src.testcase_generator.schemas.taxonomy_evaluation import (
     TaxonomyTransformationSet,
 )
 from src.testcase_generator.schemas.taxonomy_resolution import TaxonomyResolutionPolicy
-from src.testcase_generator.services.requirement_unit_service import RequirementUnitExtractionResult
+from src.testcase_generator.services.requirement_unit_service import (
+    RequirementChunkCoverage,
+    RequirementUnitExtractionResult,
+    build_requirement_coverage_id,
+)
 from src.testcase_generator.services.taxonomy_evaluation import (
     RequirementUnitIndex,
     build_calibration_package,
@@ -41,6 +48,7 @@ from src.testcase_generator.services.taxonomy_evaluation import (
     evaluate_taxonomy_generalization,
     load_requirement_unit_index,
     render_taxonomy_evaluation_report,
+    resolve_evaluation_artifact_path,
     validate_calibration_review,
     validate_evaluation_artifact_hashes,
     write_taxonomy_evaluation_artifacts,
@@ -111,6 +119,154 @@ def _dataset(*, duplicate_test_hash: bool = False) -> TaxonomyDatasetManifest:
         prompt_revisions={"resolver": "resolver@1"},
         model_revisions={"taxonomy_resolver": "verify@1"},
     )
+
+
+def test_dataset_v2_allows_calibration_stage_without_locked_test_artifacts() -> None:
+    dataset = TaxonomyDatasetManifest(
+        schema_version=2,
+        corpus_id="cross-prd-pilot-v2",
+        pilot_corpus=True,
+        split_strategy="document_level",
+        test_locked=True,
+        evaluation_split="dev",
+        source_commitment_hash="a" * 64,
+        upstream_artifact_hashes={"bootstrap_event": "b" * 64},
+        created_at=NOW,
+        documents=[
+            _document("drama-v1", system_key="drama", system_id=SYSTEM_A, split="dev", hash_char="1"),
+            _document("dist-v1", system_key="distribution", system_id=SYSTEM_B, split="dev", hash_char="3"),
+        ],
+        gold_artifact=_artifact("gold.json", "5"),
+        prediction_artifact=_artifact("predictions.json", "6"),
+        transformation_artifact=_artifact("transformations.json", "7"),
+        prompt_revisions={"resolver": "resolver@1"},
+        model_revisions={"taxonomy_resolver": "verify@1"},
+    )
+
+    assert dataset.evaluation_split == "dev"
+    assert {item.split for item in dataset.documents} == {"dev"}
+
+
+def test_evaluation_accepts_v2_locked_test_bound_to_distinct_calibration_dataset() -> None:
+    calibration_dataset = TaxonomyDatasetManifest(
+        schema_version=2,
+        corpus_id="cross-prd-pilot-v1",
+        pilot_corpus=True,
+        split_strategy="document_level",
+        test_locked=True,
+        evaluation_split="dev",
+        source_commitment_hash="a" * 64,
+        upstream_artifact_hashes={"bootstrap_event": "b" * 64},
+        created_at=NOW,
+        documents=[
+            _document("drama-v1", system_key="drama", system_id=SYSTEM_A, split="dev", hash_char="1"),
+            _document("dist-v1", system_key="distribution", system_id=SYSTEM_B, split="dev", hash_char="3"),
+        ],
+        gold_artifact=_artifact("calibration-gold.json", "5"),
+        prediction_artifact=_artifact("calibration-predictions.json", "6"),
+        transformation_artifact=_artifact("calibration-transformations.json", "7"),
+        prompt_revisions={"resolver": "resolver@1"},
+        model_revisions={"taxonomy_resolver": "verify@1"},
+    )
+    calibration_gold = _gold_set(
+        calibration_dataset,
+        [
+            _gold("cal-drama", document_key="drama-v1", system_key="drama", split="dev"),
+            _gold("cal-dist", document_key="dist-v1", system_key="distribution", split="dev"),
+        ],
+    )
+    frozen = _frozen_policy(calibration_dataset, calibration_gold)
+    test_dataset = TaxonomyDatasetManifest(
+        schema_version=2,
+        corpus_id="cross-prd-pilot-v1",
+        pilot_corpus=True,
+        split_strategy="document_level",
+        test_locked=True,
+        evaluation_split="test",
+        source_commitment_hash="a" * 64,
+        upstream_artifact_hashes={
+            "calibration_dataset": calibration_dataset.dataset_hash,
+            "frozen_policy": frozen.canonical_hash,
+        },
+        created_at=NOW,
+        documents=[
+            _document("drama-v2", system_key="drama", system_id=SYSTEM_A, split="test", hash_char="2"),
+            _document("dist-v2", system_key="distribution", system_id=SYSTEM_B, split="test", hash_char="4"),
+        ],
+        gold_artifact=_artifact("test-gold.json", "8"),
+        prediction_artifact=_artifact("test-predictions.json", "9"),
+        transformation_artifact=_artifact("test-transformations.json", "0"),
+        prompt_revisions={"resolver": "resolver@1"},
+        model_revisions={"taxonomy_resolver": "verify@1"},
+    )
+    test_gold = _gold_set(
+        test_dataset,
+        [
+            _gold("test-drama", document_key="drama-v2", system_key="drama", split="test"),
+            _gold("test-dist", document_key="dist-v2", system_key="distribution", split="test"),
+        ],
+    )
+    output_manifests = {
+        "drama": _output_manifest(),
+        "distribution": _output_manifest(system_id=SYSTEM_B),
+    }
+    predictions = _predictions(
+        test_dataset,
+        [
+            _prediction("test-drama", document_key="drama-v2", system_key="drama", split="test"),
+            _prediction("test-dist", document_key="dist-v2", system_key="distribution", split="test"),
+        ],
+        policy_hash=frozen.policy_hash,
+        frozen_policy_hash=frozen.canonical_hash,
+        schema_version=2,
+        generated_at=NOW + timedelta(minutes=2),
+        known_nodes=[
+            *_known_node_views("drama", output_manifests["drama"]),
+            *_known_node_views("distribution", output_manifests["distribution"]),
+        ],
+        output_manifest_hashes={
+            system_key: manifest_hash(manifest) for system_key, manifest in output_manifests.items()
+        },
+        output_manifest_artifacts={
+            "drama": _artifact("manifests/drama.json", "a"),
+            "distribution": _artifact("manifests/distribution.json", "b"),
+        },
+    )
+
+    result = evaluate_taxonomy_generalization(
+        dataset=test_dataset,
+        gold=test_gold,
+        predictions=predictions,
+        output_manifests=output_manifests,
+        requirement_units=_requirement_units(test_dataset, test_gold),
+        frozen_policy=frozen,
+        gate=_gate(),
+        evaluated_at=NOW + timedelta(minutes=3),
+    )
+
+    assert result.overall_status == "pass"
+
+    tampered_dataset = test_dataset.model_copy(
+        update={
+            "upstream_artifact_hashes": {
+                **(test_dataset.upstream_artifact_hashes or {}),
+                "frozen_policy": "f" * 64,
+            }
+        }
+    )
+    tampered_gold = test_gold.model_copy(update={"dataset_hash": tampered_dataset.dataset_hash})
+    tampered_predictions = predictions.model_copy(update={"dataset_hash": tampered_dataset.dataset_hash})
+    with pytest.raises(ValueError, match="test_dataset_frozen_policy_binding_mismatch"):
+        evaluate_taxonomy_generalization(
+            dataset=tampered_dataset,
+            gold=tampered_gold,
+            predictions=tampered_predictions,
+            output_manifests=output_manifests,
+            requirement_units=_requirement_units(tampered_dataset, tampered_gold),
+            frozen_policy=frozen,
+            gate=_gate(),
+            evaluated_at=NOW + timedelta(minutes=3),
+        )
 
 
 def _policy(**overrides: object) -> TaxonomyResolutionPolicy:
@@ -193,6 +349,7 @@ def _prediction(
     outcome: str = "candidate",
     scope_conflict: bool = False,
     requirement_unit_id: str | None = None,
+    cost_usd: float | None = 0.01,
 ) -> TaxonomyPredictionRecord:
     source_ref = f"prd:{document_key} §{record_id}"
     statement = f"{document_key} 的固定需求 {record_id}"
@@ -217,7 +374,7 @@ def _prediction(
         "margin": margin,
         "scope_conflict": scope_conflict,
         "latency_ms": 100,
-        "cost_usd": 0.01,
+        "cost_usd": cost_usd,
         "write_disposition": "none",
     }
     if outcome in {"unresolved", "error"}:
@@ -331,29 +488,38 @@ def _predictions(
     policy_hash: str,
     frozen_policy_hash: str | None = None,
     proposed_nodes: list[TaxonomyProposedNode] | None = None,
+    known_nodes: list[TaxonomyKnownNode] | None = None,
     output_manifest_hashes: dict[str, str] | None = None,
+    output_manifest_artifacts: dict[str, ArtifactRef] | None = None,
+    schema_version: int = 1,
     generated_at: datetime | None = None,
 ) -> TaxonomyPredictionSet:
     resolved_nodes = proposed_nodes or []
+    resolved_known_nodes = known_nodes or []
     system_keys = {
         *(item.system_key for item in records),
         *(item.system_key for item in resolved_nodes),
+        *(item.system_key for item in resolved_known_nodes),
     }
-    return TaxonomyPredictionSet(
-        schema_version=1,
-        run_id="pilot-run-001",
-        generated_at=generated_at or NOW + timedelta(minutes=1),
-        dataset_hash=dataset.dataset_hash,
-        policy_hash=policy_hash,
-        frozen_policy_hash=frozen_policy_hash,
-        prompt_revisions={"resolver": "resolver@1"},
-        model_revisions={"taxonomy_resolver": "verify@1"},
-        records=records,
-        proposed_nodes=resolved_nodes,
-        known_nodes=[],
-        output_manifest_hashes=output_manifest_hashes or {system_key: _hash("a") for system_key in sorted(system_keys)},
-        tree_diff=[],
-    )
+    payload: dict[str, object] = {
+        "schema_version": schema_version,
+        "run_id": "pilot-run-001",
+        "generated_at": generated_at or NOW + timedelta(minutes=1),
+        "dataset_hash": dataset.dataset_hash,
+        "policy_hash": policy_hash,
+        "frozen_policy_hash": frozen_policy_hash,
+        "prompt_revisions": {"resolver": "resolver@1"},
+        "model_revisions": {"taxonomy_resolver": "verify@1"},
+        "records": records,
+        "proposed_nodes": resolved_nodes,
+        "known_nodes": resolved_known_nodes,
+        "output_manifest_hashes": output_manifest_hashes
+        or {system_key: _hash("a") for system_key in sorted(system_keys)},
+        "tree_diff": [],
+    }
+    if schema_version == 2 or output_manifest_artifacts is not None:
+        payload["output_manifest_artifacts"] = output_manifest_artifacts or {}
+    return TaxonomyPredictionSet.model_validate(payload)
 
 
 def _gate(**overrides: object) -> TaxonomyEvaluationGate:
@@ -367,9 +533,136 @@ def _gate(**overrides: object) -> TaxonomyEvaluationGate:
     return TaxonomyEvaluationGate.model_validate(values)
 
 
+def _output_manifest(
+    *,
+    system_id: UUID = SYSTEM_A,
+    module_key: str = "asset",
+    capability_key: str = "asset.filter",
+    additional_capability_keys: tuple[str, ...] = (),
+    include_capability_child: bool = False,
+) -> TaxonomyManifest:
+    nodes: list[dict[str, object]] = [
+        {
+            "stable_key": module_key,
+            "node_type": "module",
+            "display_name": "素材中心",
+        },
+        {
+            "stable_key": capability_key,
+            "node_type": "capability",
+            "display_name": "筛选与排序",
+            "parent_stable_key": module_key,
+        },
+    ]
+    nodes.extend(
+        {
+            "stable_key": stable_key,
+            "node_type": "capability",
+            "display_name": stable_key,
+            "parent_stable_key": module_key,
+        }
+        for stable_key in additional_capability_keys
+    )
+    if include_capability_child:
+        nodes.append(
+            {
+                "stable_key": f"{capability_key}.child",
+                "node_type": "module",
+                "display_name": "错误子模块",
+                "parent_stable_key": capability_key,
+            }
+        )
+    return TaxonomyManifest.model_validate(
+        {
+            "schema_version": 1,
+            "system_id": str(system_id),
+            "version": 1,
+            "change_note": "evaluation output",
+            "created_by": "taxonomy-evaluator",
+            "nodes": nodes,
+            "mappings": [],
+        }
+    )
+
+
+def _known_node_views(system_key: str, manifest: TaxonomyManifest) -> list[TaxonomyKnownNode]:
+    return [
+        TaxonomyKnownNode(
+            system_key=system_key,
+            stable_key=node.stable_key,
+            node_type=node.node_type,
+            parent_stable_key=node.parent_stable_key,
+        )
+        for node in manifest.nodes
+    ]
+
+
+def _write_manifest_artifact(tmp_path: Path, manifest: TaxonomyManifest) -> ArtifactRef:
+    content = manifest.model_dump_json(indent=2)
+    path = tmp_path / "output-manifest.json"
+    path.write_text(content, encoding="utf-8")
+    return ArtifactRef(path=path.name, sha256=hashlib.sha256(content.encode()).hexdigest())
+
+
+def _extraction_result(
+    *,
+    document: TaxonomyDatasetDocument,
+    input_hash: str,
+    source_content: str,
+    units: list[RequirementUnit],
+) -> RequirementUnitExtractionResult:
+    source_ref = units[0].source_ref if units else f"prd:{document.document_key} §fixture"
+    content_hash = hashlib.sha256(source_content.encode()).hexdigest()
+    return RequirementUnitExtractionResult(
+        document_id=document.document_id,
+        document_content_hash=document.source.sha256,
+        input_hash=input_hash,
+        prompt_revision="requirement-unit@1",
+        model_revision="primary@1",
+        chunk_count=1,
+        units=units,
+        coverage=[
+            RequirementChunkCoverage(
+                coverage_id=build_requirement_coverage_id(
+                    document_content_hash=document.source.sha256,
+                    source_ref=source_ref,
+                    chunk_index=1,
+                    content_hash=content_hash,
+                ),
+                source_ref=source_ref,
+                heading="fixture",
+                section_kind="spec",
+                chunk_index=1,
+                chunk_count=1,
+                content_hash=content_hash,
+                disposition="requirements_extracted" if units else "no_requirement",
+                requirement_unit_ids=[item.unit_id for item in units],
+                reason=None if units else "fixture_has_no_requirement",
+            )
+        ],
+        issues=[],
+    )
+
+
 def test_dataset_rejects_same_document_content_across_dev_and_test() -> None:
     with pytest.raises(ValidationError, match="document_content_hash_leakage"):
         _dataset(duplicate_test_hash=True)
+
+
+def test_prediction_contract_v2_requires_manifest_artifacts() -> None:
+    dataset = _dataset()
+    legacy = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=_policy().canonical_hash,
+    )
+    payload = legacy.model_dump(mode="json")
+    payload["schema_version"] = 2
+
+    with pytest.raises(ValidationError, match="prediction_output_manifest_artifacts_required"):
+        TaxonomyPredictionSet.model_validate(payload)
+
+    assert "output_manifest_artifacts" not in legacy.model_dump(mode="json")
 
 
 def test_dataset_requires_dev_and_locked_test_for_each_pilot_system() -> None:
@@ -586,6 +879,84 @@ def test_calibration_maximizes_dev_coverage_subject_to_precision_gate() -> None:
     assert {item.system_key for item in frozen.calibration_system_metrics} == {"drama", "distribution"}
 
 
+def test_calibration_rejects_selective_prediction_coverage() -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [
+            _gold("gold1", document_key="drama-v1", system_key="drama", split="dev"),
+            _gold(
+                "gold2",
+                document_key="dist-v1",
+                system_key="distribution",
+                split="dev",
+                primary="settlement.list",
+            ),
+        ],
+    )
+    base_policy = _policy(minimum_score=0, minimum_margin=0)
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v1", system_key="drama", split="dev")],
+        policy_hash=base_policy.canonical_hash,
+    )
+
+    with pytest.raises(ValueError, match="calibration_prediction_coverage_missing"):
+        calibrate_resolution_policy(
+            dataset=dataset,
+            gold=gold,
+            predictions=predictions,
+            requirement_units=_requirement_units(dataset, gold),
+            base_policy=base_policy,
+            calibrated_at=NOW + timedelta(minutes=2),
+            minimum_precision=0.95,
+        )
+
+
+def test_post_prediction_calibration_gold_requires_explicit_reviewed_workflow_opt_in() -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [
+            _gold("gold1", document_key="drama-v1", system_key="drama", split="dev"),
+            _gold("gold2", document_key="dist-v1", system_key="distribution", split="dev"),
+        ],
+    ).model_copy(update={"reviewed_at": NOW + timedelta(minutes=2)})
+    base_policy = _policy(minimum_score=0, minimum_margin=0)
+    predictions = _predictions(
+        dataset,
+        [
+            _prediction("gold1", document_key="drama-v1", system_key="drama", split="dev"),
+            _prediction("gold2", document_key="dist-v1", system_key="distribution", split="dev"),
+        ],
+        policy_hash=base_policy.canonical_hash,
+        generated_at=NOW + timedelta(minutes=1),
+    )
+
+    with pytest.raises(ValueError, match="prediction_precedes_gold_freeze"):
+        calibrate_resolution_policy(
+            dataset=dataset,
+            gold=gold,
+            predictions=predictions,
+            requirement_units=_requirement_units(dataset, gold),
+            base_policy=base_policy,
+            calibrated_at=NOW + timedelta(minutes=3),
+            minimum_precision=0.95,
+        )
+
+    frozen = calibrate_resolution_policy(
+        dataset=dataset,
+        gold=gold,
+        predictions=predictions,
+        requirement_units=_requirement_units(dataset, gold),
+        base_policy=base_policy,
+        calibrated_at=NOW + timedelta(minutes=3),
+        minimum_precision=0.95,
+        allow_post_prediction_gold_review=True,
+    )
+    assert frozen.observed_precision == 1
+
+
 def test_calibration_counts_ineligible_auto_decisions_as_false_positives() -> None:
     dataset = _dataset()
     gold = _gold_set(
@@ -729,6 +1100,14 @@ def test_evaluation_reports_each_system_without_aggregate_masking() -> None:
         ],
     )
     frozen = _frozen_policy(dataset, gold)
+    output_manifests = {
+        "drama": _output_manifest(),
+        "distribution": _output_manifest(
+            system_id=SYSTEM_B,
+            capability_key="settlement.list",
+            additional_capability_keys=("wrong.node",),
+        ),
+    }
     predictions = _predictions(
         dataset,
         [
@@ -737,12 +1116,25 @@ def test_evaluation_reports_each_system_without_aggregate_masking() -> None:
         ],
         policy_hash=frozen.policy_hash,
         frozen_policy_hash=frozen.canonical_hash,
+        schema_version=2,
+        known_nodes=[
+            *_known_node_views("drama", output_manifests["drama"]),
+            *_known_node_views("distribution", output_manifests["distribution"]),
+        ],
+        output_manifest_hashes={
+            system_key: manifest_hash(output_manifest) for system_key, output_manifest in output_manifests.items()
+        },
+        output_manifest_artifacts={
+            "drama": _artifact("manifests/drama.json", "a"),
+            "distribution": _artifact("manifests/distribution.json", "b"),
+        },
     )
 
     result = evaluate_taxonomy_generalization(
         dataset=dataset,
         gold=gold,
         predictions=predictions,
+        output_manifests=output_manifests,
         requirement_units=_requirement_units(dataset, gold),
         frozen_policy=frozen,
         gate=_gate(
@@ -757,6 +1149,41 @@ def test_evaluation_reports_each_system_without_aggregate_masking() -> None:
     assert by_system["distribution"].gate_status == "fail"
     assert result.overall_status == "fail"
     assert result.aggregate_metrics is None
+
+
+def test_evaluation_keeps_unknown_gateway_cost_as_unknown() -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [_gold("gold1", document_key="drama-v2", system_key="drama", split="test")],
+    )
+    frozen = _frozen_policy(dataset, gold)
+    predictions = _predictions(
+        dataset,
+        [
+            _prediction(
+                "gold1",
+                document_key="drama-v2",
+                system_key="drama",
+                split="test",
+                cost_usd=None,
+            )
+        ],
+        policy_hash=frozen.policy_hash,
+        frozen_policy_hash=frozen.canonical_hash,
+    )
+
+    result = evaluate_taxonomy_generalization(
+        dataset=dataset,
+        gold=gold,
+        predictions=predictions,
+        requirement_units=_requirement_units(dataset, gold),
+        frozen_policy=frozen,
+        gate=_gate(),
+    )
+
+    assert result.total_cost_usd is None
+    assert "Cost: `unknown`" in render_taxonomy_evaluation_report(result)
 
 
 def test_ineligible_requirement_cannot_be_counted_as_correct_auto_mapping() -> None:
@@ -2039,6 +2466,14 @@ def _draft_manifest() -> TaxonomyManifest:
 
 def test_calibration_package_is_focused_and_review_is_independent() -> None:
     manifest = _draft_manifest()
+    distribution_manifest = _output_manifest(
+        system_id=SYSTEM_B,
+        capability_key="settlement.list",
+    )
+    output_manifests = {
+        "drama": manifest,
+        "distribution": distribution_manifest,
+    }
     dataset = _dataset()
     gold = _gold_set(
         dataset,
@@ -2068,15 +2503,25 @@ def test_calibration_package_is_focused_and_review_is_independent() -> None:
         ],
         policy_hash=frozen.policy_hash,
         frozen_policy_hash=frozen.canonical_hash,
+        schema_version=2,
+        known_nodes=[
+            *_known_node_views("drama", manifest),
+            *_known_node_views("distribution", distribution_manifest),
+        ],
         output_manifest_hashes={
             "drama": manifest_hash(manifest),
-            "distribution": _hash("d"),
+            "distribution": manifest_hash(distribution_manifest),
+        },
+        output_manifest_artifacts={
+            "drama": _artifact("manifests/drama.json", "a"),
+            "distribution": _artifact("manifests/distribution.json", "b"),
         },
     )
     evaluation = evaluate_taxonomy_generalization(
         dataset=dataset,
         gold=gold,
         predictions=predictions,
+        output_manifests=output_manifests,
         requirement_units=_requirement_units(dataset, gold),
         frozen_policy=frozen,
         gate=_gate(
@@ -2161,7 +2606,10 @@ def test_calibration_package_is_focused_and_review_is_independent() -> None:
         )
 
 
-def test_report_is_explicitly_pilot_and_artifacts_are_machine_readable(tmp_path: Path) -> None:
+def test_report_is_explicitly_pilot_and_artifacts_are_machine_readable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     dataset = _dataset()
     gold = _gold_set(
         dataset,
@@ -2189,12 +2637,13 @@ def test_report_is_explicitly_pilot_and_artifacts_are_machine_readable(tmp_path:
     assert "不提供跨系统聚合分" in report
     assert result.gate_hash in report
 
+    output_dir = tmp_path / "evaluation"
     write_taxonomy_evaluation_artifacts(
-        output_dir=tmp_path,
+        output_dir=output_dir,
         result=result,
         predictions=predictions,
     )
-    assert {path.name for path in tmp_path.iterdir()} == {
+    assert {path.name for path in output_dir.iterdir()} == {
         "REPORT.md",
         "abstentions.json",
         "cost-latency.json",
@@ -2205,12 +2654,61 @@ def test_report_is_explicitly_pilot_and_artifacts_are_machine_readable(tmp_path:
         "tree-diff.json",
     }
 
+    sentinel = output_dir / "REPORT.md"
+    original_report = sentinel.read_text(encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        write_taxonomy_evaluation_artifacts(
+            output_dir=output_dir,
+            result=result,
+            predictions=predictions,
+        )
+    assert sentinel.read_text(encoding="utf-8") == original_report
+
+    original_write_json = taxonomy_evaluation_service._write_json
+    write_count = 0
+
+    def fail_during_write(path: Path, value: object) -> None:
+        nonlocal write_count
+        write_count += 1
+        if write_count == 2:
+            raise RuntimeError("simulated_partial_write")
+        original_write_json(path, value)
+
+    monkeypatch.setattr(taxonomy_evaluation_service, "_write_json", fail_during_write)
+    partial_output = tmp_path / "partial-evaluation"
+    with pytest.raises(RuntimeError, match="simulated_partial_write"):
+        write_taxonomy_evaluation_artifacts(
+            output_dir=partial_output,
+            result=result,
+            predictions=predictions,
+        )
+    assert not partial_output.exists()
+
+
+def test_frozen_policy_writer_never_overwrites_existing_run(tmp_path: Path) -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [_gold("gold1", document_key="drama-v2", system_key="drama", split="test")],
+    )
+    frozen = _frozen_policy(dataset, gold)
+    output_dir = tmp_path / "calibration"
+
+    _write_frozen_policy(output_dir, frozen)
+    policy_path = output_dir / "frozen-policy.json"
+    original = policy_path.read_text(encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        _write_frozen_policy(output_dir, frozen.model_copy(update={"observed_precision": 0.5}))
+
+    assert policy_path.read_text(encoding="utf-8") == original
+
 
 def test_artifact_hash_validation_detects_source_snapshot_drift(tmp_path: Path) -> None:
     source = tmp_path / "prd.md"
     source.write_text("真实内容", encoding="utf-8")
     document = _document("drama-v1", system_key="drama", system_id=SYSTEM_A, split="dev", hash_char="1")
-    document = document.model_copy(update={"source": ArtifactRef(path=str(source), sha256=_hash("0"))})
+    document = document.model_copy(update={"source": ArtifactRef(path=source.name, sha256=_hash("0"))})
     dataset = _dataset().model_copy(
         update={
             "documents": [document, *_dataset().documents[1:]],
@@ -2240,15 +2738,15 @@ def test_dev_requirement_unit_loader_does_not_open_locked_test_artifacts(tmp_pat
             document_content_hash=source_hash,
         )
         unit = _requirement_unit(
-            document.model_copy(update={"source": ArtifactRef(path=str(source_path), sha256=source_hash)}), record
+            document.model_copy(update={"source": ArtifactRef(path=source_path.name, sha256=source_hash)}), record
         )
-        extraction = RequirementUnitExtractionResult(
-            document_id=document.document_id,
-            document_content_hash=source_hash,
+        resolved_document = document.model_copy(
+            update={"source": ArtifactRef(path=source_path.name, sha256=source_hash)}
+        )
+        extraction = _extraction_result(
+            document=resolved_document,
             input_hash=_hash(str(index)),
-            prompt_revision="requirement-unit@1",
-            model_revision="primary@1",
-            chunk_count=1,
+            source_content=source_content,
             units=[
                 unit.model_copy(
                     update={
@@ -2257,16 +2755,15 @@ def test_dev_requirement_unit_loader_does_not_open_locked_test_artifacts(tmp_pat
                     }
                 )
             ],
-            issues=[],
         )
         unit_path = tmp_path / f"units-dev-{index}.json"
         unit_path.write_text(extraction.model_dump_json(indent=2), encoding="utf-8")
         documents.append(
             document.model_copy(
                 update={
-                    "source": ArtifactRef(path=str(source_path), sha256=source_hash),
+                    "source": ArtifactRef(path=source_path.name, sha256=source_hash),
                     "requirement_units": ArtifactRef(
-                        path=str(unit_path),
+                        path=unit_path.name,
                         sha256=hashlib.sha256(unit_path.read_bytes()).hexdigest(),
                     ),
                 }
@@ -2281,6 +2778,244 @@ def test_dev_requirement_unit_loader_does_not_open_locked_test_artifacts(tmp_pat
     )
 
     assert set(loaded) == {"drama-v1", "dist-v1"}
+
+
+def test_evaluation_artifact_paths_cannot_escape_dataset_directory(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "dataset.json"
+
+    with pytest.raises(ValueError, match="artifact_path_absolute_forbidden"):
+        resolve_evaluation_artifact_path(manifest_path, str(tmp_path / "gold.json"))
+    with pytest.raises(ValueError, match="artifact_path_escape"):
+        resolve_evaluation_artifact_path(manifest_path, "../gold.json")
+
+    assert resolve_evaluation_artifact_path(manifest_path, "artifacts/gold.json") == (
+        tmp_path / "artifacts" / "gold.json"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mismatch", "error_code"),
+    [
+        ("artifact_hash", "prediction_output_manifest_artifact_hash_mismatch:drama"),
+        ("manifest_hash", "prediction_output_manifest_hash_mismatch:drama"),
+        ("system_identity", "prediction_output_manifest_system_id_mismatch:drama"),
+    ],
+)
+def test_prediction_manifest_loader_verifies_artifact_and_system_identity(
+    tmp_path: Path,
+    mismatch: str,
+    error_code: str,
+) -> None:
+    dataset = _dataset()
+    manifest = _output_manifest(system_id=SYSTEM_B if mismatch == "system_identity" else SYSTEM_A)
+    artifact = _write_manifest_artifact(tmp_path, manifest)
+    if mismatch == "artifact_hash":
+        artifact = artifact.model_copy(update={"sha256": _hash("f")})
+    declared_manifest_hash = _hash("e") if mismatch == "manifest_hash" else manifest_hash(manifest)
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=_policy().canonical_hash,
+        schema_version=2,
+        known_nodes=_known_node_views("drama", manifest),
+        output_manifest_hashes={"drama": declared_manifest_hash},
+        output_manifest_artifacts={"drama": artifact},
+    )
+
+    with pytest.raises(ValueError, match=error_code):
+        taxonomy_evaluation_service.load_prediction_output_manifests(
+            dataset=dataset,
+            dataset_path=tmp_path / "dataset.json",
+            predictions=predictions,
+        )
+
+
+@pytest.mark.parametrize("view_change", ["missing", "extra"])
+def test_prediction_manifest_loader_rejects_incomplete_or_extra_node_view(
+    tmp_path: Path,
+    view_change: str,
+) -> None:
+    dataset = _dataset()
+    manifest = _output_manifest(include_capability_child=True)
+    artifact = _write_manifest_artifact(tmp_path, manifest)
+    known_nodes = _known_node_views("drama", manifest)
+    if view_change == "missing":
+        known_nodes = known_nodes[:-1]
+    else:
+        known_nodes.append(
+            TaxonomyKnownNode(
+                system_key="drama",
+                stable_key="rogue",
+                node_type="domain",
+            )
+        )
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=_policy().canonical_hash,
+        schema_version=2,
+        known_nodes=known_nodes,
+        output_manifest_hashes={"drama": manifest_hash(manifest)},
+        output_manifest_artifacts={"drama": artifact},
+    )
+
+    with pytest.raises(ValueError, match=f"prediction_manifest_node_view_mismatch:drama:{view_change}="):
+        taxonomy_evaluation_service.load_prediction_output_manifests(
+            dataset=dataset,
+            dataset_path=tmp_path / "dataset.json",
+            predictions=predictions,
+        )
+
+
+def test_prediction_manifest_loader_rejects_sanitized_proposed_node_evidence(tmp_path: Path) -> None:
+    dataset = _dataset()
+    manifest_evidence_id = f"ru_{'1' * 64}"
+    sanitized_evidence_id = f"ru_{'2' * 64}"
+    evidence = {
+        "text": "固定需求证据",
+        "document_content_hash": dataset.documents[1].source.sha256,
+        "requirement_unit_id": manifest_evidence_id,
+    }
+    manifest = TaxonomyManifest.model_validate(
+        {
+            "schema_version": 2,
+            "system_id": str(SYSTEM_A),
+            "version": 1,
+            "change_note": "evidence binding fixture",
+            "created_by": "taxonomy-evaluator",
+            "nodes": [
+                {
+                    "stable_key": "asset",
+                    "node_type": "module",
+                    "display_name": "素材中心",
+                    "definition": "管理素材能力。",
+                    "scope_note": "只包含素材相关职责。",
+                    "in_scope_examples": [evidence],
+                },
+                {
+                    "stable_key": "asset.filter",
+                    "node_type": "capability",
+                    "display_name": "筛选与排序",
+                    "parent_stable_key": "asset",
+                    "definition": "筛选和排序素材。",
+                    "scope_note": "不包含商品筛选。",
+                    "in_scope_examples": [evidence],
+                },
+            ],
+            "mappings": [],
+        }
+    )
+    artifact = _write_manifest_artifact(tmp_path, manifest)
+    proposed_nodes = [
+        TaxonomyProposedNode(
+            system_key="drama",
+            stable_key=node.stable_key,
+            node_type=node.node_type,
+            display_name=node.display_name,
+            parent_stable_key=node.parent_stable_key,
+            aliases=node.aliases,
+            evidence_requirement_unit_ids=[
+                sanitized_evidence_id if node.stable_key == "asset.filter" else manifest_evidence_id
+            ],
+        )
+        for node in manifest.nodes
+    ]
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=_policy().canonical_hash,
+        schema_version=2,
+        proposed_nodes=proposed_nodes,
+        output_manifest_hashes={"drama": manifest_hash(manifest)},
+        output_manifest_artifacts={"drama": artifact},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="prediction_manifest_proposed_node_evidence_mismatch:drama:asset.filter",
+    ):
+        taxonomy_evaluation_service.load_prediction_output_manifests(
+            dataset=dataset,
+            dataset_path=tmp_path / "dataset.json",
+            predictions=predictions,
+        )
+
+
+def test_structural_gate_uses_complete_verified_manifest(tmp_path: Path) -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [_gold("gold1", document_key="drama-v2", system_key="drama", split="test")],
+    )
+    frozen = _frozen_policy(dataset, gold)
+    manifest = _output_manifest(include_capability_child=True)
+    artifact = _write_manifest_artifact(tmp_path, manifest)
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=frozen.policy_hash,
+        frozen_policy_hash=frozen.canonical_hash,
+        schema_version=2,
+        known_nodes=_known_node_views("drama", manifest),
+        output_manifest_hashes={"drama": manifest_hash(manifest)},
+        output_manifest_artifacts={"drama": artifact},
+    )
+
+    with pytest.raises(ValueError, match="prediction_output_manifests_not_verified"):
+        evaluate_taxonomy_generalization(
+            dataset=dataset,
+            gold=gold,
+            predictions=predictions,
+            requirement_units=_requirement_units(dataset, gold),
+            frozen_policy=frozen,
+            gate=_gate(minimum_structural_invariant_rate=1),
+        )
+
+    output_manifests = taxonomy_evaluation_service.load_prediction_output_manifests(
+        dataset=dataset,
+        dataset_path=tmp_path / "dataset.json",
+        predictions=predictions,
+    )
+
+    result = evaluate_taxonomy_generalization(
+        dataset=dataset,
+        gold=gold,
+        predictions=predictions,
+        output_manifests=output_manifests,
+        requirement_units=_requirement_units(dataset, gold),
+        frozen_policy=frozen,
+        gate=_gate(minimum_structural_invariant_rate=1),
+    )
+
+    assert result.overall_status == "fail"
+    assert "capability_has_child" in result.system_results[0].metrics.structural_violations
+
+
+def test_legacy_prediction_contract_cannot_pass_activation_gate() -> None:
+    dataset = _dataset()
+    gold = _gold_set(
+        dataset,
+        [_gold("gold1", document_key="drama-v2", system_key="drama", split="test")],
+    )
+    frozen = _frozen_policy(dataset, gold)
+    predictions = _predictions(
+        dataset,
+        [_prediction("gold1", document_key="drama-v2", system_key="drama", split="test")],
+        policy_hash=frozen.policy_hash,
+        frozen_policy_hash=frozen.canonical_hash,
+    )
+
+    result = evaluate_taxonomy_generalization(
+        dataset=dataset,
+        gold=gold,
+        predictions=predictions,
+        requirement_units=_requirement_units(dataset, gold),
+        frozen_policy=frozen,
+        gate=_gate(),
+    )
+
+    assert result.overall_status == "incomplete"
+    assert "prediction_contract_v2_required" in result.system_results[0].gate_findings
 
 
 def test_cli_dry_run_reads_frozen_artifacts_and_writes_report_bundle(tmp_path: Path) -> None:
@@ -2309,15 +3044,11 @@ def test_cli_dry_run_reads_frozen_artifacts_and_writes_report_bundle(tmp_path: P
     documents: list[TaxonomyDatasetDocument] = []
     for index, document in enumerate(source_documents, start=1):
         units = [unit] if document.document_key == "drama-v2" else []
-        extraction = RequirementUnitExtractionResult(
-            document_id=document.document_id,
-            document_content_hash=document.source.sha256,
+        extraction = _extraction_result(
+            document=document,
             input_hash=_hash(str(index)),
-            prompt_revision="requirement-unit@1",
-            model_revision="primary@1",
-            chunk_count=1,
+            source_content=(tmp_path / document.source.path).read_text(encoding="utf-8"),
             units=units,
-            issues=[],
         )
         units_ref = write_artifact(f"units-{index}.json", extraction.model_dump_json(indent=2))
         documents.append(document.model_copy(update={"requirement_units": units_ref}))
@@ -2346,6 +3077,11 @@ def test_cli_dry_run_reads_frozen_artifacts_and_writes_report_bundle(tmp_path: P
     )
     gold = _gold_set(dataset, [gold_record])
     frozen = _frozen_policy(dataset, gold)
+    output_manifest = _output_manifest()
+    output_manifest_ref = write_artifact(
+        "output-manifest.json",
+        output_manifest.model_dump_json(indent=2),
+    )
     predictions = _predictions(
         dataset,
         [
@@ -2359,6 +3095,10 @@ def test_cli_dry_run_reads_frozen_artifacts_and_writes_report_bundle(tmp_path: P
         ],
         policy_hash=frozen.policy_hash,
         frozen_policy_hash=frozen.canonical_hash,
+        schema_version=2,
+        known_nodes=_known_node_views("drama", output_manifest),
+        output_manifest_hashes={"drama": manifest_hash(output_manifest)},
+        output_manifest_artifacts={"drama": output_manifest_ref},
     )
     gold_ref = write_artifact("gold.json", gold.model_dump_json(indent=2))
     prediction_ref = write_artifact("prediction-input.json", predictions.model_dump_json(indent=2))

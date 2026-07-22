@@ -51,11 +51,14 @@ class TaxonomyDatasetManifest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     corpus_id: RecordId
     pilot_corpus: Literal[True]
     split_strategy: Literal["document_level"]
     test_locked: Literal[True]
+    evaluation_split: Literal["dev", "test"] | None = None
+    source_commitment_hash: Sha256 | None = None
+    upstream_artifact_hashes: dict[RecordId, Sha256] | None = None
     created_at: datetime
     documents: list[TaxonomyDatasetDocument] = Field(min_length=2)
     gold_artifact: ArtifactRef
@@ -91,9 +94,25 @@ class TaxonomyDatasetManifest(BaseModel):
             if existing_key != item.system_key:
                 raise ValueError(f"system_id_alias_conflict:{item.system_id}")
             existing[1].add(item.split)
-        for system_key, (_, splits) in systems.items():
-            if not {"dev", "test"} <= splits:
-                raise ValueError(f"system_split_incomplete:{system_key}")
+        if self.schema_version == 1:
+            if (
+                self.evaluation_split is not None
+                or self.source_commitment_hash is not None
+                or self.upstream_artifact_hashes is not None
+            ):
+                raise ValueError("dataset_v1_stage_fields_forbidden")
+            for system_key, (_, splits) in systems.items():
+                if not {"dev", "test"} <= splits:
+                    raise ValueError(f"system_split_incomplete:{system_key}")
+        else:
+            if (
+                self.evaluation_split is None
+                or self.source_commitment_hash is None
+                or not self.upstream_artifact_hashes
+            ):
+                raise ValueError("dataset_v2_stage_identity_required")
+            if {item.split for item in self.documents} != {self.evaluation_split}:
+                raise ValueError("dataset_v2_stage_split_mismatch")
 
         if any(not key.strip() or not value.strip() for key, value in self.prompt_revisions.items()):
             raise ValueError("empty_prompt_revision")
@@ -103,23 +122,30 @@ class TaxonomyDatasetManifest(BaseModel):
 
     @property
     def dataset_hash(self) -> str:
-        return _canonical_hash(
-            {
-                "schema_version": self.schema_version,
-                "corpus_id": self.corpus_id,
-                "pilot_corpus": self.pilot_corpus,
-                "split_strategy": self.split_strategy,
-                "test_locked": self.test_locked,
-                "created_at": self.created_at.isoformat(),
-                "documents": [
-                    item.model_dump(mode="json")
-                    for item in sorted(self.documents, key=lambda document: document.document_key)
-                ],
-                "transformation_artifact": self.transformation_artifact.model_dump(mode="json"),
-                "prompt_revisions": dict(sorted(self.prompt_revisions.items())),
-                "model_revisions": dict(sorted(self.model_revisions.items())),
-            }
-        )
+        payload: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "corpus_id": self.corpus_id,
+            "pilot_corpus": self.pilot_corpus,
+            "split_strategy": self.split_strategy,
+            "test_locked": self.test_locked,
+            "created_at": self.created_at.isoformat(),
+            "documents": [
+                item.model_dump(mode="json")
+                for item in sorted(self.documents, key=lambda document: document.document_key)
+            ],
+            "transformation_artifact": self.transformation_artifact.model_dump(mode="json"),
+            "prompt_revisions": dict(sorted(self.prompt_revisions.items())),
+            "model_revisions": dict(sorted(self.model_revisions.items())),
+        }
+        if self.schema_version == 2:
+            payload.update(
+                {
+                    "evaluation_split": self.evaluation_split,
+                    "source_commitment_hash": self.source_commitment_hash,
+                    "upstream_artifact_hashes": dict(sorted((self.upstream_artifact_hashes or {}).items())),
+                }
+            )
+        return _canonical_hash(payload)
 
 
 class TaxonomyGoldRecord(BaseModel):
@@ -404,7 +430,11 @@ class TaxonomyPredictionRecord(BaseModel):
     unresolved_kind: Literal["novel", "abstained", "unsupported", "conflicted"] | None = None
     error_code: str | None = Field(default=None, min_length=1, max_length=100)
     latency_ms: int = Field(default=0, ge=0)
-    cost_usd: float = Field(default=0, ge=0)
+    cost_usd: float | None = Field(
+        default=None,
+        ge=0,
+        description="供应商可归因成本；网关未返回价格时必须为 null，不能伪报为 0。",
+    )
     write_disposition: Literal["none", "draft"]
 
     @model_validator(mode="after")
@@ -506,7 +536,7 @@ class TaxonomyKnownNode(BaseModel):
 class TaxonomyPredictionSet(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     run_id: RecordId
     generated_at: datetime
     dataset_hash: Sha256
@@ -518,6 +548,10 @@ class TaxonomyPredictionSet(BaseModel):
     proposed_nodes: list[TaxonomyProposedNode] = Field(default_factory=list)
     known_nodes: list[TaxonomyKnownNode] = Field(default_factory=list)
     output_manifest_hashes: dict[RecordId, Sha256] = Field(default_factory=dict)
+    output_manifest_artifacts: dict[RecordId, ArtifactRef] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+    )
     tree_diff: list[dict[str, object]] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -531,14 +565,46 @@ class TaxonomyPredictionSet(BaseModel):
         known_keys = [(item.system_key, item.stable_key) for item in self.known_nodes]
         if len(known_keys) != len(set(known_keys)):
             raise ValueError("duplicate_known_taxonomy_node")
-        artifact_systems = {
-            *(item.system_key for item in self.records),
+        proposed_keys = [(item.system_key, item.stable_key) for item in self.proposed_nodes]
+        if len(proposed_keys) != len(set(proposed_keys)):
+            raise ValueError("duplicate_proposed_taxonomy_node")
+        if set(known_keys) & set(proposed_keys):
+            raise ValueError("prediction_taxonomy_node_known_and_proposed")
+
+        record_systems = {item.system_key for item in self.records}
+        node_systems = {
             *(item.system_key for item in self.proposed_nodes),
             *(item.system_key for item in self.known_nodes),
         }
-        unexpected_manifest_systems = sorted(set(self.output_manifest_hashes) - artifact_systems)
-        if unexpected_manifest_systems:
-            raise ValueError(f"prediction_output_manifest_system_unknown:{','.join(unexpected_manifest_systems)}")
+        unexpected_node_systems = sorted(node_systems - record_systems)
+        if unexpected_node_systems:
+            raise ValueError(f"prediction_node_system_without_record:{','.join(unexpected_node_systems)}")
+
+        if self.schema_version == 1:
+            if self.output_manifest_artifacts:
+                raise ValueError("prediction_v1_output_manifest_artifacts_forbidden")
+            unexpected_manifest_systems = sorted(set(self.output_manifest_hashes) - record_systems)
+            if unexpected_manifest_systems:
+                raise ValueError(f"prediction_output_manifest_system_unknown:{','.join(unexpected_manifest_systems)}")
+            return self
+
+        if not self.output_manifest_artifacts:
+            raise ValueError("prediction_output_manifest_artifacts_required")
+        artifact_systems = set(self.output_manifest_artifacts)
+        hash_systems = set(self.output_manifest_hashes)
+        if artifact_systems != record_systems:
+            missing = sorted(record_systems - artifact_systems)
+            extra = sorted(artifact_systems - record_systems)
+            raise ValueError(
+                "prediction_output_manifest_artifact_systems_mismatch:"
+                f"missing={','.join(missing)}:extra={','.join(extra)}"
+            )
+        if hash_systems != record_systems:
+            missing = sorted(record_systems - hash_systems)
+            extra = sorted(hash_systems - record_systems)
+            raise ValueError(
+                f"prediction_output_manifest_hash_systems_mismatch:missing={','.join(missing)}:extra={','.join(extra)}"
+            )
         return self
 
     @property
@@ -588,7 +654,7 @@ class TaxonomyCalibrationSystemMetrics(BaseModel):
 class TaxonomyFrozenPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     policy: TaxonomyResolutionPolicy
     policy_hash: Sha256
     calibrated_at: datetime
@@ -605,6 +671,18 @@ class TaxonomyFrozenPolicy(BaseModel):
     auto_decision_count: int = Field(ge=1)
     eligible_auto_decision_count: int = Field(ge=1)
     correct_auto_decision_count: int = Field(ge=0)
+    calibration_coverage_gold_hash: Sha256 | None = None
+    calibration_coverage_gold_review_method: Literal["human_independent"] | None = None
+    calibration_gold_attestation_hash: Sha256 | None = None
+    calibration_prediction_hash: Sha256 | None = None
+    calibration_source_commitment_hash: Sha256 | None = None
+    calibration_coverage_record_count: int | None = Field(default=None, ge=1)
+    expected_requirement_fact_count: int | None = Field(default=None, ge=0)
+    matched_requirement_fact_count: int | None = Field(default=None, ge=0)
+    extracted_requirement_unit_count: int | None = Field(default=None, ge=0)
+    matched_extracted_requirement_unit_count: int | None = Field(default=None, ge=0)
+    observed_requirement_extraction_recall: float | None = Field(default=None, ge=0, le=1)
+    observed_requirement_extraction_precision: float | None = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def validate_frozen_policy(self) -> TaxonomyFrozenPolicy:
@@ -645,11 +723,55 @@ class TaxonomyFrozenPolicy(BaseModel):
             > 1e-12
         ):
             raise ValueError("calibration_observed_coverage_mismatch")
+        coverage_values = (
+            self.calibration_coverage_gold_hash,
+            self.calibration_coverage_gold_review_method,
+            self.calibration_gold_attestation_hash,
+            self.calibration_prediction_hash,
+            self.calibration_source_commitment_hash,
+            self.calibration_coverage_record_count,
+            self.expected_requirement_fact_count,
+            self.matched_requirement_fact_count,
+            self.extracted_requirement_unit_count,
+            self.matched_extracted_requirement_unit_count,
+            self.observed_requirement_extraction_recall,
+            self.observed_requirement_extraction_precision,
+        )
+        if self.schema_version == 1:
+            if any(value is not None for value in coverage_values):
+                raise ValueError("frozen_policy_v1_coverage_fields_forbidden")
+            return self
+        if any(value is None for value in coverage_values):
+            raise ValueError("frozen_policy_v2_coverage_fields_required")
+        assert self.expected_requirement_fact_count is not None
+        assert self.matched_requirement_fact_count is not None
+        assert self.extracted_requirement_unit_count is not None
+        assert self.matched_extracted_requirement_unit_count is not None
+        assert self.observed_requirement_extraction_recall is not None
+        assert self.observed_requirement_extraction_precision is not None
+        if self.matched_requirement_fact_count > self.expected_requirement_fact_count:
+            raise ValueError("calibration_requirement_fact_count_invalid")
+        if self.matched_extracted_requirement_unit_count > self.extracted_requirement_unit_count:
+            raise ValueError("calibration_extracted_unit_count_invalid")
+        expected_recall = (
+            self.matched_requirement_fact_count / self.expected_requirement_fact_count
+            if self.expected_requirement_fact_count
+            else 1.0
+        )
+        expected_precision = (
+            self.matched_extracted_requirement_unit_count / self.extracted_requirement_unit_count
+            if self.extracted_requirement_unit_count
+            else 1.0
+        )
+        if abs(self.observed_requirement_extraction_recall - expected_recall) > 1e-12:
+            raise ValueError("calibration_requirement_extraction_recall_mismatch")
+        if abs(self.observed_requirement_extraction_precision - expected_precision) > 1e-12:
+            raise ValueError("calibration_requirement_extraction_precision_mismatch")
         return self
 
     @property
     def canonical_hash(self) -> str:
-        return _canonical_hash(self.model_dump(mode="json"))
+        return _canonical_hash(self.model_dump(mode="json", exclude_none=True))
 
 
 class TaxonomyEvaluationGate(BaseModel):
@@ -736,7 +858,7 @@ class TaxonomyEvaluationResult(BaseModel):
     errors: list[dict[str, object]] = Field(default_factory=list)
     abstentions: list[dict[str, object]] = Field(default_factory=list)
     tree_diff: list[dict[str, object]] = Field(default_factory=list)
-    total_cost_usd: float = Field(ge=0)
+    total_cost_usd: float | None = Field(default=None, ge=0)
     total_latency_ms: int = Field(ge=0)
 
     @model_validator(mode="after")

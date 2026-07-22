@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -25,7 +26,9 @@ from src.testcase_generator.services.taxonomy_evaluation import (  # noqa: E402
     calibrate_resolution_policy,
     evaluate_taxonomy_generalization,
     load_evaluation_inputs,
+    load_prediction_output_manifests,
     load_requirement_unit_index,
+    resolve_evaluation_artifact_path,
     validate_evaluation_artifact_hashes,
     write_taxonomy_evaluation_artifacts,
 )
@@ -50,8 +53,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _artifact_path(dataset_path: Path, value: str) -> Path:
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else dataset_path.parent / path
+    return resolve_evaluation_artifact_path(dataset_path, value)
 
 
 def _load_calibration_inputs(
@@ -70,6 +72,11 @@ def _load_calibration_inputs(
     predictions = TaxonomyPredictionSet.model_validate_json(
         _artifact_path(dataset_path, dataset.prediction_artifact.path).read_text(encoding="utf-8")
     )
+    load_prediction_output_manifests(
+        dataset=dataset,
+        dataset_path=dataset_path,
+        predictions=predictions,
+    )
     requirement_units = load_requirement_unit_index(
         dataset=dataset,
         manifest_path=dataset_path,
@@ -79,11 +86,16 @@ def _load_calibration_inputs(
 
 
 def _write_frozen_policy(output_dir: Path, policy: TaxonomyFrozenPolicy) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    path = output_dir / "frozen-policy.json"
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(policy.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    temporary.replace(path)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(exist_ok=False)
+    try:
+        path = output_dir / "frozen-policy.json"
+        temporary = path.with_suffix(".json.tmp")
+        temporary.write_text(policy.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        temporary.replace(path)
+    except BaseException:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -131,10 +143,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
-        dataset, gold, predictions, transformations, requirement_units, frozen_policy = load_evaluation_inputs(
-            dataset_path=args.dataset,
-            policy_path=args.policy,
-        )
+        (
+            dataset,
+            gold,
+            predictions,
+            output_manifests,
+            transformations,
+            requirement_units,
+            frozen_policy,
+        ) = load_evaluation_inputs(dataset_path=args.dataset, policy_path=args.policy)
         gate = (
             TaxonomyEvaluationGate.model_validate_json(args.gate.read_text(encoding="utf-8"))
             if args.gate
@@ -144,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
             dataset=dataset,
             gold=gold,
             predictions=predictions,
+            output_manifests=output_manifests,
             requirement_units=requirement_units,
             transformations=transformations,
             frozen_policy=frozen_policy,

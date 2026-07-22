@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections import defaultdict
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -27,6 +29,7 @@ from src.testcase_generator.schemas.taxonomy_evaluation import (
     TaxonomyGoldNode,
     TaxonomyGoldRecord,
     TaxonomyGoldSet,
+    TaxonomyKnownNode,
     TaxonomyPredictionRecord,
     TaxonomyPredictionSet,
     TaxonomyProposedNode,
@@ -38,6 +41,8 @@ from src.testcase_generator.services.requirement_unit_service import Requirement
 from src.testcase_generator.services.taxonomy_manifest import manifest_hash
 
 RequirementUnitIndex = dict[str, dict[str, RequirementUnit]]
+OutputManifestIndex = dict[str, TaxonomyManifest]
+SubmittedNode = TaxonomyKnownNode | TaxonomyProposedNode
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:
@@ -48,9 +53,21 @@ def _json_key(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def resolve_evaluation_artifact_path(manifest_path: Path, value: str) -> Path:
+    """只允许 dataset 所在目录内的相对产物，包含符号链接解析后的越界检查。"""
+
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        raise ValueError("artifact_path_absolute_forbidden")
+    root = manifest_path.expanduser().resolve().parent
+    resolved = (root / path).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError("artifact_path_escape")
+    return resolved
+
+
 def _resolve_path(manifest_path: Path, ref: ArtifactRef) -> Path:
-    path = Path(ref.path).expanduser()
-    return path if path.is_absolute() else manifest_path.parent / path
+    return resolve_evaluation_artifact_path(manifest_path, ref.path)
 
 
 def _file_hash(path: Path) -> str:
@@ -59,6 +76,113 @@ def _file_hash(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _manifest_node_shape(
+    system_key: str,
+    node: TaxonomyKnownNode | TaxonomyProposedNode | TaxonomyNodeManifest,
+) -> tuple[str, str, str, str | None]:
+    return (
+        system_key,
+        node.stable_key,
+        node.node_type,
+        node.parent_stable_key,
+    )
+
+
+def _validate_prediction_output_manifests(
+    *,
+    dataset: TaxonomyDatasetManifest,
+    predictions: TaxonomyPredictionSet,
+    output_manifests: Mapping[str, TaxonomyManifest],
+) -> None:
+    if predictions.schema_version != 2:
+        if output_manifests:
+            raise ValueError("prediction_v1_verified_output_manifests_forbidden")
+        return
+
+    expected_systems = {item.system_key for item in predictions.records}
+    if set(output_manifests) != expected_systems:
+        missing = sorted(expected_systems - set(output_manifests))
+        extra = sorted(set(output_manifests) - expected_systems)
+        raise ValueError(
+            f"prediction_output_manifest_systems_mismatch:missing={','.join(missing)}:extra={','.join(extra)}"
+        )
+
+    dataset_system_ids = {
+        system_key: next(item.system_id for item in dataset.documents if item.system_key == system_key)
+        for system_key in {item.system_key for item in dataset.documents}
+    }
+    submitted_nodes_by_system: dict[str, dict[str, SubmittedNode]] = defaultdict(dict)
+    for known_node in predictions.known_nodes:
+        submitted_nodes_by_system[known_node.system_key][known_node.stable_key] = known_node
+    for proposed_node in predictions.proposed_nodes:
+        submitted_nodes_by_system[proposed_node.system_key][proposed_node.stable_key] = proposed_node
+
+    proposed_by_identity = {(item.system_key, item.stable_key): item for item in predictions.proposed_nodes}
+    for system_key in sorted(expected_systems):
+        manifest = output_manifests[system_key]
+        expected_system_id = dataset_system_ids.get(system_key)
+        if expected_system_id is None:
+            raise ValueError(f"prediction_output_manifest_system_unknown:{system_key}")
+        if manifest.system_id != expected_system_id:
+            raise ValueError(f"prediction_output_manifest_system_id_mismatch:{system_key}")
+        if manifest_hash(manifest) != predictions.output_manifest_hashes[system_key]:
+            raise ValueError(f"prediction_output_manifest_hash_mismatch:{system_key}")
+
+        manifest_nodes = {item.stable_key: item for item in manifest.nodes}
+        submitted_nodes = submitted_nodes_by_system.get(system_key, {})
+        missing = sorted(set(manifest_nodes) - set(submitted_nodes))
+        extra = sorted(set(submitted_nodes) - set(manifest_nodes))
+        if missing or extra:
+            details = []
+            if missing:
+                details.append(f"missing={','.join(missing)}")
+            if extra:
+                details.append(f"extra={','.join(extra)}")
+            raise ValueError(f"prediction_manifest_node_view_mismatch:{system_key}:{':'.join(details)}")
+
+        for stable_key, submitted in submitted_nodes.items():
+            manifest_node = manifest_nodes[stable_key]
+            if _manifest_node_shape(system_key, submitted) != _manifest_node_shape(system_key, manifest_node):
+                raise ValueError(f"prediction_manifest_node_shape_mismatch:{system_key}:{stable_key}")
+            proposed = proposed_by_identity.get((system_key, stable_key))
+            if proposed is not None and (
+                proposed.display_name != manifest_node.display_name
+                or sorted(proposed.aliases) != sorted(manifest_node.aliases)
+            ):
+                raise ValueError(f"prediction_manifest_proposed_node_metadata_mismatch:{system_key}:{stable_key}")
+            if proposed is not None and manifest.schema_version == 2:
+                manifest_evidence = {example.requirement_unit_id for example in (manifest_node.in_scope_examples or [])}
+                if set(proposed.evidence_requirement_unit_ids) != manifest_evidence:
+                    raise ValueError(f"prediction_manifest_proposed_node_evidence_mismatch:{system_key}:{stable_key}")
+
+
+def load_prediction_output_manifests(
+    *,
+    dataset: TaxonomyDatasetManifest,
+    dataset_path: Path,
+    predictions: TaxonomyPredictionSet,
+) -> OutputManifestIndex:
+    """加载并验证 prediction v2 绑定的完整输出 manifest。"""
+
+    if predictions.schema_version == 1:
+        return {}
+
+    output_manifests: OutputManifestIndex = {}
+    for system_key, ref in sorted(predictions.output_manifest_artifacts.items()):
+        path = _resolve_path(dataset_path, ref)
+        if not path.is_file():
+            raise ValueError(f"prediction_output_manifest_artifact_not_found:{system_key}")
+        if _file_hash(path) != ref.sha256:
+            raise ValueError(f"prediction_output_manifest_artifact_hash_mismatch:{system_key}")
+        output_manifests[system_key] = TaxonomyManifest.model_validate_json(path.read_text(encoding="utf-8"))
+    _validate_prediction_output_manifests(
+        dataset=dataset,
+        predictions=predictions,
+        output_manifests=output_manifests,
+    )
+    return output_manifests
 
 
 def validate_evaluation_artifact_hashes(
@@ -142,6 +266,7 @@ def load_evaluation_inputs(
     TaxonomyDatasetManifest,
     TaxonomyGoldSet,
     TaxonomyPredictionSet,
+    OutputManifestIndex,
     TaxonomyTransformationSet,
     RequirementUnitIndex,
     TaxonomyFrozenPolicy,
@@ -153,10 +278,15 @@ def load_evaluation_inputs(
     transformation_path = _resolve_path(dataset_path, dataset.transformation_artifact)
     gold = TaxonomyGoldSet.model_validate_json(gold_path.read_text(encoding="utf-8"))
     predictions = TaxonomyPredictionSet.model_validate_json(prediction_path.read_text(encoding="utf-8"))
+    output_manifests = load_prediction_output_manifests(
+        dataset=dataset,
+        dataset_path=dataset_path,
+        predictions=predictions,
+    )
     transformations = TaxonomyTransformationSet.model_validate_json(transformation_path.read_text(encoding="utf-8"))
     requirement_units = load_requirement_unit_index(dataset=dataset, manifest_path=dataset_path)
     frozen_policy = TaxonomyFrozenPolicy.model_validate_json(policy_path.read_text(encoding="utf-8"))
-    return dataset, gold, predictions, transformations, requirement_units, frozen_policy
+    return dataset, gold, predictions, output_manifests, transformations, requirement_units, frozen_policy
 
 
 def _validate_transformations(
@@ -205,6 +335,7 @@ def _validate_record_references(
     predictions: TaxonomyPredictionSet,
     requirement_units: RequirementUnitIndex,
     require_complete_corpus: bool = True,
+    allow_post_prediction_gold_review: bool = False,
 ) -> None:
     if gold.corpus_id != dataset.corpus_id:
         raise ValueError("gold_corpus_mismatch")
@@ -214,7 +345,7 @@ def _validate_record_references(
         raise ValueError("prediction_dataset_mismatch")
     if dataset.created_at > gold.reviewed_at:
         raise ValueError("gold_review_precedes_dataset_freeze")
-    if gold.reviewed_at > predictions.generated_at:
+    if gold.reviewed_at > predictions.generated_at and not allow_post_prediction_gold_review:
         raise ValueError("prediction_precedes_gold_freeze")
 
     documents = {item.document_key: item for item in dataset.documents}
@@ -339,6 +470,7 @@ def calibrate_resolution_policy(
     calibrated_at: datetime,
     minimum_precision: float,
     minimum_auto_decisions: int = 1,
+    allow_post_prediction_gold_review: bool = False,
 ) -> TaxonomyFrozenPolicy:
     """只用 dev 的原始 top-1 score/margin 冻结阈值，最大化满足精度门的覆盖。"""
 
@@ -358,6 +490,7 @@ def calibrate_resolution_policy(
         predictions=predictions,
         requirement_units=requirement_units,
         require_complete_corpus=True,
+        allow_post_prediction_gold_review=allow_post_prediction_gold_review,
     )
     if predictions.policy_hash != base_policy.canonical_hash:
         raise ValueError("calibration_base_policy_mismatch")
@@ -369,7 +502,11 @@ def calibrate_resolution_policy(
         raise ValueError("calibration_precedes_predictions")
 
     gold_by_id = {item.record_id: item for item in gold.records}
-    extra_prediction_ids = {item.record_id for item in predictions.records} - set(gold_by_id)
+    prediction_ids = {item.record_id for item in predictions.records}
+    missing_prediction_ids = set(gold_by_id) - prediction_ids
+    if missing_prediction_ids:
+        raise ValueError("calibration_prediction_coverage_missing")
+    extra_prediction_ids = prediction_ids - set(gold_by_id)
     if extra_prediction_ids:
         raise ValueError("calibration_prediction_without_gold")
     candidate_predictions = [item for item in predictions.records if item.outcome == "candidate"]
@@ -621,23 +758,32 @@ def _structural_metrics(
     *,
     system_key: str,
     predictions: TaxonomyPredictionSet,
+    output_manifests: Mapping[str, TaxonomyManifest],
 ) -> tuple[float, list[str]]:
-    proposed = [item for item in predictions.proposed_nodes if item.system_key == system_key]
-    known = [item for item in predictions.known_nodes if item.system_key == system_key]
+    manifest = output_manifests.get(system_key)
+    nodes: list[tuple[str, str, str | None]]
+    if manifest is not None:
+        nodes = [(item.stable_key, str(item.node_type), item.parent_stable_key) for item in manifest.nodes]
+    else:
+        nodes = [
+            (item.stable_key, str(item.node_type), item.parent_stable_key)
+            for item in predictions.known_nodes
+            if item.system_key == system_key
+        ] + [
+            (item.stable_key, str(item.node_type), item.parent_stable_key)
+            for item in predictions.proposed_nodes
+            if item.system_key == system_key
+        ]
     violations: list[str] = []
-    proposed_keys = [item.stable_key for item in proposed]
-    known_keys = {item.stable_key for item in known}
-    all_keys = set(proposed_keys) | known_keys
+    stable_keys = [stable_key for stable_key, _, _ in nodes]
+    all_keys = set(stable_keys)
 
-    if len(proposed_keys) != len(set(proposed_keys)) or set(proposed_keys) & known_keys:
+    if len(stable_keys) != len(all_keys):
         violations.append("duplicate_stable_key")
-    if any(item.parent_stable_key and item.parent_stable_key not in all_keys for item in proposed) or any(
-        item.parent_stable_key and item.parent_stable_key not in all_keys for item in known
-    ):
+    if any(parent_stable_key and parent_stable_key not in all_keys for _, _, parent_stable_key in nodes):
         violations.append("parent_missing")
 
-    parent_by_key = {item.stable_key: item.parent_stable_key for item in known}
-    parent_by_key.update({item.stable_key: item.parent_stable_key for item in proposed})
+    parent_by_key = {stable_key: parent_stable_key for stable_key, _, parent_stable_key in nodes}
     for start in parent_by_key:
         seen: set[str] = set()
         current: str | None = start
@@ -650,15 +796,10 @@ def _structural_metrics(
         if "parent_cycle" in violations:
             break
 
-    type_by_key = {item.stable_key: item.node_type for item in known}
-    type_by_key.update({item.stable_key: item.node_type for item in proposed})
-    proposed_capability_child = any(
-        item.parent_stable_key and type_by_key.get(item.parent_stable_key) == "capability" for item in proposed
-    )
-    known_capability_child = any(
-        item.parent_stable_key and type_by_key.get(item.parent_stable_key) == "capability" for item in known
-    )
-    if proposed_capability_child or known_capability_child:
+    type_by_key = {stable_key: node_type for stable_key, node_type, _ in nodes}
+    if any(
+        parent_stable_key and type_by_key.get(parent_stable_key) == "capability" for _, _, parent_stable_key in nodes
+    ):
         violations.append("capability_has_child")
 
     checks = 4
@@ -731,6 +872,7 @@ def _evaluate_system(
     gold_nodes: list[TaxonomyGoldNode],
     predictions_by_id: dict[str, TaxonomyPredictionRecord],
     predictions: TaxonomyPredictionSet,
+    output_manifests: Mapping[str, TaxonomyManifest],
     policy: TaxonomyResolutionPolicy,
     gate: TaxonomyEvaluationGate,
     independent_gold: bool,
@@ -831,6 +973,7 @@ def _evaluate_system(
     structural_rate, structural_violations = _structural_metrics(
         system_key=system_key,
         predictions=predictions,
+        output_manifests=output_manifests,
     )
     stability_rate, stability_by_variant = _stability_metrics(
         records=records,
@@ -956,6 +1099,7 @@ def evaluate_taxonomy_generalization(
     dataset: TaxonomyDatasetManifest,
     gold: TaxonomyGoldSet,
     predictions: TaxonomyPredictionSet,
+    output_manifests: Mapping[str, TaxonomyManifest] | None = None,
     requirement_units: RequirementUnitIndex,
     transformations: TaxonomyTransformationSet | None = None,
     frozen_policy: TaxonomyFrozenPolicy,
@@ -969,6 +1113,14 @@ def evaluate_taxonomy_generalization(
         raise ValueError("evaluation_time_timezone_required")
     if now < predictions.generated_at:
         raise ValueError("evaluation_precedes_predictions")
+    if predictions.schema_version == 2 and output_manifests is None:
+        raise ValueError("prediction_output_manifests_not_verified")
+    verified_output_manifests = output_manifests or {}
+    _validate_prediction_output_manifests(
+        dataset=dataset,
+        predictions=predictions,
+        output_manifests=verified_output_manifests,
+    )
     _validate_record_references(
         dataset=dataset,
         gold=gold,
@@ -983,7 +1135,13 @@ def evaluate_taxonomy_generalization(
             transformations=transformations,
             requirement_units=requirement_units,
         )
-    if frozen_policy.calibration_dataset_hash != dataset.dataset_hash:
+    if dataset.schema_version == 2 and dataset.evaluation_split == "test":
+        upstream_hashes = dataset.upstream_artifact_hashes or {}
+        if upstream_hashes.get("calibration_dataset") != frozen_policy.calibration_dataset_hash:
+            raise ValueError("test_dataset_calibration_binding_mismatch")
+        if upstream_hashes.get("frozen_policy") != frozen_policy.canonical_hash:
+            raise ValueError("test_dataset_frozen_policy_binding_mismatch")
+    elif frozen_policy.calibration_dataset_hash != dataset.dataset_hash:
         raise ValueError("frozen_policy_dataset_mismatch")
     if frozen_policy.calibrated_at < dataset.created_at:
         raise ValueError("policy_freeze_precedes_dataset")
@@ -1029,11 +1187,20 @@ def evaluate_taxonomy_generalization(
             gold_nodes=gold.expected_nodes,
             predictions_by_id=predictions_by_id,
             predictions=predictions,
+            output_manifests=verified_output_manifests,
             policy=frozen_policy.policy,
             gate=gate,
             independent_gold=gold.review_method == "human_independent",
             independent_calibration_gold=(frozen_policy.calibration_gold_review_method == "human_independent"),
         )
+        if predictions.schema_version == 1:
+            findings = [*system_result.gate_findings, "prediction_contract_v2_required"]
+            system_result = system_result.model_copy(
+                update={
+                    "gate_status": "fail" if system_result.gate_status == "fail" else "incomplete",
+                    "gate_findings": findings,
+                }
+            )
         system_results.append(system_result)
         decisions.extend(system_decisions)
         errors.extend(system_errors)
@@ -1065,7 +1232,11 @@ def evaluate_taxonomy_generalization(
         errors=errors,
         abstentions=abstentions,
         tree_diff=predictions.tree_diff,
-        total_cost_usd=sum(item.cost_usd for item in predictions.records),
+        total_cost_usd=(
+            sum(item.cost_usd for item in predictions.records if item.cost_usd is not None)
+            if all(item.cost_usd is not None for item in predictions.records)
+            else None
+        ),
         total_latency_ms=sum(item.latency_ms for item in predictions.records),
     )
 
@@ -1090,7 +1261,11 @@ def render_taxonomy_evaluation_report(result: TaxonomyEvaluationResult) -> str:
         f"- Gate hash: `{result.gate_hash}`",
         f"- Gold review: `{result.gold_review_method}`",
         f"- Calibration gold review: `{result.calibration_gold_review_method}`",
-        f"- Cost: `${result.total_cost_usd:.6f}`",
+        (
+            f"- Cost: `${result.total_cost_usd:.6f}`"
+            if result.total_cost_usd is not None
+            else "- Cost: `unknown`（网关未返回可归因价格，不能按 0 美元解释）"
+        ),
         f"- Latency sum: `{result.total_latency_ms} ms`",
         "",
     ]
@@ -1171,50 +1346,55 @@ def write_taxonomy_evaluation_artifacts(
     result: TaxonomyEvaluationResult,
     predictions: TaxonomyPredictionSet,
 ) -> None:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _write_json(output_dir / "predictions.json", predictions.model_dump(mode="json"))
-    _write_json(output_dir / "errors.json", result.errors)
-    _write_json(output_dir / "abstentions.json", result.abstentions)
-    _write_json(output_dir / "tree-diff.json", result.tree_diff)
-    _write_json(
-        output_dir / "metrics.json",
-        {
-            "run_id": result.run_id,
-            "evaluation_hash": result.canonical_hash,
-            "overall_status": result.overall_status,
-            "aggregate_metrics": None,
-            "dataset_hash": result.dataset_hash,
-            "gold_hash": result.gold_hash,
-            "prediction_hash": result.prediction_hash,
-            "policy_hash": result.policy_hash,
-            "frozen_policy_hash": result.frozen_policy_hash,
-            "gate_hash": result.gate_hash,
-            "gold_review_method": result.gold_review_method,
-            "calibration_gold_review_method": result.calibration_gold_review_method,
-            "output_manifest_hashes": dict(sorted(result.output_manifest_hashes.items())),
-            "systems": [item.model_dump(mode="json") for item in result.system_results],
-        },
-    )
-    _write_json(
-        output_dir / "cost-latency.json",
-        {
-            "run_id": result.run_id,
-            "total_cost_usd": result.total_cost_usd,
-            "total_latency_ms": result.total_latency_ms,
-        },
-    )
-    report_path = output_dir / "REPORT.md"
-    temporary = report_path.with_suffix(".md.tmp")
-    temporary.write_text(render_taxonomy_evaluation_report(result), encoding="utf-8")
-    temporary.replace(report_path)
-    for system in result.system_results:
-        system_dir = output_dir / "systems" / system.system_key / system.split
-        system_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(system_dir / "metrics.json", system.model_dump(mode="json"))
-        system_report = system_dir / "REPORT.md"
-        system_temporary = system_report.with_suffix(".md.tmp")
-        system_temporary.write_text(_render_system_report(result, system), encoding="utf-8")
-        system_temporary.replace(system_report)
+    output_dir.parent.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(exist_ok=False)
+    try:
+        _write_json(output_dir / "predictions.json", predictions.model_dump(mode="json"))
+        _write_json(output_dir / "errors.json", result.errors)
+        _write_json(output_dir / "abstentions.json", result.abstentions)
+        _write_json(output_dir / "tree-diff.json", result.tree_diff)
+        _write_json(
+            output_dir / "metrics.json",
+            {
+                "run_id": result.run_id,
+                "evaluation_hash": result.canonical_hash,
+                "overall_status": result.overall_status,
+                "aggregate_metrics": None,
+                "dataset_hash": result.dataset_hash,
+                "gold_hash": result.gold_hash,
+                "prediction_hash": result.prediction_hash,
+                "policy_hash": result.policy_hash,
+                "frozen_policy_hash": result.frozen_policy_hash,
+                "gate_hash": result.gate_hash,
+                "gold_review_method": result.gold_review_method,
+                "calibration_gold_review_method": result.calibration_gold_review_method,
+                "output_manifest_hashes": dict(sorted(result.output_manifest_hashes.items())),
+                "systems": [item.model_dump(mode="json") for item in result.system_results],
+            },
+        )
+        _write_json(
+            output_dir / "cost-latency.json",
+            {
+                "run_id": result.run_id,
+                "total_cost_usd": result.total_cost_usd,
+                "total_latency_ms": result.total_latency_ms,
+            },
+        )
+        report_path = output_dir / "REPORT.md"
+        temporary = report_path.with_suffix(".md.tmp")
+        temporary.write_text(render_taxonomy_evaluation_report(result), encoding="utf-8")
+        temporary.replace(report_path)
+        for system in result.system_results:
+            system_dir = output_dir / "systems" / system.system_key / system.split
+            system_dir.mkdir(parents=True, exist_ok=False)
+            _write_json(system_dir / "metrics.json", system.model_dump(mode="json"))
+            system_report = system_dir / "REPORT.md"
+            system_temporary = system_report.with_suffix(".md.tmp")
+            system_temporary.write_text(_render_system_report(result, system), encoding="utf-8")
+            system_temporary.replace(system_report)
+    except BaseException:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
 
 
 def _node_summary(node: TaxonomyNodeManifest) -> TaxonomyCalibrationNodeSummary:
