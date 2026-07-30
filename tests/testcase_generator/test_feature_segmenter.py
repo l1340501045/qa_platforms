@@ -52,12 +52,7 @@ def test_deep_children_unlabeled_fold():
 
 def test_sibling_container_does_not_steal_children():
     """同级 container 后的漏标子标题不应折叠进上一个 feature_root。"""
-    doc = (
-        "# 文档\n\n"
-        "### 书籍搜索\n搜索规格\n\n"
-        "### 交互说明\n交互概述\n\n"
-        "#### 弹窗规则\n弹窗逻辑\n"
-    )
+    doc = "# 文档\n\n### 书籍搜索\n搜索规格\n\n### 交互说明\n交互概述\n\n#### 弹窗规则\n弹窗逻辑\n"
     # 书籍搜索=feature_root, 交互说明=container(同级), 弹窗规则=漏标
     roles = {0: "container", 1: "feature_root", 2: "container", 3: ""}
     secs = _extract_sections(_R(doc), "prd", roles=roles)
@@ -131,6 +126,22 @@ async def test_segmenter_fallback_on_error():
 
 
 @pytest.mark.asyncio
+async def test_segmenter_strict_mode_fails_closed_on_model_error():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(side_effect=TimeoutError("gateway timeout"))
+
+    with (
+        patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client),
+        pytest.raises(fseg.FeatureSegmentationError, match="feature_segmentation_model_failed:TimeoutError"),
+    ):
+        await fseg.decide_feature_roles("真实 PRD 标题", [(2, "功能A", "规格")], strict=True)
+
+
+@pytest.mark.asyncio
 async def test_segmenter_empty_triples():
     """空 triples 直接返回 {}，不调用 LLM。"""
     from src.testcase_generator.stages.parse import feature_segmenter as fseg
@@ -160,6 +171,27 @@ async def test_segmenter_no_feature_root_returns_empty():
     with patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client):
         roles = await fseg.decide_feature_roles("DOC", triples)
     assert roles == {}
+
+
+@pytest.mark.asyncio
+async def test_segmenter_strict_mode_rejects_partial_outline_classification():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from src.testcase_generator.stages.parse import feature_segmenter as fseg
+
+    triples = [(1, "功能方案", ""), (2, "商品同步", "规格")]
+
+    class _Out:
+        classifications = [type("C", (), {"idx": 1, "role": "feature_root"})()]
+
+    mock_client = MagicMock()
+    mock_client.generate_structured = AsyncMock(return_value=_Out())
+
+    with (
+        patch("src.testcase_generator.stages.parse.feature_segmenter.get_llm_client", return_value=mock_client),
+        pytest.raises(fseg.FeatureSegmentationError, match="feature_segmentation_invalid_coverage"),
+    ):
+        await fseg.decide_feature_roles("真实 PRD 标题", triples, strict=True)
 
 
 @pytest.mark.asyncio

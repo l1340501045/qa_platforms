@@ -10,6 +10,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from src.testcase_generator.schemas.requirement_unit import RequirementUnitId
+
 StableKey = Annotated[str, Field(pattern=r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$", max_length=160)]
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
@@ -60,6 +62,18 @@ class TaxonomySelectorFacts(BaseModel):
         return self
 
 
+class TaxonomyExample(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    text: str = Field(min_length=1)
+    document_content_hash: Sha256
+    requirement_unit_id: RequirementUnitId
+
+    @property
+    def identity(self) -> tuple[str, str]:
+        return self.document_content_hash, self.requirement_unit_id
+
+
 class TaxonomyNodeManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -71,6 +85,10 @@ class TaxonomyNodeManifest(BaseModel):
     sort_order: int = Field(default=0, ge=0)
     node_status: Literal["active", "deprecated", "merged"] = "active"
     replacement_stable_key: StableKey | None = None
+    definition: str | None = Field(default=None, min_length=1)
+    scope_note: str | None = Field(default=None, min_length=1)
+    in_scope_examples: list[TaxonomyExample] | None = None
+    out_of_scope_examples: list[TaxonomyExample] | None = None
 
     @model_validator(mode="after")
     def validate_status(self) -> TaxonomyNodeManifest:
@@ -82,6 +100,16 @@ class TaxonomyNodeManifest(BaseModel):
             raise ValueError("duplicate_alias")
         if any(not alias.strip() for alias in self.aliases):
             raise ValueError("empty_alias")
+        in_scope = self.in_scope_examples or []
+        out_of_scope = self.out_of_scope_examples or []
+        in_scope_identities = [example.identity for example in in_scope]
+        out_of_scope_identities = [example.identity for example in out_of_scope]
+        if len(in_scope_identities) != len(set(in_scope_identities)):
+            raise ValueError("duplicate_in_scope_example")
+        if len(out_of_scope_identities) != len(set(out_of_scope_identities)):
+            raise ValueError("duplicate_out_of_scope_example")
+        if set(in_scope_identities) & set(out_of_scope_identities):
+            raise ValueError("scope_example_conflict")
         return self
 
 
@@ -141,7 +169,7 @@ class TaxonomyMappingManifest(BaseModel):
 class TaxonomyManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
-    schema_version: Literal[1]
+    schema_version: Literal[1, 2]
     system_id: UUID
     version: int = Field(ge=1)
     change_note: str = Field(min_length=1)
@@ -154,6 +182,24 @@ class TaxonomyManifest(BaseModel):
         nodes_by_key = {node.stable_key: node for node in self.nodes}
         if len(nodes_by_key) != len(self.nodes):
             raise ValueError("duplicate_stable_key")
+
+        for node in self.nodes:
+            semantic_fields = (
+                node.definition,
+                node.scope_note,
+                node.in_scope_examples,
+                node.out_of_scope_examples,
+            )
+            if self.schema_version == 1:
+                if any(value is not None for value in semantic_fields):
+                    raise ValueError("v1_semantics_forbidden")
+                continue
+            if node.definition is None:
+                raise ValueError(f"v2_node_definition_required:{node.stable_key}")
+            if node.scope_note is None:
+                raise ValueError(f"v2_node_scope_note_required:{node.stable_key}")
+            if node.node_type == "capability" and node.node_status == "active" and not node.in_scope_examples:
+                raise ValueError(f"v2_active_capability_in_scope_evidence_required:{node.stable_key}")
 
         self._validate_relation(nodes_by_key, "parent_stable_key", "parent")
         self._validate_relation(nodes_by_key, "replacement_stable_key", "replacement")

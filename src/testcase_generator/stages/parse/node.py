@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
+from typing import NotRequired, TypedDict
 from uuid import UUID
 
 from src.knowledge_base.schemas.common import RetrievalContext, SearchResult
@@ -31,6 +32,7 @@ from src.testcase_generator.stages.parse.section_classifier import classify_sect
 from src.testcase_generator.stages.parse.source_registry import SourceRegistry
 
 logger = logging.getLogger(__name__)
+TAXONOMY_SOURCE_INVENTORY_REVISION = "markdown-heading-inventory-v1"
 
 # DocType → trust_level 映射
 _DOC_TYPE_TRUST: dict[str, int] = {
@@ -44,7 +46,13 @@ _DOC_TYPE_TRUST: dict[str, int] = {
 }
 
 
-async def parse_node(state: PipelineState) -> dict:
+class _SectionAccumulator(TypedDict):
+    heading: str
+    content: str
+    level: NotRequired[int]
+
+
+async def parse_node(state: PipelineState) -> dict[str, object]:
     """Stage 1: 解析需求文档 + 关联文档，构建结构化上下文
 
     流程：
@@ -80,11 +88,21 @@ async def parse_node(state: PipelineState) -> dict:
         if is_seed and doc_type == DocType.OTHER:
             doc_type = DocType.PRD
         trust_level = _DOC_TYPE_TRUST.get(doc_type, 3)
-        roles = None
-        if settings.feature_seg_llm_enabled and is_seed:
-            # roles 下标 == _parse_triples(同一 content_snippet) 的下标（不变量）
-            roles = await decide_feature_roles(result.title, _parse_triples(result.content_snippet))
-        sections = _extract_sections(result, doc_type, roles=roles or None)
+        if is_seed:
+            sections = await extract_seed_document_sections(
+                document_id=result.document_id,
+                title=result.title,
+                content=result.content_snippet,
+                doc_type=doc_type,
+                semantic_segmentation=settings.feature_seg_llm_enabled,
+            )
+        else:
+            sections = extract_document_sections(
+                document_id=result.document_id,
+                title=result.title,
+                content=result.content_snippet,
+                doc_type=doc_type,
+            )
 
         registry.register_source(
             doc_id=result.document_id,
@@ -238,7 +256,7 @@ def _second_level_cohesive(triples: list[tuple[int, str, str]]) -> bool:
             term_sets.append(terms)
     if len(term_sets) < 3:
         return False
-    counter: Counter = Counter()
+    counter: Counter[str] = Counter()
     for terms in term_sets:
         counter.update(terms)
     # 出现在「绝大多数」(≥ n-1)二级章节中的判别性术语视为共享核心术语
@@ -282,6 +300,110 @@ def _parse_triples(content: str) -> list[tuple[int, str, str]]:
     return triples
 
 
+def extract_document_inventory_sections(
+    *,
+    document_id: UUID,
+    title: str,
+    content: str,
+    doc_type: str,
+) -> list[SectionExtract]:
+    """建立 taxonomy 源分母；每段正文恰好出现一次，不经过 LLM 或 meta 丢弃规则。"""
+
+    del document_id  # 身份由调用方单独绑定；这里保持与其他 section adapter 一致的签名。
+    if not content:
+        return []
+    matches = list(re.finditer(r"(?m)^(#{1,6})\s+(.+?)\s*$", content))
+    if not matches:
+        return [
+            SectionExtract(
+                heading=title,
+                content=content.strip(),
+                source_ref=f"{doc_type}:{title}",
+            )
+        ]
+
+    sections: list[SectionExtract] = []
+    occurrences: dict[str, int] = {}
+
+    def append_section(*, heading: str, body: str) -> None:
+        base_ref = f"{doc_type}:{title} §{heading}"
+        occurrence = occurrences.get(base_ref, 0) + 1
+        occurrences[base_ref] = occurrence
+        source_ref = base_ref if occurrence == 1 else f"{base_ref} [occurrence {occurrence}]"
+        sections.append(
+            SectionExtract(
+                heading=heading,
+                content=body.strip(),
+                source_ref=source_ref,
+            )
+        )
+
+    preamble = content[: matches[0].start()].strip()
+    if preamble:
+        append_section(heading=f"{title}（标题前正文）", body=preamble)
+
+    heading_stack: list[tuple[int, str]] = []
+    for index, match in enumerate(matches):
+        level = len(match.group(1))
+        heading = match.group(2).strip()
+        while heading_stack and heading_stack[-1][0] >= level:
+            heading_stack.pop()
+        heading_stack.append((level, heading))
+        heading_path = " › ".join(item[1] for item in heading_stack)
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
+        append_section(heading=heading_path, body=content[match.end() : end])
+
+    return sections
+
+
+def extract_document_sections(
+    *,
+    document_id: UUID,
+    title: str,
+    content: str,
+    doc_type: str,
+    roles: dict[int, str] | None = None,
+) -> list[SectionExtract]:
+    """供生产 parse 与离线 pilot 共用同一 Markdown 分段规则。"""
+
+    return _extract_sections(
+        SearchResult(
+            document_id=document_id,
+            title=title,
+            content_snippet=content,
+            score=1.0,
+            source="seed",
+            depth=0,
+        ),
+        doc_type,
+        roles=roles,
+    )
+
+
+async def extract_seed_document_sections(
+    *,
+    document_id: UUID,
+    title: str,
+    content: str,
+    doc_type: str,
+    semantic_segmentation: bool,
+    strict: bool = False,
+) -> list[SectionExtract]:
+    """复用生产 seed 文档的可选语义大纲切分；pilot 严格模式禁止静默回退。"""
+
+    roles = None
+    if semantic_segmentation:
+        # roles 下标必须与同一份 content 的 triples 下标一致。
+        roles = await decide_feature_roles(title, _parse_triples(content), strict=strict)
+    return extract_document_sections(
+        document_id=document_id,
+        title=title,
+        content=content,
+        doc_type=doc_type,
+        roles=roles or None,
+    )
+
+
 def _extract_sections(
     result: SearchResult, doc_type: str, *, roles: dict[int, str] | None = None
 ) -> list[SectionExtract]:
@@ -310,10 +432,10 @@ def _extract_sections(
         ]
 
     sections: list[SectionExtract] = []
-    current: dict | None = None
+    current: _SectionAccumulator | None = None
     skip_below_level: int | None = None
 
-    def _flush():
+    def _flush() -> None:
         nonlocal current
         if current and current["content"].strip():
             sections.append(

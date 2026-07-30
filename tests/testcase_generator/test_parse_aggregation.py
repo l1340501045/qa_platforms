@@ -6,9 +6,15 @@ AI 理解不准、用例质量下降；（2）对"变更日志"等非功能段�
 聚合后：以二级标题为模块粒度、深层折叠进父模块、元信息整树丢弃。
 """
 
-from src.knowledge_base.schemas.common import SearchResult
-from src.testcase_generator.stages.parse.node import _extract_sections
 from uuid import uuid4
+
+from src.knowledge_base.schemas.common import SearchResult
+from src.testcase_generator.stages.parse.node import (
+    _extract_sections,
+    extract_document_inventory_sections,
+    extract_document_sections,
+    extract_seed_document_sections,
+)
 
 
 def _result(md: str) -> SearchResult:
@@ -77,6 +83,92 @@ def test_no_heading_falls_back_to_whole_content():
     sections = _extract_sections(_result("纯文本无标题的需求描述"), doc_type="prd")
     assert len(sections) == 1
     assert "纯文本" in sections[0].content
+
+
+def test_public_pilot_adapter_uses_the_same_section_boundaries():
+    source = _result(MD)
+
+    production_sections = _extract_sections(source, doc_type="prd")
+    pilot_sections = extract_document_sections(
+        document_id=source.document_id,
+        title=source.title,
+        content=source.content_snippet,
+        doc_type="prd",
+    )
+
+    assert pilot_sections == production_sections
+
+
+async def test_seed_adapter_uses_real_title_and_same_semantic_segmentation(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def fake_roles(title, triples, *, strict=False):
+        captured.update(title=title, triples=triples, strict=strict)
+        return {0: "container", 1: "feature_root"}
+
+    monkeypatch.setattr("src.testcase_generator.stages.parse.node.decide_feature_roles", fake_roles)
+    content = "# 功能方案\n\n## 商品同步\n每天同步上游商品。\n"
+
+    sections = await extract_seed_document_sections(
+        document_id=uuid4(),
+        title="分销系统 v1.2 新增结算单功能",
+        content=content,
+        doc_type="prd",
+        semantic_segmentation=True,
+        strict=True,
+    )
+
+    assert captured["title"] == "分销系统 v1.2 新增结算单功能"
+    assert captured["strict"] is True
+    assert [section.heading for section in sections] == ["商品同步"]
+
+
+def test_taxonomy_inventory_covers_every_markdown_body_without_semantic_dropping():
+    content = """封面前言也需要进入分母。
+
+# 文档标题
+总说明。
+
+## 版本记录
+元信息内容。
+
+## 商品管理
+商品列表展示同步数据。
+
+### 商品下架
+下架后展示下架状态。
+"""
+
+    sections = extract_document_inventory_sections(
+        document_id=uuid4(),
+        title="商品 PRD",
+        content=content,
+        doc_type="prd",
+    )
+
+    assert [section.heading for section in sections] == [
+        "商品 PRD（标题前正文）",
+        "文档标题",
+        "文档标题 › 版本记录",
+        "文档标题 › 商品管理",
+        "文档标题 › 商品管理 › 商品下架",
+    ]
+    assert "元信息内容" in sections[2].content
+    assert "下架后展示下架状态" in sections[-1].content
+    assert len({section.source_ref for section in sections}) == len(sections)
+
+
+def test_taxonomy_inventory_disambiguates_duplicate_heading_paths():
+    sections = extract_document_inventory_sections(
+        document_id=uuid4(),
+        title="重复标题 PRD",
+        content="# 文档\n\n## 规则\n第一条。\n\n## 规则\n第二条。",
+        doc_type="prd",
+    )
+
+    duplicate_refs = [section.source_ref for section in sections if section.heading.endswith("规则")]
+    assert len(duplicate_refs) == 2
+    assert duplicate_refs[0] != duplicate_refs[1]
 
 
 # ── 根因1：补全 meta 关键词 ────────────────────────────────────────────────────

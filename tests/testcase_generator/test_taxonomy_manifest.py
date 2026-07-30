@@ -58,6 +58,38 @@ def _manifest_data() -> dict:
     }
 
 
+def _v2_manifest_data() -> dict:
+    data = _manifest_data()
+    data["schema_version"] = 2
+    data["nodes"][0].update(
+        {
+            "definition": "管理投放过程中可复用的素材资产。",
+            "scope_note": "包含素材查询与管理，不包含广告投放执行。",
+        }
+    )
+    data["nodes"][1].update(
+        {
+            "definition": "按业务条件筛选素材，并按支持的字段调整结果顺序。",
+            "scope_note": "包含筛选和排序，不包含素材上传与删除。",
+            "in_scope_examples": [
+                {
+                    "text": "列表支持按创建时间排序。",
+                    "document_content_hash": CONTENT_HASH,
+                    "requirement_unit_id": f"ru_{'1' * 64}",
+                }
+            ],
+            "out_of_scope_examples": [
+                {
+                    "text": "上传一个新素材。",
+                    "document_content_hash": CONTENT_HASH,
+                    "requirement_unit_id": f"ru_{'2' * 64}",
+                }
+            ],
+        }
+    )
+    return data
+
+
 def test_manifest_hash_is_independent_of_node_and_mapping_order() -> None:
     first = TaxonomyManifest.model_validate(_manifest_data())
     reordered_data = _manifest_data()
@@ -66,6 +98,68 @@ def test_manifest_hash_is_independent_of_node_and_mapping_order() -> None:
     second = TaxonomyManifest.model_validate(reordered_data)
 
     assert manifest_hash(first) == manifest_hash(second)
+
+
+def test_v1_manifest_remains_v1_without_implicit_semantic_defaults() -> None:
+    manifest = TaxonomyManifest.model_validate(_manifest_data())
+
+    payload = manifest.model_dump(mode="json", exclude_none=True)
+
+    assert payload["schema_version"] == 1
+    assert "definition" not in payload["nodes"][0]
+    assert "scope_note" not in payload["nodes"][0]
+    assert "in_scope_examples" not in payload["nodes"][0]
+    assert "out_of_scope_examples" not in payload["nodes"][0]
+
+
+def test_v1_manifest_rejects_v2_semantics_without_explicit_version_upgrade() -> None:
+    data = _manifest_data()
+    data["nodes"][0]["definition"] = "不应静默升级"
+
+    with pytest.raises(ValidationError, match="v1_semantics_forbidden"):
+        TaxonomyManifest.model_validate(data)
+
+
+@pytest.mark.parametrize("missing_field", ["definition", "scope_note"])
+def test_v2_manifest_requires_node_definition_and_scope(missing_field: str) -> None:
+    data = _v2_manifest_data()
+    data["nodes"][0].pop(missing_field)
+
+    with pytest.raises(ValidationError, match=f"v2_node_{missing_field}_required"):
+        TaxonomyManifest.model_validate(data)
+
+
+def test_v2_manifest_requires_grounded_evidence_for_active_capability() -> None:
+    data = _v2_manifest_data()
+    data["nodes"][1]["in_scope_examples"] = []
+
+    with pytest.raises(ValidationError, match="v2_active_capability_in_scope_evidence_required"):
+        TaxonomyManifest.model_validate(data)
+
+
+def test_v2_manifest_rejects_same_evidence_as_in_and_out_of_scope() -> None:
+    data = _v2_manifest_data()
+    data["nodes"][1]["out_of_scope_examples"] = deepcopy(data["nodes"][1]["in_scope_examples"])
+
+    with pytest.raises(ValidationError, match="scope_example_conflict"):
+        TaxonomyManifest.model_validate(data)
+
+
+def test_v2_manifest_hash_uses_set_semantics_for_scope_examples() -> None:
+    first_data = _v2_manifest_data()
+    first_data["nodes"][1]["in_scope_examples"].append(
+        {
+            "text": "筛选条件支持重置。",
+            "document_content_hash": CONTENT_HASH,
+            "requirement_unit_id": f"ru_{'3' * 64}",
+        }
+    )
+    second_data = deepcopy(first_data)
+    second_data["nodes"][1]["in_scope_examples"].reverse()
+
+    assert manifest_hash(TaxonomyManifest.model_validate(first_data)) == manifest_hash(
+        TaxonomyManifest.model_validate(second_data)
+    )
 
 
 def test_manifest_hash_uses_set_semantics_for_aliases_and_related_concepts() -> None:

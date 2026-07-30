@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import List
+from typing import List, TypeVar
 
 from pydantic import BaseModel, Field
 
@@ -68,14 +68,21 @@ class _ClassifyOutput(BaseModel):
     classifications: List[_SectionKindOut] = Field(description="每个章节的分类")
 
 
-def _split(items: list, size: int) -> list[list]:
+class SectionClassificationError(RuntimeError):
+    """严格离线评估中章节分类失败；不携带供应商响应正文。"""
+
+
+_T = TypeVar("_T")
+
+
+def _split(items: list[_T], size: int) -> list[list[_T]]:
     if len(items) <= size:
         return [items] if items else []
     return [items[i : i + size] for i in range(0, len(items), size)]
 
 
-async def classify_sections(sources: list[SourceItem]) -> None:
-    """原地给每个 section 标 section_kind + is_global（按章节批量，失败保留默认 spec / False）。"""
+async def classify_sections(sources: list[SourceItem], *, strict: bool = False) -> None:
+    """原地标章节性质；生产兼容 fail-open，受控 pilot 可选择 fail-closed。"""
     # 收集 (source_ref → section) 引用；source_ref 在批内做键
     all_sections: list[SectionExtract] = []
     for src in sources:
@@ -84,7 +91,10 @@ async def classify_sections(sources: list[SourceItem]) -> None:
         return
 
     by_ref: dict[str, SectionExtract] = {s.source_ref: s for s in all_sections}
+    if strict and len(by_ref) != len(all_sections):
+        raise SectionClassificationError("section_classification_duplicate_source_ref")
     semaphore = asyncio.Semaphore(settings.llm_concurrency)
+    failures: list[tuple[int, str]] = []
 
     async def _classify_batch(batch: list[SectionExtract]) -> None:
         payload = [
@@ -100,7 +110,21 @@ async def classify_sections(sources: list[SourceItem]) -> None:
                     temperature=0.0,
                 )
             except Exception as e:  # noqa: BLE001 — 失败 fail-open 为 spec / is_global=False
-                logger.warning("section 分类失败（保留默认 spec），n=%d: %s", len(batch), e)
+                if strict:
+                    logger.warning("严格 section 分类失败，n=%d type=%s", len(batch), type(e).__name__)
+                    failures.append((len(batch), type(e).__name__))
+                else:
+                    logger.warning("section 分类失败（保留默认 spec），n=%d: %s", len(batch), e)
+                return
+            input_refs = [section.source_ref for section in batch]
+            output_refs = [item.section_ref for item in out.classifications]
+            output_kinds = [item.kind.strip().lower() for item in out.classifications]
+            if strict and (
+                len(output_refs) != len(set(output_refs))
+                or set(output_refs) != set(input_refs)
+                or any(kind not in _VALID_KINDS for kind in output_kinds)
+            ):
+                failures.append((len(batch), "InvalidClassificationCoverage"))
                 return
             for c in out.classifications:
                 sec = by_ref.get(c.section_ref)
@@ -112,6 +136,9 @@ async def classify_sections(sources: list[SourceItem]) -> None:
                 sec.is_global = bool(getattr(c, "is_global", False))
 
     await asyncio.gather(*[_classify_batch(b) for b in _split(all_sections, _BATCH_SIZE)])
+    if failures:
+        failure_types = ",".join(sorted({failure_type for _, failure_type in failures}))
+        raise SectionClassificationError(f"section_classification_failed:batches={len(failures)}:types={failure_types}")
 
     dist: dict[str, int] = {}
     for s in all_sections:

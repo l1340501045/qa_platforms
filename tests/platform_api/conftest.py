@@ -7,12 +7,22 @@ DB 不可达时集成测试自动 skip。
 
 import os
 import socket
+from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5434/qa_platforms")
+_database_url = os.environ.setdefault(
+    "DATABASE_URL",
+    "postgresql+asyncpg://postgres:postgres@localhost:5434/qa_platforms_taxonomy_test",
+)
+_database_name = urlsplit(_database_url).path.rsplit("/", 1)[-1]
+if "test" not in _database_name.lower() and os.environ.get("PLATFORM_API_TEST_ALLOW_NON_TEST_DATABASE") != "1":
+    raise RuntimeError(
+        "platform_api_tests_require_isolated_database:"
+        "数据库名必须包含 test；确需覆盖时显式设置 PLATFORM_API_TEST_ALLOW_NON_TEST_DATABASE=1"
+    )
 
 
 def _db_reachable() -> bool:

@@ -1,6 +1,7 @@
 """功能点切分去死板 — LLM 对标题大纲判角色，定功能点边界（切分通用化）。
 只喂大纲(标题+层级+字数+短预览)，不喂全文。失败 fail-open 返回空 → 调用方回退死规则。
 """
+
 from __future__ import annotations
 
 import json
@@ -43,8 +44,17 @@ class _SegOutput(BaseModel):
     classifications: list[_RoleOut] = Field(description="每个标题的角色")
 
 
-async def decide_feature_roles(doc_title: str, triples: list[tuple[int, str, str]]) -> dict[int, str]:
-    """LLM 对大纲打角色，返回 {idx: role}。失败/未识别出任何 feature_root → 返回 {}（调用方回退死规则）。"""
+class FeatureSegmentationError(RuntimeError):
+    """严格离线评估中的语义切分失败；不携带供应商响应正文。"""
+
+
+async def decide_feature_roles(
+    doc_title: str,
+    triples: list[tuple[int, str, str]],
+    *,
+    strict: bool = False,
+) -> dict[int, str]:
+    """LLM 对大纲打角色；生产可回退，受控评估可选择严格失败。"""
     if not triples:
         return {}
     outline = [
@@ -59,8 +69,21 @@ async def decide_feature_roles(doc_title: str, triples: list[tuple[int, str, str
             temperature=0.0,
         )
     except Exception as e:  # noqa: BLE001
+        if strict:
+            logger.warning("严格功能点切分 LLM 失败: type=%s", type(e).__name__)
+            raise FeatureSegmentationError(f"feature_segmentation_model_failed:{type(e).__name__}") from e
         logger.warning("功能点切分 LLM 失败，回退死规则: %s", e)
         return {}
+
+    indices = [item.idx for item in out.classifications]
+    normalized_roles = [(item.role or "").strip().lower() for item in out.classifications]
+    if strict and (
+        len(indices) != len(set(indices))
+        or set(indices) != set(range(len(triples)))
+        or any(role not in _VALID_ROLES for role in normalized_roles)
+    ):
+        raise FeatureSegmentationError("feature_segmentation_invalid_coverage")
+
     roles: dict[int, str] = {}
     for c in out.classifications:
         role = (c.role or "").strip().lower()
@@ -68,6 +91,8 @@ async def decide_feature_roles(doc_title: str, triples: list[tuple[int, str, str
             roles[c.idx] = role
     if not any(r == "feature_root" for r in roles.values()):
         logger.warning("功能点切分 LLM 未识别出任何 feature_root，回退死规则")
+        if strict:
+            raise FeatureSegmentationError("feature_segmentation_no_feature_root")
         return {}
     missing = [i for i in range(len(triples)) if i not in roles]
     if missing:
