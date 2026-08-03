@@ -124,6 +124,56 @@ def test_classify_named_and_monitoring_sections_before_alias_fallback():
     assert monitoring_cls["branch_path"] == ["本期预置监测链接"]
 
 
+def test_numeric_section_rules_do_not_cross_prd_profiles():
+    event_asset = _record(
+        "TC-novel-event",
+        title="Access-Token 具备完整权限点时事件资产流程正常执行",
+        source_section="prd:产品需求文档：小说批创系统 - 智擎版 v1.43 §7. 功能详细描述",
+        verbatim_excerpt="调用事件资产接口前校验权限点",
+    )
+    unrelated = _record(
+        "TC-novel-bid-type",
+        title="bid_type 传入合法枚举 CUSTOM，接口正常",
+        source_section="prd:产品需求文档：小说批创系统 - 智擎版 v1.43 §7. 功能详细描述",
+        verbatim_excerpt="请求参数使用合法枚举值",
+    )
+
+    event_cls = classify_case_for_audit(event_asset)
+    unrelated_cls = classify_case_for_audit(unrelated)
+
+    assert event_cls["business_module"] == "提交底层与防超限"
+    assert event_cls["classification_reason"].startswith("alias:")
+    assert unrelated_cls["business_module"] == "_review_required"
+
+
+def test_current_prd_monitoring_heading_still_classifies_by_semantics():
+    record = _record(
+        "TC-novel-monitoring",
+        title="已配置状态展示绿色徽章",
+        source_section="prd:产品需求文档：小说批创系统 - 智擎版 v1.43 §7.17 监测链接配置",
+        verbatim_excerpt="已配置的小程序可用于投放",
+    )
+
+    cls = classify_case_for_audit(record)
+
+    assert cls["business_module"] == "监测链接"
+    assert cls["classification_reason"].startswith("alias:")
+
+
+def test_current_prd_section_does_not_reuse_legacy_branch_override():
+    record = _record(
+        "TC-novel-batch-create",
+        title="批量创建按配置顺序完成提交",
+        source_section="prd:产品需求文档：小说批创系统 - 智擎版 v1.43 §7.1.1 入口、目标与操作顺序",
+        verbatim_excerpt="批量创建是智擎版项目提交主入口",
+    )
+
+    cls = classify_case_for_audit(record)
+
+    assert cls["business_module"] == "批量创建广告"
+    assert cls["branch_path"] == ["入口、目标与操作顺序"]
+
+
 def test_cross_cutting_sections_keep_business_module_with_tag():
     field_constraint = _record(
         "TC-field",

@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-MODULE_RULES: list[dict] = [
+LEGACY_SECTION_RULE_SOURCE_MARKERS = ("漫剧批创初版功能PRD",)
+
+MODULE_RULES: list[dict[str, Any]] = [
     {
         "module": "标题包",
         "aliases": ("标题包", "标题库", "标题管理", "标题分配", "标题槽位", "拆包"),
@@ -157,7 +159,7 @@ NAMED_SOURCE_BRANCHES: list[tuple[str, list[str]]] = [
 ]
 
 
-def source_refs_of(record: dict) -> list[str]:
+def source_refs_of(record: dict[str, Any]) -> list[str]:
     """抽取需求证据坐标，保序去重。"""
     prov = record.get("provenance") or {}
     refs: list[str] = []
@@ -184,7 +186,7 @@ def _alias_module_for_text(text: str) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _classification_text(record: dict) -> str:
+def _classification_text(record: dict[str, Any]) -> str:
     prov = record.get("provenance") or {}
     refs = source_refs_of(record)
     section_markers = [f"§{num}" for ref in refs for num in _section_numbers(ref)]
@@ -197,7 +199,7 @@ def _classification_text(record: dict) -> str:
     return " ".join(parts)
 
 
-def _branch_classification_text(record: dict, source_refs: list[str]) -> str:
+def _branch_classification_text(record: dict[str, Any], source_refs: list[str]) -> str:
     """模块内分支只使用业务语义文本，避免 PRD 文件名污染分支判断。"""
     prov = record.get("provenance") or {}
     parts = [
@@ -225,9 +227,21 @@ def _rule_reason(module: str, kind: str, token: str) -> str:
     return f"{kind}:{token} -> {module}"
 
 
+def _uses_legacy_section_rules(source_ref: str) -> bool:
+    """旧章节号只对其来源 PRD 生效，避免章节重排后跨文档误分类。"""
+    return any(marker in source_ref for marker in LEGACY_SECTION_RULE_SOURCE_MARKERS)
+
+
+def _is_structured_source_ref(source_ref: str) -> bool:
+    """区分可作为旧标签展示的简单来源与需要显式解析的结构化证据坐标。"""
+    return "§" in source_ref or re.match(r"^[a-z][a-z0-9_-]*:", source_ref, flags=re.IGNORECASE) is not None
+
+
 def _cross_cutting_tags_for_refs(refs: list[str]) -> list[str]:
     tags: list[str] = []
     for ref in refs:
+        if not _uses_legacy_section_rules(ref):
+            continue
         nums = _section_numbers(ref)
         for prefix, tag in CROSS_CUTTING_SOURCE_TAGS:
             if any(_matches_section_prefix(num, prefix) for num in nums) and tag not in tags:
@@ -250,9 +264,9 @@ def _module_from_cross_cutting_ref(source_ref: str, text: str) -> tuple[str | No
         return "全局规则与字段约束", _rule_reason("全局规则与字段约束", "section", "10")
 
     if any(_matches_section_prefix(num, "5.0") for num in nums):
-        module, alias = _alias_module_for_text(text)
-        if module and module != "全局规则与字段约束":
-            return module, _rule_reason(module, "global_rule_alias", alias or "")
+        alias_module, alias = _alias_module_for_text(text)
+        if alias_module and alias_module != "全局规则与字段约束":
+            return alias_module, _rule_reason(alias_module, "global_rule_alias", alias or "")
         return "全局规则与字段约束", _rule_reason("全局规则与字段约束", "section", "5.0")
 
     return None, None
@@ -268,9 +282,12 @@ def _business_module_for_source_refs(refs: list[str], text: str) -> tuple[str | 
             if token in source_ref:
                 return module, "rule", _rule_reason(module, "source", token)
 
-        module, reason = _module_from_cross_cutting_ref(source_ref, text)
-        if module:
-            return module, "rule", reason or _rule_reason(module, "source", source_ref)
+        if not _uses_legacy_section_rules(source_ref):
+            continue
+
+        cross_module, reason = _module_from_cross_cutting_ref(source_ref, text)
+        if cross_module:
+            return cross_module, "rule", reason or _rule_reason(cross_module, "source", source_ref)
 
         nums = _section_numbers(source_ref)
         for prefix, module in BATCH_CREATE_EMBEDDED_MODULES:
@@ -293,13 +310,6 @@ def _business_module_for_text(text: str) -> tuple[str | None, str, str]:
     module, alias = _alias_module_for_text(text)
     if module:
         return module, "rule", _rule_reason(module, "alias", alias or "")
-
-    nums = _section_numbers(text)
-    for rule in MODULE_RULES:
-        module = str(rule["module"])
-        for prefix in rule["section_prefixes"]:
-            if any(_matches_section_prefix(num, prefix) for num in nums):
-                return module, "rule", _rule_reason(module, "section", prefix)
 
     return None, "unresolved", "no module rule matched"
 
@@ -326,10 +336,11 @@ def _canonical_branch_from_source_ref(source_ref: str) -> list[str] | None:
         if token in source_ref:
             return path
 
-    nums = _section_numbers(source_ref)
-    for prefix, path in SOURCE_BRANCH_OVERRIDES:
-        if any(_matches_section_prefix(num, prefix) for num in nums):
-            return path
+    if _uses_legacy_section_rules(source_ref):
+        nums = _section_numbers(source_ref)
+        for prefix, path in SOURCE_BRANCH_OVERRIDES:
+            if any(_matches_section_prefix(num, prefix) for num in nums):
+                return path
 
     heading = _heading_from_source_ref(source_ref)
     if not heading or heading == "unresolved":
@@ -431,6 +442,8 @@ def classify_case_tree_coordinates(record: dict[str, Any]) -> tuple[str, list[st
     source_section = str(provenance.get("source_section") or "").strip()
     if module_name == "_review_required":
         if source_section and source_section != "unresolved":
+            if _is_structured_source_ref(source_section):
+                return "待分类", ["未匹配模块"], classification
             return (
                 source_section,
                 [source_section],

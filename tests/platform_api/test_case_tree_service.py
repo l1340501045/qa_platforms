@@ -105,6 +105,27 @@ def test_case_tree_displays_review_required_as_human_readable_queue():
     assert module["branches"][0]["branch_path"] == ["未匹配模块"]
 
 
+def test_case_tree_routes_unmatched_structured_prd_source_to_review_queue():
+    service = object.__new__(CaseTreeService)
+    doc_id = uuid4()
+    cases = [
+        {
+            **_case(
+                "bid_type 传入合法枚举 CUSTOM，接口正常",
+                "prd:产品需求文档：小说批创系统 - 智擎版 v1.43 §7. 功能详细描述",
+            ),
+            "document_id": doc_id,
+        }
+    ]
+
+    all_tree = service._assemble_tree(cases)
+    stable_tree = service._assemble_tree(cases, exclude_review_required=True)
+
+    assert [module["module_name"] for module in all_tree[0]["modules"]] == ["待分类"]
+    assert all_tree[0]["modules"][0]["cases"][0]["classification_confidence"] == "unresolved"
+    assert stable_tree == []
+
+
 def test_case_tree_stable_view_excludes_review_required_queue():
     service = object.__new__(CaseTreeService)
     doc_id = uuid4()
